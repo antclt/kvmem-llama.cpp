@@ -9946,7 +9946,7 @@ index c056b1f50025966fc6f804d680d2977ff73ae57a..5332603b7fa60096b0081b9fdebc008a
 +
  } // namespace ninfer::runtime
 diff --git a/src/runtime/engine/model_instance.cpp b/src/runtime/engine/model_instance.cpp
-index d738cd25d51654a844224538418f7cf255c26d45..e37625ccdf24f78af1645f73a671ec55d4aa70f9 100644
+index d738cd25d51654a844224538418f7cf255c26d45..502c714e2faef8f087edc5db3e59295594d0c082 100644
 --- a/src/runtime/engine/model_instance.cpp
 +++ b/src/runtime/engine/model_instance.cpp
 @@ -1,4 +1,5 @@
@@ -10081,9 +10081,9 @@ index d738cd25d51654a844224538418f7cf255c26d45..e37625ccdf24f78af1645f73a671ec55
 +        const bool fixed_mtp = memory_mtp && options.speculative.mtp_policy == MtpDraftPolicy::Fixed;
 +        const bool adaptive_mtp = memory_mtp &&
 +            options.speculative.mtp_policy == MtpDraftPolicy::Adaptive;
-+        // DFlash2 KVMem is qualified for up to four lanes on one GPU.
++        // DFlash2 uses the native lane capacity; target/draft execution stays on one GPU.
 +        const bool memory_dflash2 = options.speculative.backend == SpeculativeBackend::DFlash2 &&
-+            options.max_concurrency <= 4 && options.devices.size() <= 1 &&
++            options.max_concurrency <= kMaximumConcurrency && options.devices.size() <= 1 &&
 +            options.speculative.draft_tokens >= 1 && options.speculative.draft_tokens <= 15;
 +        const bool memory_ngram_supported = options.speculative.ngram_draft_tokens == 0 ||
 +            ((memory_mtp || memory_dflash2) && (options.max_concurrency == 1 || options.speculative.ngram_draft_tokens <= 15) &&
@@ -10123,7 +10123,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..e37625ccdf24f78af1645f73a671ec55
 +             options.kv_cache != KvCacheStorage::RotatedInt4KeyInt4ValueE8 &&
 +             options.kv_cache != KvCacheStorage::RotatedE8RootKeyInt4Value)) {
 +            throw std::invalid_argument("KVMem requires explicit B+R page-aligned "
-+                "capacity per lane, nonzero global H, aligned prefill <= R, BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8, 1..8 text or resident/CPU-vision lanes, ordinary/fixed/adaptive MTP1..15 or single-GPU DFlash2 1..15 with 1..4 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
++                "capacity per lane, nonzero global H, aligned prefill <= R, BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8, 1..8 text or resident/CPU-vision lanes, ordinary/fixed/adaptive MTP1..15 or single-GPU DFlash2 1..15 with 1..8 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
 +                "and disabled prefix cache");
 +        }
 +    }
@@ -10849,7 +10849,7 @@ index b2544e2537f973e5ed8fb8e899659fa141fd7f99..64336c8c3966c471dde1e234505bc343
      ninfer::ResolvedSamplingParameters sampling;
      double prepare_seconds     = 0.0;
 diff --git a/src/serve/http_server.cpp b/src/serve/http_server.cpp
-index b539c18e2e679ec305f53677297a68f20b426092..cd586fb25ef3be262452fcfbd8e4b32d38bb663b 100644
+index b539c18e2e679ec305f53677297a68f20b426092..abb054a23343b5ae1288ff67d8842831a7379985 100644
 --- a/src/serve/http_server.cpp
 +++ b/src/serve/http_server.cpp
 @@ -1,9 +1,13 @@
@@ -10999,7 +10999,7 @@ index b539c18e2e679ec305f53677297a68f20b426092..cd586fb25ef3be262452fcfbd8e4b32d
 +    spec.ngram_draft_tokens = options.speculative.ngram_draft_tokens;
 +    props["speculative"] = kvmem::speculative_json<nlohmann::json>(spec,
 +        {{kvmem::SpeculativeAlgorithm::Mtp, 15, true, true, 8, 8, "embedded"},
-+         {kvmem::SpeculativeAlgorithm::DFlash2, 15, false, true, 4, 1, "embedded"}}, metrics_.speculative_statistics());
++         {kvmem::SpeculativeAlgorithm::DFlash2, 15, false, true, kMaximumConcurrency, 1, "embedded"}}, metrics_.speculative_statistics());
 +    const auto& execution = service.engine_options();
 +    props["execution"] = {{"mode", execution.devices.size() > 1 ? "layer" : "single"},
 +        {"devices", execution.devices.empty() ? std::vector<int>{execution.device} : execution.devices},
@@ -11814,7 +11814,7 @@ index e8245d645c1419441c2397bd7381edf216c75a57..ddf618d92b29234a35f6bf5a05456dcb
      std::uint64_t requests_failed_total_         = 0;
      std::uint64_t requests_rejected_total_       = 0;
 diff --git a/src/serve/serve_options.cpp b/src/serve/serve_options.cpp
-index 8fc5043c46b464507bb1bd5cc898936dbab34510..6b0bc5c9379e5eb3b5bdf3e5750e4ab5abc46974 100644
+index 8fc5043c46b464507bb1bd5cc898936dbab34510..ab038875cbb258d80532af6531846e262b3ce235 100644
 --- a/src/serve/serve_options.cpp
 +++ b/src/serve/serve_options.cpp
 @@ -1,6 +1,9 @@
@@ -12099,9 +12099,9 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..6b0bc5c9379e5eb3b5bdf3e5750e4ab5
 +        const bool fixed_mtp = memory_mtp && options.speculative.mtp_policy == MtpDraftPolicy::Fixed;
 +        const bool adaptive_mtp = memory_mtp &&
 +            options.speculative.mtp_policy == MtpDraftPolicy::Adaptive;
-+        // DFlash2 KVMem is qualified for up to four lanes on one GPU.
++        // DFlash2 uses the native lane capacity; target/draft execution stays on one GPU.
 +        const bool memory_dflash2 = options.speculative.backend == SpeculativeBackend::DFlash2 &&
-+            options.max_concurrency <= 4 && options.devices.size() <= 1 &&
++            options.max_concurrency <= kMaximumConcurrency && options.devices.size() <= 1 &&
 +            options.speculative.draft_tokens >= 1 && options.speculative.draft_tokens <= 15;
 +        const bool memory_ngram_supported = options.speculative.ngram_draft_tokens == 0 ||
 +            ((memory_mtp || memory_dflash2) && (options.max_concurrency == 1 || options.speculative.ngram_draft_tokens <= 15) &&
@@ -12132,7 +12132,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..6b0bc5c9379e5eb3b5bdf3e5750e4ab5
 +             options.kv_cache != KvCacheStorage::RotatedLloyd4KeyInt4Value &&
 +             options.kv_cache != KvCacheStorage::RotatedInt4KeyInt4ValueE8 &&
 +             options.kv_cache != KvCacheStorage::RotatedE8RootKeyInt4Value)) {
-+            throw std::invalid_argument("KVMem requires ordinary/fixed/adaptive MTP1..15 or single-GPU DFlash2 1..15 with 1..4 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), single-GPU or layer-pipeline BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 generation, 1..8 text or resident/CPU-vision lanes, INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
++            throw std::invalid_argument("KVMem requires ordinary/fixed/adaptive MTP1..15 or single-GPU DFlash2 1..15 with 1..8 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), single-GPU or layer-pipeline BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 generation, 1..8 text or resident/CPU-vision lanes, INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
 +                "and exclusive ownership of history caching");
 +        }
 +        if (options.kvmem.recent_blocks() == 0) {
@@ -19138,7 +19138,7 @@ index 982f4ec8969c36b08bac58727d230fe7f2ac1c18..7444638be6959fd867f6039233c34c28
      run_test("admission waits for Program boundary", test_admission_waits_for_program_boundary);
      run_test("session publication order", test_session_publication_order_controls_tied_source);
 diff --git a/tests/test_serve_options.cpp b/tests/test_serve_options.cpp
-index a257ca089f1634b494dc9229d33335aa3ac01f39..2c9e2fc18d8bc67f51d2995880900f7f4ebdd836 100644
+index a257ca089f1634b494dc9229d33335aa3ac01f39..0eeb8746f671708b46ba8a1febaa35a59ccea33b 100644
 --- a/tests/test_serve_options.cpp
 +++ b/tests/test_serve_options.cpp
 @@ -2,9 +2,12 @@
@@ -19374,7 +19374,7 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..2c9e2fc18d8bc67f51d2995880900f7f
 +            parsed.speculative.mtp_policy == ninfer::MtpDraftPolicy::Fixed,
 +            "KVMem fixed MTP draft count was not preserved");
 +    }
-+    for (const auto lanes : {1U, 2U, 4U}) {
++    for (const auto lanes : {1U, 2U, 4U, 5U, 8U}) {
 +        for (const auto drafts : {1U, 3U, 15U}) {
 +            for (const auto copies : {0U, 31U}) {
 +                auto args = memory_args;
@@ -19391,7 +19391,7 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..2c9e2fc18d8bc67f51d2995880900f7f
 +        }
 +    }
 +    for (const auto& extra : std::vector<std::vector<std::string>>{
-+             {"--max-concurrency", "5"}, {"--devices", "0,1"},
++             {"--max-concurrency", "9"}, {"--devices", "0,1"},
 +             {"--draft-tokens", "0"}, {"--draft-tokens", "16"}}) {
 +        auto args = memory_args;
 +        args.insert(args.end(), {"--spec", "dflash2", "--draft-tokens", "3", "--ngram-draft-tokens", "0"});

@@ -69,7 +69,7 @@ static void print_usage(const char * argv0) {
     fprintf(stderr,
             "usage: %s -m model.gguf [options]\n"
             "\n"
-            "  Independent OpenAI-compatible server with up to two text lanes. Does not patch llama-server.\n"
+            "  Independent OpenAI-compatible server with up to eight inference lanes. Does not patch llama-server.\n"
             "  Endpoints: /v1/chat/completions, /v1/responses (streaming and non-streaming),\n"
             "             /v1/models, /props, /slots, /health, plus the bundled chat UI.\n"
             "\n"
@@ -101,7 +101,7 @@ static void print_usage(const char * argv0) {
             "  -a, --alias NAME           model name exposed by the API\n"
             "  --api-key KEY[,KEY...]     allowed API keys\n"
             "  --api-key-file PATH        one key per line; blank/# lines ignored\n"
-            "  -np, --parallel N          1..4 independent inference lanes (default: 1)\n"
+            "  -np, --parallel N          1..8 independent inference lanes (default: 1)\n"
             "                            context and KV budgets are per lane\n"
             "  -lm, --load-mode MODE      auto | none | mmap | mlock | mmap+mlock | dio\n"
             "  --mmap / --no-mmap         legacy aliases for load-mode mmap / none\n"
@@ -1676,8 +1676,8 @@ int main(int argc, char ** argv) {
         kvmem::SpeculativeStatistics total;
         for (const auto * lane : lanes) total.add(lane->spec.telemetry->snapshot());
         current["speculative"] = kvmem::speculative_json<json>(st.spec.config,
-            {{kvmem::SpeculativeAlgorithm::Mtp, 5, false, false, 4, 8, "optional_gguf"},
-             {kvmem::SpeculativeAlgorithm::DFlash2, 5, false, false, 4, 1, "required_gguf"}}, total);
+            {{kvmem::SpeculativeAlgorithm::Mtp, 5, false, false, 8, 8, "optional_gguf"},
+             {kvmem::SpeculativeAlgorithm::DFlash2, 5, false, false, 8, 1, "required_gguf"}}, total);
         if (lane_conversations) current["kvmem"]["usage"] = lane_conversations->status();
         res.set_header("Cache-Control", "no-store");
         res.set_content(current.dump(), "application/json");

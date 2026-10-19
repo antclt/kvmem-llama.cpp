@@ -90,7 +90,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 |---|---|---|---|---|
 | 逻辑上下文 | 正整数，tokens | `--ctx-size` / `-c` | `--max-context` | 入口推荐 `--ctx-size`，兼容 `--max-context` |
 | 默认输出预算 | 后端默认或正整数，tokens | `--n-predict` / `-n` / `--predict`；另接受 -1 | `--default-max-tokens`；显式值必须为正 | 公共 UI；保留原名和特殊值，不直接互设别名 |
-| 活动请求数 | 正整数 | `--parallel` / `-np`，1–4 | `--max-concurrency`，1–8 | 入口推荐 `--parallel`，兼容 `--max-concurrency`；按组合校验 |
+| 活动请求数 | 正整数 | `--parallel` / `-np`，1–8 | `--max-concurrency`，1–8 | 入口推荐 `--parallel`，兼容 `--max-concurrency`；按组合校验 |
 | 预填充设置 | tokens | `--batch-size` 逻辑批次与 `--ubatch-size` 物理批次 | `--prefill-chunk` | 放同一公共分组，显示各自原名和概念；不把三个参数绑定成一个值 |
 | 长上下文位置缩放 | 后端选项 | 当前 worker 无相应启动覆盖项 | `--rope-yarn` 等 | 公共 UI 可显示该能力；只有 NInfer 开放具体设置 |
 
@@ -210,7 +210,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--threads` / `-t` | CPU 生成线程；非正数使用硬件并发数 |
 | `--threads-batch` / `-tb` | CPU 批处理线程；省略继承 threads；非正数自动 |
 | `--flash-attn` / `-fa` | on/off/auto；解析还接受 1/true、0/false；默认 auto |
-| `--parallel` / `-np` | 1–4 个推理 lane，默认 1；上下文和设备 KV 预算按 lane |
+| `--parallel` / `-np` | 1–8 个推理 lane，默认 1；上下文和设备 KV 预算按 lane |
 | `--load-mode` / `-lm` | auto/none/mmap/mlock/mmap+mlock/dio；默认 auto |
 | `--mmap` / `--no-mmap` / `--mlock` | 原有加载方式别名；保留解析与生效顺序 |
 | `--n-gpu-layers` / `--gpu-layers` / `-ngl` | GPU 层数，默认 99；支持 all；当前拒绝 auto |
@@ -271,7 +271,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--repeat-penalty` / `--repetition-penalty` | 正数，默认 1 |
 | `--seed` / `-s` | uint32；省略使用随机行为；请求字段可覆盖进程默认 |
 | `--spec-type` | none/draft-mtp/draft-dflash，默认 none；mtp/dflash2 为对应别名 |
-| `--spec-draft-model` | DFlash2 必填独立草稿 GGUF；MTP 可选旁挂 GGUF；DFlash2 当前最多四路、单 GPU |
+| `--spec-draft-model` | DFlash2 必填独立草稿 GGUF；MTP 可选旁挂 GGUF；DFlash2 当前最多八路、单 GPU |
 | `--spec-kv-dtype` | 草稿 KV 格式，默认 f16；接受 f16/f32/q8_0/q5_0/q4_0，仍需组合校验 |
 | `--spec-draft-n-max` | 默认 3；当前 KVMem replay 模式要求 1–5 |
 | `--spec-draft-p-min` | [0,1]，默认 0；最小草稿概率 |
@@ -429,7 +429,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 
 | 原生参数 | 输入和原生行为 |
 |---|---|
-| `--spec` | mtp/dflash/dflash2；省略关闭；KVMem 允许 mtp/dflash2，DFlash2 当前最多四路单卡 |
+| `--spec` | mtp/dflash/dflash2；省略关闭；KVMem 允许 mtp/dflash2，DFlash2 当前最多八路单卡 |
 | `--draft-tokens` | 启用推测解码时 1–15；省略为 0，不能只写 spec 而漏掉有效草稿数量 |
 | `--lm-head-draft` | 使用优化的 proposal head；有该组件时默认自动采用；依赖推测解码 |
 | `--full-draft-head` | 对草稿使用完整输出头；与优化 proposal head 选择相对，保留原生名称 |
@@ -542,11 +542,11 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | 会话数 | 两边 sessions 均只计非活动历史；llama 的旧 conversations 仅显式兼容 | llama 在请求退出时执行配额，活动与切换中的状态不得淘汰；排队中的缓存预览可失效并重算 |
 | 公共 SSD 层 | 目录与预算配对；llama 还要求 H>0 且 KVMem 开启；两边不代表跨重启持久恢复 | SSD 开关关闭时省略目录和预算；不与原生持久缓存合并 |
 | llama 公共 SSD 与旧层 | 公共 SSD 不可与旧 CPU arena、在线 NVMe、raw-K NVMe 或旧会话磁盘预算混用 | 旧接口只进入兼容迁移说明；新 UI 和新模板只使用公共 H/D；不能把软上限或局部磁盘额度直接改名为全局硬预算 |
-| llama 并发 | 1–4；多 lane 受 GPU、切分、旧磁盘路径等限制；显式 HTTP 线程至少为 2×并发 | 按实际组合校验，不只检查数字范围 |
+| llama 并发 | 1–8；多 lane 受 GPU、切分、旧磁盘路径等限制；显式 HTTP 线程至少为 2×并发 | 按实际组合校验，不只检查数字范围 |
 | llama MTP | replay 草稿 1–5；tensor+KVMem MTP 只允许 snapshots | 根据所选状态策略和切分限制草稿及状态选项 |
-| llama DFlash2 | 独立匹配 GGUF、最多四路、单 GPU；公共入口固定 1–5，无 adaptive/ngram | 使用上游原生 draft-dflash；各路共享只读草稿权重，上下文/KV/回滚独立。5060 Ti 的 27B IQ3＋Q4 四路验证使用 CPU 卸载与 snapshots，全 GPU 显存不足，详见并发验收记录 |
+| llama DFlash2 | 独立匹配 GGUF、最多八路、单 GPU；公共入口固定 1–5，无 adaptive/ngram | 使用上游原生 draft-dflash；各路共享只读草稿权重，上下文/KV/回滚独立。5060 Ti 的 27B IQ3＋Q4 四路验证使用 CPU 卸载与 snapshots，全 GPU 显存不足，详见并发验收记录 |
 | NInfer MTP | 需要 spec=mtp 和 drafts 1–15；adaptive 依赖 MTP；KVMem 拒绝 DFlash 和非零 mtp-attention-window | 分别显示固定数量与自适应上限 |
-| NInfer DFlash2 | 内置草稿组件、固定 1–15、最多四路单卡；可使用原生 ngram，不支持 adaptive | 按模式启用控件，不把 MTP 自适应策略应用到 DFlash2 |
+| NInfer DFlash2 | 内置草稿组件、固定 1–15、最多八路单卡；可使用原生 ngram，不支持 adaptive | 按模式启用控件，不把 MTP 自适应策略应用到 DFlash2 |
 | NInfer ngram | spec 开启且省略宽度时默认 15；显式 0 关闭；并发>1 时 >15 自动降至15；KVMem 还要求草稿验证空间不超过 R | 预览请求值与有效值；不能把省略等同关闭 |
 | NInfer 快速预填充 | 当前 KVMem 仅允许 int8/rk8v4/rk4v4/rk4v4-e8/rk2v4-e8；具体有效 chunk 可能被调整 | 格式切换时重新校验，展示调整结果 |
 | llama 多卡 | 显式选择至少两张同一 CUDA 后端的设备；不允许重复设备；需要 gpu-layers=all 和 layer/tensor；比例列表逐卡对应；row 被服务拒绝 | 切分方式、GPU 层数和设备列表一起校验；不因解析器识别 row 就展示为可用 |
@@ -633,7 +633,7 @@ UI 只提供常用设置，不复制完整原生命令行。以下名称属于 U
 | `LogLevel` | 服务与并发 → 高级 | `--verbosity`：off=0、error=1、warning=2、info=3、trace=4、debug=5 | `--log-level` 对应文字值 |
 | `ChatTemplateFile` | 模板与图像 → 高级 | `--chat-template-file PATH` | `--chat-template PATH`（此处原生含义就是文件） |
 | `ThinkingMode` | 生成与思考 | default 不传覆盖，on=`--enable-thinking`，off=`--no-think` | default 不传覆盖，off=`--no-thinking`；缺少原生启动 on 选项，UI 禁用 on，不模拟成其他参数 |
-| `Concurrency` | 服务与并发 | `--parallel N`，1–4；当前控制台单卡，并发大于 1 时要求关闭 SSD | `--max-concurrency N`，1–8 |
+| `Concurrency` | 服务与并发 | `--parallel N`，1–8；当前控制台单卡，并发大于 1 时要求关闭 SSD | `--max-concurrency N`，1–8 |
 
 模型名、日志和模板文件留空时不产生覆盖参数；思考模式继承各自原生默认，不能把 llama 的默认关闭和 NInfer 的模型默认描述为相同的运行状态。思考预算仍仅对 NInfer 开放，UI 关闭思考时不发送预算。温度、top-p 等继续交给聊天请求。
 
@@ -681,7 +681,7 @@ UI 继续通过 JSON 参数数组调用内部脚本。直接脚本增加 `Worker
 | NInfer 推测默认与依赖 | [speculative_options.h](../backends/ninfer/src/product/speculative_options.h) |
 | 现有后端行为说明 | [multi-backend-differences.md](multi-backend-differences.md)；涉及旧默认值时以当前解析器为准 |
 
-当前帮助/旧说明中需要注意的差异：llama 帮助开头仍写 two text lanes，但参数和解析器允许 1–4；NInfer 正向 models-autoload 被解析器接受但帮助未单列；devices 帮助强调 2–8 阶段，解析器也接受单项及用于阶段测试的重复设备；vision-offload 需要 on/off 值。此前“默认输出固定 8192、显式 0 不限”的说明已在比较文档中纠正：当前 NInfer 省略输出上限时动态计算，显式值必须为正整数。以上差异是本规范对当前接口的说明，不改变原生执行行为。
+当前帮助/旧说明中需要注意的差异：NInfer 正向 models-autoload 被解析器接受但帮助未单列；devices 帮助强调 2–8 阶段，解析器也接受单项及用于阶段测试的重复设备；vision-offload 需要 on/off 值。此前“默认输出固定 8192、显式 0 不限”的说明已在比较文档中纠正：当前 NInfer 省略输出上限时动态计算，显式值必须为正整数。以上差异是本规范对当前接口的说明，不改变原生执行行为。
 
 
 ## 八 本次实现验证（2026-10-17）

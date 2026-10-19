@@ -1,6 +1,6 @@
 # Multi-lane conversations
 
-`--parallel P` is the number of independent GPU execution lanes (1 through 4).
+`--parallel P` is the number of independent GPU execution lanes (1 through 8).
 `--kvmem-conversations N` is the global number of host conversation stores.
 After environment/CLI parsing and before validation, N becomes `max(N, P)`.
 The server logs an adjustment once and exposes requested/effective values.

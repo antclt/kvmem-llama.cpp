@@ -20,8 +20,9 @@ class WorkerArgsTests(unittest.TestCase):
         for shell in SHELLS:
             with self.subTest(shell=shell, backend='ninfer'):
                 plan = self.plan(self.run_launcher(shell, 'start-backend.ps1', [
-                    '-SpeculativeMode', 'dflash2', '-DraftTokens', '5', '-DraftPolicy', 'fixed']))
+                    '-SpeculativeMode', 'dflash2', '-DraftTokens', '5', '-DraftPolicy', 'fixed', '-Concurrency', '8']))
                 args = plan['argv']; self.assertEqual(args[args.index('--spec') + 1], 'dflash2')
+                self.assertEqual(args[args.index('--max-concurrency') + 1], '8')
                 self.assertEqual(args.count('--spec'), 1); self.assertNotIn('--adaptive-mtp', args)
             def llama(extra):
                 return subprocess.run([shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
@@ -33,10 +34,10 @@ class WorkerArgsTests(unittest.TestCase):
                 self.assertEqual(args[args.index('--spec-type') + 1], 'draft-dflash')
                 self.assertEqual(args[args.index('--spec-draft-model') + 1], str(draft))
                 self.assertEqual(args[args.index('--spec-draft-n-max') + 1], '5')
-                paired = self.plan(llama(['-DraftModel', str(draft), '-Concurrency', '4']))['argv']
-                self.assertEqual(paired[paired.index('--parallel') + 1], '4')
+                paired = self.plan(llama(['-DraftModel', str(draft), '-Concurrency', '8']))['argv']
+                self.assertEqual(paired[paired.index('--parallel') + 1], '8')
                 for invalid in ([], ['-DraftModel', str(draft), '-DraftPolicy', 'adaptive'],
-                                ['-DraftModel', str(draft), '-Concurrency', '5']):
+                                ['-DraftModel', str(draft), '-Concurrency', '9']):
                     self.assertNotEqual(llama(invalid).returncode, 0)
 
     def setUp(self):

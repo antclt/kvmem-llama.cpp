@@ -32,7 +32,7 @@ def main():
     p.add_argument('--model', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--device', default='CUDA0')
-    p.add_argument('--parallel', type=int, choices=(2, 3, 4), default=2)
+    p.add_argument('--parallel', type=int, choices=range(2, 9), default=2)
     p.add_argument('--cpu-gb', default='0.125')
     p.add_argument('--soft-gb', type=float, default=0)
     p.add_argument('--conversations', type=int, default=3)

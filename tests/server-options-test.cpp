@@ -93,7 +93,9 @@ int main() {
     rejects([&] { parse("-np", "0"); });
     parse("-np", "3"); check(o.parallel == 3);
     parse("-np", "4"); check(o.parallel == 4);
-    rejects([&] { parse("-np", "5"); });
+    parse("-np", "5"); check(o.parallel == 5);
+    parse("-np", "8"); check(o.parallel == 8);
+    rejects([&] { parse("-np", "9"); });
     rejects([&] { parse("-ub", "0"); });
     rejects([&] { parse("-fa", "invalid"); });
     parse("--load-mode", "mmap+mlock"); check(o.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK);
@@ -174,12 +176,12 @@ int main() {
     check(kvmem_config_key("--kvmem-conversations-gb") == "--kvmem-conversations-gb");
     // Both parallel aliases accept exactly the supported lane counts.
     for (const char * flag : {"-np", "--parallel"}) {
-        for (const char * value : {"2", "3", "4"}) {
+        for (const char * value : {"2", "3", "4", "5", "6", "7", "8"}) {
             parse(flag, value);
             check(o.parallel == std::stoi(value));
         }
         rejects([&] { parse(flag, "0"); });
-        rejects([&] { parse(flag, "5"); });
+        rejects([&] { parse(flag, "9"); });
         parse(flag, "1");
         check(o.parallel == 1);
     }

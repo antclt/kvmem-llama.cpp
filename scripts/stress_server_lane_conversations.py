@@ -82,7 +82,7 @@ def main():
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--clients', default='2,4,8,16')
-    parser.add_argument('--parallel', type=int, choices=(2, 3, 4), default=2)
+    parser.add_argument('--parallel', type=int, choices=range(2, 9), default=2)
     parser.add_argument('--ramp-seconds', type=float, default=60)
     parser.add_argument('--soak-seconds', type=float, default=600)
     parser.add_argument('--conversations', type=int, default=8)

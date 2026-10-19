@@ -93,8 +93,8 @@ def normalize(data, backends):
         raise ValueError('ReasoningEffort conflicts with ThinkingMode off')
     if p['Backend'] != 'llamacpp' and {'KvTypeK', 'KvTypeV'} & p.keys():
         raise ValueError('K/V 独立格式仅适用于 llama.cpp；NInfer 请使用 KV 格式选项。')
-    if p.get('Concurrency') is not None and not 1 <= p['Concurrency'] <= (8 if p['Backend'] == 'ninfer' else 4):
-        raise ValueError('Concurrency must be 1..8 for NInfer or 1..4 for llama.cpp')
+    if p.get('Concurrency') is not None and not 1 <= p['Concurrency'] <= 8:
+        raise ValueError('Concurrency must be 1..8')
     if p.get('ChatTemplateFile') and not Path(p['ChatTemplateFile']).is_file():
         raise ValueError('ChatTemplateFile must be an existing template file')
     if 'SpeculativeMode' in p or 'DraftTokens' in p or 'DraftPolicy' in p or 'DraftModel' in p:
