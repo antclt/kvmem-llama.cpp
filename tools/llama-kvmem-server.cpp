@@ -149,18 +149,13 @@ static void print_usage(const char * argv0) {
             "  --kvmem-host-mib MIB      positive shared native K/V RAM quota (default 16384 MiB)\n"
             "  --kvmem-disk-mib MIB      active/idle native K/V SSD quota; 0 = off (default)\n"
             "  --kvmem-disk-path PATH    process-local native K/V spill directory\n"
-            "  --kvmem-nvme-gb GB         NVMe file in GiB (0 = off)\n"
-            "  --kvmem-nvme-dir PATH      NVMe directory (default /tmp/kvmem_nvme)\n"
-            "  --kvmem-harvest-v          prefill D2H V with raw-K (default off; RAM until NVMe flush)\n"
-            "  --kvmem-raw-k-nvme         store raw-K and V on NVMe (needs --kvmem-nvme-gb)\n"
+            "  --kvmem-harvest-v          optional prefill D2H V capture (default off)\n"
             "  --kvmem-sessions N         inactive histories to retain (default 4); active requests excluded\n"
             "  --kvmem-conversations N    LEGACY total host stores, includes active requests\n"
             "                            incompatible with --kvmem-sessions; no same-value alias\n"
             "  --kvmem-conversations-gb GB soft cap on total active + idle session RAM, moving\n"
             "                            idle KV by LRU (0 = unlimited; active may exceed cap)\n"
             "  --kvmem-session-ram-gb GB  alias for the RAM soft cap\n"
-            "  --kvmem-session-nvme-gb GB disk quota for inactive sessions (default 0 = off)\n"
-            "  --kvmem-session-cache-dir PATH private cache directory on your NVMe/SSD\n"
             "                            LRU RAM -> disk -> discard; active session must fit RAM\n"
             "  --kv-dtype NAME            GPU KV cache type for K and V: f16 | f32 | q8_0 | q5_0 | q4_0 (default q8_0)\n"
             "  -ctk, --cache-type-k TYPE  GPU K cache type (llama.cpp name; default q8_0)\n"
@@ -835,7 +830,6 @@ int main(int argc, char ** argv) {
     int image_min_tokens = -1, image_max_tokens = -1;
     float video_fps = 2.0f;
     std::string host = "127.0.0.1";
-    std::string nvme_dir;
     int port = 8080;
     int n_ctx = 2048;
     int ngl = 99;
@@ -991,16 +985,8 @@ int main(int argc, char ** argv) {
             const double gb = kvmem_cli_real(arg, need(arg), 0, 1048576);
             st.kparams.cpu_bytes = gb <= 0.0 ? 0
                 : static_cast<uint64_t>(gb * 1024.0 * 1024.0 * 1024.0);
-        } else if (eq(arg, "--kvmem-nvme-gb")) {
-            const double gb = kvmem_cli_real(arg, need(arg), 0, 1048576);
-            st.kparams.nvme_bytes = gb <= 0.0 ? 0
-                : static_cast<uint64_t>(gb * 1024.0 * 1024.0 * 1024.0);
-        } else if (eq(arg, "--kvmem-nvme-dir")) {
-            nvme_dir = need(arg);
         } else if (eq(arg, "--kvmem-harvest-v")) {
             st.kparams.harvest_v = true;
-        } else if (eq(arg, "--kvmem-raw-k-nvme")) {
-            st.kparams.raw_k_nvme = true;
         } else if (eq(arg, "--kv-dtype") || eq(arg, "-ctk") || eq(arg, "--cache-type-k")
                    || eq(arg, "-ctv") || eq(arg, "--cache-type-v")) {
             bool ok = false;
@@ -1108,7 +1094,7 @@ int main(int argc, char ** argv) {
     if (options.legacy_conversations)
         fprintf(stderr, "KVMEM_CONFIG deprecated --kvmem-conversations counts total stores; migrate explicitly to --kvmem-sessions (inactive histories only)\n");
     if (options.enabled && !options.legacy_conversations &&
-        (options.conversation_bytes || options.session_disk_bytes || !options.session_cache_dir.empty()))
+        options.conversation_bytes)
         throw std::invalid_argument("legacy session budgets require explicit --kvmem-conversations; use --kvmem-host-mib/--kvmem-disk-mib for the shared payload budget");
     if (options.enabled && uint64_t(options.budget) + options.gen_reserve > uint64_t(n_ctx))
         throw std::invalid_argument("KVMem B+R must fit --ctx-size; set explicit --kvmem-budget/--kvmem-gen-reserve or increase context");
@@ -1122,9 +1108,8 @@ int main(int argc, char ** argv) {
         throw std::invalid_argument("--kvmem-disk-path and --kvmem-disk-mib must be provided together");
     if (options.payload_disk_bytes && (!options.payload_host_bytes || !st.kparams.enabled))
         throw std::invalid_argument("KVMem SSD requires --kvmem-host-mib and KVMem enabled");
-    if (options.payload_disk_bytes && (options.session_disk_bytes || st.kparams.cpu_bytes ||
-            st.kparams.nvme_bytes || st.kparams.raw_k_nvme))
-        throw std::invalid_argument("shared KV SSD cannot be combined with legacy spill stores");
+    if (options.payload_disk_bytes && st.kparams.cpu_bytes)
+        throw std::invalid_argument("shared KV SSD cannot be combined with the legacy CPU spill arena");
     // Legacy total-store and soft-budget compatibility checks. These are not
     // aliases for the public inactive-history count or payload hard budget.
     if (options.conversations > 1 && !st.kparams.enabled) {
@@ -1133,16 +1118,6 @@ int main(int argc, char ** argv) {
     if (options.conversation_bytes != 0 && options.conversations <= 1) {
         throw std::invalid_argument("--kvmem-conversations-gb caps the host stores that "
                                     "--kvmem-conversations N creates; pass N > 1 or drop the cap");
-    }
-    if (options.session_disk_bytes) {
-        if (options.conversations <= 1 || options.session_cache_dir.empty())
-            throw std::invalid_argument("session disk cache requires --kvmem-conversations N > 1, "
-                "and --kvmem-session-cache-dir PATH");
-        if (st.kparams.cpu_bytes || st.kparams.nvme_bytes || st.kparams.raw_k_nvme)
-            throw std::invalid_argument("session disk cache requires --kvmem-cpu-gb 0 and --kvmem-nvme-gb 0; "
-                "do not combine it with --kvmem-raw-k-nvme");
-    } else if (!options.session_cache_dir.empty()) {
-        throw std::invalid_argument("--kvmem-session-cache-dir requires --kvmem-session-nvme-gb > 0");
     }
     // Some pinned llama.cpp trace sites test presence rather than the value.
     // Normalize "0"/empty and CLI-off to an absent variable before loading models.
@@ -1163,12 +1138,6 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "invalid arguments (source=%s): %s\n", argument_source.c_str(), e.what());
         return 1;
     }
-#if !KVMEM_ENABLE_NVME
-    if (st.kparams.nvme_bytes || st.kparams.raw_k_nvme) {
-        fprintf(stderr, "NVMe offload is disabled in this build (KVMEM_ENABLE_NVME=OFF)\n");
-        return 1;
-    }
-#endif
     // Validate before backend initialization and loading a potentially large model.
     if (!kvmem_cache_types_ok(st.cache_type_k, st.cache_type_v)) {
         fprintf(stderr, "incompatible KV cache types: K=%s, V=%s; quantized K/V must both use q8_0, q5_0 or q4_0; "
@@ -1233,9 +1202,6 @@ int main(int argc, char ** argv) {
     // No speculative rollback state is needed without drafts.
     if (!st.spec_enabled) st.kparams.mtp_state = 0;
     if (st.kparams.enabled) {
-        if (!nvme_dir.empty()) {
-            st.kparams.nvme_dir = nvme_dir.c_str();
-        }
         llama_kvmem_set_params(&st.kparams);
     }
 
@@ -1271,12 +1237,10 @@ int main(int argc, char ** argv) {
     }
     if (options.parallel > 1 && (!st.kparams.enabled ||
             options.device_names == "none" || mparams.n_gpu_layers == 0 ||
-            options.session_disk_bytes ||
-            st.kparams.nvme_bytes || st.kparams.raw_k_nvme ||
             device_config.devices.size() > 2 || mparams.split_mode == LLAMA_SPLIT_MODE_TENSOR ||
             (options.threads_http > 0 && options.threads_http < 2 * options.parallel))) {
         fprintf(stderr, "KVMEM_STARTUP_ERROR --parallel %d requires KVMem, one target GPU, "
-                "no NVMe/session disk cache, and at least %d HTTP workers\n",
+                "and at least %d HTTP workers\n",
                 options.parallel, 2 * options.parallel);
         return 1;
     }
@@ -1462,24 +1426,16 @@ int main(int argc, char ** argv) {
     // attention is resolved inside llama_init_from_model, not at parse time.
     if (options.legacy_conversations && options.parallel == 1 && options.conversations > 1) {
         if (!llama_kvmem_store_swap_supported()) {
-            if (options.session_disk_bytes) {
-                LOG_ERR("srv    KVMEM session disk cache requires supported session switching (flash attention on)\n");
-                return 1;
-            }
             LOG_WRN("srv    KVMEM --kvmem-conversations %d unavailable in this configuration; "
                     "using one host store\n", options.conversations);
         } else {
             st.conv_limits.max_stores = options.conversations;
             st.conv_limits.max_bytes = options.conversation_bytes;
-            if (options.session_disk_bytes || options.payload_disk_bytes) {
+            if (options.payload_disk_bytes) {
                 try {
                     st.session_files = std::make_unique<kvmem_session_files>(
-                        std::filesystem::u8path(options.payload_disk_bytes ? options.payload_disk_dir : options.session_cache_dir),
-                        options.payload_disk_bytes ? options.payload_disk_bytes : options.session_disk_bytes,
-                        [](bool warning, const std::string & message) {
-                            if (warning) { LOG_WRN("srv    KVMEM session cache %s\n", message.c_str()); }
-                            else { LOG_INF("srv    KVMEM session cache %s\n", message.c_str()); }
-                        }, kvmem_execution_spill_file(st.execution.get()));
+                        std::filesystem::u8path(options.payload_disk_dir),
+                        kvmem_execution_spill_file(st.execution.get()));
                 } catch (const std::exception & e) {
                     LOG_ERR("srv    KVMEM session cache initialization failed: %s\n", e.what()); return 1;
                 }
@@ -1492,20 +1448,9 @@ int main(int argc, char ** argv) {
             llama_driver_publish_conversations(st);
             LOG_INF("srv    KVMEM conversations=%d host_bytes_max=%llu\n",
                     options.conversations, (unsigned long long) st.conv_limits.max_bytes);
-            // Every host store builds its own runtime, so the pinned arena
-            // --kvmem-cpu-gb sizes and the tier --kvmem-nvme-gb sizes are
-            // allocated once per store, not once per process. The server owns
-            // the conversation caps and the adapter is never told the store
-            // count, so say what those two numbers now mean rather than
-            // quietly dividing them.
-            if (st.kparams.cpu_bytes || st.kparams.nvme_bytes) {
-                const double gib = 1024.0 * 1024.0 * 1024.0;
-                LOG_WRN("srv    KVMEM --kvmem-cpu-gb and --kvmem-nvme-gb are per host store: "
-                        "%d stores commit up to %.1f GiB pinned (allocated and zero-filled as "
-                        "stores are created) and overcommit %.1f GiB NVMe (sparse, unlinked)\n",
-                        options.conversations,
-                        options.conversations * (double) st.kparams.cpu_bytes / gib,
-                        options.conversations * (double) st.kparams.nvme_bytes / gib);
+            if (st.kparams.cpu_bytes) {
+                LOG_WRN("srv    KVMEM --kvmem-cpu-gb is per host store: %d stores commit up to %.1f GiB pinned\n",
+                        options.conversations, options.conversations * (double)st.kparams.cpu_bytes / (1024.0 * 1024.0 * 1024.0));
             }
         }
     }

@@ -210,7 +210,7 @@ llama 的预填充计划可包含已登记、尚未计算 KV 的行，而 `Memor
 ## 验证与复现
 
 ```sh
-cmake -S . -B build-host -DKVMEM_BUILD_LLAMA=OFF -DKVMEM_BUILD_SERVER_TESTS=OFF -DKVMEM_ENABLE_NVME=OFF
+cmake -S . -B build-host -DKVMEM_BUILD_LLAMA=OFF -DKVMEM_BUILD_SERVER_TESTS=OFF
 cmake --build build-host
 ctest --test-dir build-host --output-on-failure
 ```

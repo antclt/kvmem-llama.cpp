@@ -232,11 +232,9 @@
   function syncDependencies(){
     const get=key=>root.querySelector(`[data-param=${key}]`);
     if(!get('Backend'))return;
-    const diskAllowed=get('Backend').value!=='llamacpp'||Number(get('Concurrency')?.value||1)<=1;
-    const diskConflict=tr('当前 llama.cpp 并发大于 1，暂不支持 SSD 缓存。','SSD cache is unavailable with llama.cpp concurrency above 1.');
-    dependency('DiskEnabled',diskAllowed,diskConflict);
+    dependency('DiskEnabled',true,'');
     const disk=!!get('DiskEnabled')?.checked&&!get('DiskEnabled').disabled,lrfu=!!get('NoLrfu')?.checked,vision=!!get('Vision')?.checked;
-    for(const key of ['DiskPath','DiskMiB'])dependency(key,disk,diskAllowed?tr('先开启 SSD 缓存。','Enable SSD cache first.'):diskConflict);
+    for(const key of ['DiskPath','DiskMiB'])dependency(key,disk,tr('先开启 SSD 缓存。','Enable SSD cache first.'));
     if(get('DiskPath'))get('DiskPath').required=disk;
     for(const key of ['LrfuLambda','LrfuTopFraction'])dependency(key,lrfu,tr('先开启 LRFU。','Enable LRFU first.'));
     for(const key of ['VisionTokens','VisionResidency'])dependency(key,vision,tr('先开启图像输入。','Enable vision input first.'));
@@ -659,7 +657,7 @@
     field(panels[3],p,'VisionTokens','图像 token 上限（可选）','Image token limit (optional)','number',null,['开启图像输入时生效。','Applies when vision input is enabled.'],l);field(panels[3],{VisionResidency:'resident',...p},'VisionResidency','图像编码器存放位置','Vision encoder placement','text',[['resident','GPU'],['cpu','CPU']],['开启图像输入时生效；关闭后保留原选择。','Applies when vision input is enabled; the selection is retained when off.'],l);
     templateFileField(panels[3],p);
     field(panels[4],{ListenHost:'127.0.0.1',...p},'ListenHost','监听地址','Listen address','text',[['127.0.0.1',tr('127.0.0.1 · 仅本机','127.0.0.1 · This computer')],['0.0.0.0',tr('0.0.0.0 · 所有网卡','0.0.0.0 · All interfaces')]],['选择所有网卡后，其他设备可通过本机 IP 和端口访问推理服务','All interfaces allows other devices to access inference through this computer’s IP and port']);field(panels[4],p,'Port','服务端口','Service port','number');
-    const concurrency=field(panels[4],p,'Concurrency','同时处理的请求数（可选）','Simultaneous requests (optional)','number',null,n?['范围 1–8；留空为 1。并发增加会提高 KV 和显存需求。','Range 1–8; empty uses 1. More concurrent requests require more KV and VRAM.']:['范围 1–8；留空为 1。当前控制台使用单卡；并发大于 1 时需关闭 SSD 缓存。','Range 1–8; empty uses 1. This console uses one GPU; concurrency above 1 requires SSD cache disabled.']);concurrency.min='1';concurrency.max='8';
+    const concurrency=field(panels[4],p,'Concurrency','同时处理的请求数（可选）','Simultaneous requests (optional)','number',null,n?['范围 1–8；留空为 1。并发增加会提高 KV 和显存需求。','Range 1–8; empty uses 1. More concurrent requests require more KV and VRAM.']:['范围 1–8；留空为 1。当前控制台使用单卡；并发增加会提高 KV 和显存需求。','Range 1–8; empty uses 1. This console uses one GPU; more concurrent requests require more KV and VRAM.']);concurrency.min='1';concurrency.max='8';
     credentialField(panels[4],p);
     const serviceAdvanced=make('details',{class:'l-advanced l-wide'});serviceAdvanced.append(make('summary',{},tr('高级 · 服务标识与日志','Advanced · Service identity & logs')));const serviceFields=make('div',{class:'l-fields l-service-fields'});serviceAdvanced.append(serviceFields);panels[4].append(serviceAdvanced);
     field(serviceFields,p,'ModelAlias','对外模型名（可选）','Served model name (optional)','text',null,['供 API 客户端使用的稳定名称；留空沿用模型名称。','A stable name for API clients; leave empty to inherit the model name.']);

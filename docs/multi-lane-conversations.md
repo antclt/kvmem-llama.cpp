@@ -140,3 +140,14 @@ throughput gain on this small-model workload and used about 1.25 GiB more VRAM.
 This builds on [qzshch's PR #94](https://github.com/kvmem/kvmem/pull/94).
 Its original commit `3cc1c651d5ea64c36e3880ea71c7713823730423` is retained as an
 ancestor, with its original author, so GitHub shows the contributor's work.
+
+## Public SSD storage
+
+Public `--kvmem-host-mib H --kvmem-disk-path PATH --kvmem-disk-mib D` works with
+multiple lanes; H must hold all concurrent working windows. It cannot be combined
+with the optional legacy `--kvmem-cpu-gb` arena. The old NVMe and separate session
+disk interfaces have been retired; see [migration and validation](legacy-ssd-retirement-20261019.md).
+The existing lane runner accepts `--host-mib`, `--disk-mib`, `--disk-path` and an
+optional DFlash2 `--draft-model`/`--draft-tokens` pair. For eight lanes at its default
+B2048/R1024, choose a larger H (for example 512 MiB for the small-model fixture)
+than the B512/R256 qualification; its final checks require actual SSD reads/writes.

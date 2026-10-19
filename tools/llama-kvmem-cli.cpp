@@ -2,8 +2,10 @@
 #include "../backends/llamacpp/src/llama-ext.h"
 #include "llama-kvmem-hooks.h"
 #include "kvmem/retrieval_options.hpp"
+#include "kvmem/cli_options.h"
 #include "kvmem-spec.h"
 #include "kvmem-server-devices.h"
+#include "kvmem-execution-scope.h"
 
 #include <algorithm>
 #include <chrono>
@@ -13,6 +15,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -50,11 +53,11 @@ static void print_usage(const char * argv0) {
             "  --kvmem-gpu-ratio R        cap slot pool at this fraction of GPU VRAM (default 0.50)\n"
             "  --kvmem-gpu-high R         prefill offload high watermark (default 0.95)\n"
             "  --kvmem-gpu-low R          prefill offload low watermark (default 0.85)\n"
+            "  --kvmem-host-mib MIB      shared native KV RAM budget (default 16384 MiB)\n"
+            "  --kvmem-disk-mib MIB      shared native KV SSD budget; 0 = off\n"
+            "  --kvmem-disk-path PATH    process-local SSD directory; pair with disk-mib\n"
             "  --kvmem-cpu-gb GB          CPU spill arena in GiB (0 = off)\n"
-            "  --kvmem-nvme-gb GB         NVMe spill file in GiB (0 = off)\n"
-            "  --kvmem-nvme-dir PATH      NVMe spill directory (default /tmp/kvmem_nvme)\n"
-            "  --kvmem-harvest-v          prefill D2H V with raw-K (default off; RAM until NVMe flush)\n"
-            "  --kvmem-raw-k-nvme         store raw-K and V on NVMe (needs --kvmem-nvme-gb)\n"
+            "  --kvmem-harvest-v          optional prefill D2H V capture (default off)\n"
             "  --kvmem-dump-kv            after prefill, compare raw-rebuild KV vs GPU KV\n"
             "  --kv-dtype NAME            GPU KV cache type for K and V: f16 | f32 | q8_0 | q5_0 | q4_0 (default q8_0)\n"
             "  -ctk, --cache-type-k TYPE  GPU K cache type (llama.cpp name; default q8_0)\n"
@@ -91,6 +94,9 @@ int main(int argc, char ** argv) {
     bool tokens_only = false;
     bool no_prompt = false;
 
+    std::unique_ptr<llama_kvmem_execution_state, decltype(&llama_kvmem_execution_free)> execution{
+        llama_kvmem_execution_create(), llama_kvmem_execution_free};
+    kvmem_execution_scope execution_scope(execution.get());
     llama_kvmem_params kparams = {};
     kparams.block_tokens = 32;
     kparams.gen_reserve = 256;
@@ -100,7 +106,7 @@ int main(int argc, char ** argv) {
     kparams.force_pos = -1;
     int query_last = 64;
     std::string force_substr;
-    std::string nvme_dir;
+    kvmem::CliOptions storage_options;
     bool dump_kv = false;
     ggml_type cache_type_k = GGML_TYPE_Q8_0;
     ggml_type cache_type_v = GGML_TYPE_Q8_0;
@@ -124,6 +130,16 @@ int main(int argc, char ** argv) {
             }
             return argv[++i];
         };
+        try {
+            kvmem::reject_retired_storage_option(arg);
+            if (eq(arg, "--kvmem-host-mib") || eq(arg, "--kvmem-disk-mib") || eq(arg, "--kvmem-disk-path")) {
+                storage_options.parse(arg, need);
+                continue;
+            }
+        } catch (const std::invalid_argument & error) {
+            fprintf(stderr, "%s\n", error.what());
+            return 1;
+        }
         if (eq(arg, "-h") || eq(arg, "--help")) {
             print_usage(argv[0]);
             return 0;
@@ -219,16 +235,8 @@ int main(int argc, char ** argv) {
             const double gb = std::atof(need(arg));
             kparams.cpu_bytes = gb <= 0.0 ? 0
                 : static_cast<uint64_t>(gb * 1024.0 * 1024.0 * 1024.0);
-        } else if (eq(arg, "--kvmem-nvme-gb")) {
-            const double gb = std::atof(need(arg));
-            kparams.nvme_bytes = gb <= 0.0 ? 0
-                : static_cast<uint64_t>(gb * 1024.0 * 1024.0 * 1024.0);
-        } else if (eq(arg, "--kvmem-nvme-dir")) {
-            nvme_dir = need(arg);
         } else if (eq(arg, "--kvmem-harvest-v")) {
             kparams.harvest_v = true;
-        } else if (eq(arg, "--kvmem-raw-k-nvme")) {
-            kparams.raw_k_nvme = true;
         } else if (eq(arg, "--spec-kv-dtype")) {
             bool ok = false;
             spec_cache_type = kvmem_parse_cache_type(need(arg), &ok);
@@ -281,12 +289,22 @@ int main(int argc, char ** argv) {
             break;
         }
     }
-#if !KVMEM_ENABLE_NVME
-    if (kparams.nvme_bytes || kparams.raw_k_nvme) {
-        fprintf(stderr, "NVMe offload is disabled in this build (KVMEM_ENABLE_NVME=OFF)\n");
+    if (storage_options.payload_disk_dir.empty() != (storage_options.payload_disk_bytes == 0)) {
+        fprintf(stderr, "SSD requires --kvmem-disk-path and positive --kvmem-disk-mib together; omit the path when disabled\n");
         return 1;
     }
-#endif
+    if ((storage_options.payload_host_bytes || storage_options.payload_disk_bytes) && !kparams.enabled) {
+        fprintf(stderr, "RAM/SSD storage options require --kvmem\n");
+        return 1;
+    }
+    if (storage_options.payload_disk_bytes && kparams.cpu_bytes) {
+        fprintf(stderr, "shared KV SSD cannot be combined with the legacy CPU spill arena\n");
+        return 1;
+    }
+    kparams.payload_host_bytes = kparams.enabled ? (storage_options.payload_host_bytes ?
+        storage_options.payload_host_bytes : kvmem::CliOptions::default_host_bytes) : 0;
+    kparams.payload_disk_bytes = storage_options.payload_disk_bytes;
+    kparams.payload_disk_dir = storage_options.payload_disk_dir.empty() ? nullptr : storage_options.payload_disk_dir.c_str();
     // Validate before backend initialization and loading a potentially large model.
     if (!kvmem_cache_types_ok(cache_type_k, cache_type_v)) {
         fprintf(stderr, "incompatible KV cache types: K=%s, V=%s; quantized K/V must both use q8_0, q5_0 or q4_0; "
@@ -401,9 +419,6 @@ int main(int argc, char ** argv) {
 
     if (kparams.enabled) {
         if (!spec_enabled) kparams.mtp_state = 0;
-        if (!nvme_dir.empty()) {
-            kparams.nvme_dir = nvme_dir.c_str();
-        }
         if (dump_kv) {
 #ifdef _WIN32
             _putenv_s("KVMEM_DUMP_CAPTURE", "1");
@@ -748,6 +763,15 @@ int main(int argc, char ** argv) {
                 n_out, gen_wall_ms, gen_wall_tps);
     }
 
+    if (kparams.enabled) {
+        const auto storage = llama_kvmem_execution_storage_stats(execution.get());
+        fprintf(stderr, "KVMEM_STORAGE host_bytes=%llu host_budget=%llu disk_bytes=%llu disk_budget=%llu "
+                "read_bytes=%llu written_bytes=%llu errors=%llu\n",
+                (unsigned long long)storage.host_bytes, (unsigned long long)storage.host_capacity,
+                (unsigned long long)storage.disk_bytes, (unsigned long long)storage.disk_capacity,
+                (unsigned long long)storage.read_bytes, (unsigned long long)storage.written_bytes,
+                (unsigned long long)storage.errors);
+    }
     kvmem_spec_stop(spec_sess);
     llama_sampler_free(smpl);
     llama_free(ctx);

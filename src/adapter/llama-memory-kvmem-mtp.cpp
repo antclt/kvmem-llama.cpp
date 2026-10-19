@@ -157,19 +157,6 @@ llama_memory_kvmem_mtp::llama_memory_kvmem_mtp(
     if (!v_trans_) {
         rcfg.v_gpu_row_bytes = ggml_row_size(type_v_, n_embd_v_);
     }
-    const llama_kvmem_params * kp = llama_kvmem_get_params();
-    if (kp && kp->raw_k_nvme) {
-        const uint64_t ntok = std::max<uint64_t>(cparams.n_ctx, kv_size_);
-        const uint64_t need =
-                static_cast<uint64_t>(rcfg.n_layer) * ntok *
-                (static_cast<uint64_t>(rcfg.n_embd_k) + rcfg.n_embd_v) *
-                sizeof(uint16_t);
-        rcfg.nvme_bytes = need + 32ull * 1024ull * 1024ull;
-        rcfg.nvme_dir = (kp->nvme_dir && kp->nvme_dir[0])
-                ? kp->nvme_dir
-                : "/tmp/kvmem_nvme";
-        rcfg.nvme_file = "kvmem_raw_mtp_k.bin";
-    }
     raw_ = std::make_unique<kvmem::RawKvStore>(rcfg);
 
     size_t bytes = 0;
@@ -361,11 +348,7 @@ void llama_memory_kvmem_mtp::capture_on_new_graph() {
     pending_capture_.clear();
 }
 
-void llama_memory_kvmem_mtp::harvest_flush() {
-    if (raw_) {
-        raw_->wait_writes();
-    }
-}
+void llama_memory_kvmem_mtp::harvest_flush() {}
 
 void llama_memory_kvmem_mtp::harvest_pending(struct ggml_backend_sched * sched) {
     // Packed GPU K/V are copied at stage-out. Prefill does not store

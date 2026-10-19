@@ -52,12 +52,11 @@ try {
         @{Backend='ninfer'; Model=(Join-Path $testDir 'model with spaces.ninfer'); KvTypeK='q8_0'},
         @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); KvTypeK='q8_0'; KvTypeV='f16'},
         @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); KvTypeK='q8_0'; WorkerArgs=@('--cache-type-v', 'q5_0')},
-        @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); Concurrency=9},
-        @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); Concurrency=2; DiskPath='cache'}
+        @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); Concurrency=9}
     )) {
         $rejected = $false
         try { $null = & $launcher @common @case } catch { $rejected = $true }
-        if (!$rejected) { throw 'Unsupported thinking or concurrent SSD combination accepted' }
+        if (!$rejected) { throw 'Unsupported thinking or KV combination accepted' }
     }
     $native = & $launcher @common -Backend ninfer -Model (Join-Path $testDir 'model with spaces.ninfer') `
         -WorkerArgs @('--chat-template', 'template with spaces.jinja') | ConvertFrom-Json
@@ -134,6 +133,16 @@ try {
             $disk.argv[[array]::IndexOf($disk.argv, '--kvmem-host-mib') + 1] -ne '512' -or
             !$disk.capabilities.active_kv_tiering -or $disk.capabilities.ssd_persistence -ne 'process') {
             throw 'Shared H/D launcher mapping changed ownership or path boundaries'
+        }
+    }
+    foreach ($backend in 'llamacpp', 'ninfer') {
+        foreach ($count in 2, 8) {
+            $model = Join-Path $testDir $(if ($backend -eq 'ninfer') {'model with spaces.ninfer'} else {'model.gguf'})
+            $ssd = & $launcher @common -Backend $backend -Model $model -Concurrency $count `
+                -DiskPath 'cache' -DiskMiB 1024 -HostMiB 512 | ConvertFrom-Json
+            if ($ssd.argv -notcontains '--kvmem-disk-path' -or $ssd.argv -notcontains '--kvmem-disk-mib') {
+                throw 'Concurrent public SSD parameters were lost'
+            }
         }
     }
     $fastDisk = & $launcher @common -Backend ninfer -Model (Join-Path $testDir 'model with spaces.ninfer') `

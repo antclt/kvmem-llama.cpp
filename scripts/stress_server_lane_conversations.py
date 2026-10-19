@@ -106,7 +106,7 @@ def main():
     command = [str(args.server.resolve()), '-m', str(args.model.resolve()), '--device', 'CUDA0',
         '--host', '127.0.0.1', '--port', str(port), '--parallel', str(args.parallel), '--threads-http', str(max(clients) + 16),
         '-c', '8192', '--kvmem-conversations', str(args.conversations), '--kvmem-cpu-gb', args.cpu_gb,
-        '--kvmem-budget', '2048', '--kvmem-gen-reserve', '1024', '--kvmem-nvme-gb', '0',
+        '--kvmem-budget', '2048', '--kvmem-gen-reserve', '1024',
         '--kvmem-query-policy', 'user', '-fa', 'on', '--reasoning-effort', 'none', '--temp', '0',
         '--presence-penalty', '0', '--spec-type', 'none', '--no-webui', '-t', '4', '-tb', '4']
     if args.sanitizer:

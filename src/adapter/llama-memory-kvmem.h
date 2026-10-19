@@ -200,8 +200,7 @@ public:
     // .cpp like GdnReplay above, so the hook header stays free of kvmem types.
     struct ConvStore;
     // False when a swap can never be safe in this configuration: without flash
-    // attention V is not mirrored to host, and raw-K NVMe sizes and names one
-    // arena per process.
+    // attention V is not mirrored to host.
     bool conv_swap_supported(std::string & reason) const;
     bool conv_compatible(const llama_memory_kvmem & other) const;
     std::unique_ptr<ConvStore> make_conv();
@@ -359,9 +358,6 @@ private:
         int64_t commit_us = 0;
         int64_t d2h_wait_us = 0;
         int64_t pack_us = 0;
-        int64_t nvme_us = 0;
-        uint64_t nvme_bytes = 0;
-        uint64_t nvme_syscalls = 0;
         int64_t last_sync_us = 0;
         int64_t last_d2d_us = 0;
         int64_t last_snap_wait_us = 0;
@@ -369,9 +365,6 @@ private:
         int64_t last_commit_us = 0;
         int64_t last_d2h_wait_us = 0;
         int64_t last_pack_us = 0;
-        int64_t last_nvme_us = 0;
-        uint64_t last_nvme_bytes = 0;
-        uint64_t last_nvme_syscalls = 0;
         uint32_t n_pressure = 0;
         uint32_t n_pressure_out = 0;
         int64_t multi_read_us = 0;

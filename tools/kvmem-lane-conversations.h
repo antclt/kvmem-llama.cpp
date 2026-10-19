@@ -371,8 +371,7 @@ private:
                 conv.disk_gen = !conv.gdn_ckpt.empty(); conv.disk_query = !conv.gdn_ckpt_query.empty();
                 conv.cold = true;
             }
-            if (!held.files) held.files = std::make_unique<kvmem_session_files>(disk_path_, disk_->capacity_bytes(),
-                kvmem_session_cache_dir::log_fn{}, disk_);
+            if (!held.files) held.files = std::make_unique<kvmem_session_files>(disk_path_, disk_);
             for (uint32_t i = 0; i < conv.payload->chunks.size(); ++i) {
                 const auto& chunk = conv.payload->chunks[i];
                 if (!chunk.in_ram) continue;

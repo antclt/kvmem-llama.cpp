@@ -8,6 +8,15 @@
 
 namespace kvmem {
 
+inline void reject_retired_storage_option(const std::string & arg) {
+    const auto name = arg.substr(0, arg.find('='));
+    if (name == "--kvmem-nvme-gb" || name == "--kvmem-nvme-dir" ||
+        name == "--kvmem-raw-k-nvme" || name == "--kvmem-session-nvme-gb" ||
+        name == "--kvmem-session-cache-dir")
+        throw std::invalid_argument(name + " was retired; use --kvmem-host-mib H with "
+            "--kvmem-disk-path PATH --kvmem-disk-mib D (one shared RAM/SSD budget; no automatic conversion)");
+}
+
 // Version 1 of the public KVMem CLI contract. Backend-native flags do not
 // belong here. Adapters validate their capabilities after resolving this object.
 struct CliOptions {
@@ -38,6 +47,7 @@ struct CliOptions {
     }
 
     template<class Need> bool parse(const std::string & arg, const Need & need) {
+        reject_retired_storage_option(arg);
         if (arg == "--kvmem" || arg == "--no-kvmem") {
             enabled_override = arg == "--kvmem" ? 1 : 0;
             return true;

@@ -15,6 +15,6 @@ for test in server-options-test server-progress-test output-limit-test lane-pool
   "$out/$test"
 done
 for source in llama-kvmem-server kvmem-spec; do
-  "${CXX:-g++}" -std=c++17 -O1 -pthread -DKVMEM_ENABLE_NVME=0 -DLLAMA_SUBPROCESS \
+  "${CXX:-g++}" -std=c++17 -O1 -pthread -DLLAMA_SUBPROCESS \
     "${includes[@]}" -c "tools/$source.cpp" -o "$out/$source.o"
 done
