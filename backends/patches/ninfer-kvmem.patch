@@ -1921,6 +1921,69 @@ index e684873a87e7af4bf6caf173397458e047ec2620..86281fc34d9134d45fe4cce890d4b0e6
  void cuda_check(cudaError_t err, const char* expr, const char* file, int line);
  
  #define CUDA_CHECK(expr) ::ninfer::cuda_check((expr), #expr, __FILE__, __LINE__)
+diff --git a/src/core/paged_kv_cache.cpp b/src/core/paged_kv_cache.cpp
+index 763fc4056e8c800efe86aa19c17e0fead493a8b1..8cc067240347a9c4181a6618e35aae59fb49f86b 100644
+--- a/src/core/paged_kv_cache.cpp
++++ b/src/core/paged_kv_cache.cpp
+@@ -857,6 +857,35 @@ void validate_record_groups(std::span<const std::uint32_t> groups, std::size_t r
+ 
+ } // namespace
+ 
++DeviceKVPagePool::HostRecordCopyStats DeviceKVPagePool::host_record_copy_stats(
++    std::span<const DeviceKVPageHandle> pages, std::span<const std::byte* const> records,
++    std::span<const std::uint32_t> record_groups, const HostKVPageLayout& layout) const {
++    if (records.size() != pages.size() || layout.geometry != geometry()) {
++        throw std::invalid_argument("Paged KV copy statistics geometry or extent is inconsistent");
++    }
++    validate_record_groups(record_groups, records.size(), "Paged KV copy statistics");
++    for (std::size_t i = 0; i < pages.size(); ++i) {
++        (void)physical_index(pages[i]);
++        if (records[i] == nullptr) {
++            throw std::invalid_argument("Paged KV copy statistics record is null");
++        }
++    }
++    HostRecordCopyStats result;
++    const auto max_pitch = device_max_copy_pitch();
++    for (std::size_t begin = 0; begin < pages.size();) {
++        std::size_t pitch = 0;
++        begin = host_record_run_end(pages, records, record_groups, begin,
++                                    layout.page_stride, max_pitch, pitch);
++        ++result.runs;
++    }
++    for (std::size_t plane = 0; plane < planes_.size(); ++plane) {
++        result.payload_bytes += pages.size() * layout.planes[plane].page_payload_bytes;
++        result.copies += result.runs * (geometry().device_plane_order == PagedKVPlaneOrder::PageMajor
++            ? 1U : static_cast<std::uint64_t>(planes_[plane].ne[3]));
++    }
++    return result;
++}
++
+ void DeviceKVPagePool::copy_to_host_records(std::span<const DeviceKVPageHandle> source,
+                                             std::span<std::byte* const> records,
+                                             std::span<const std::uint32_t> record_groups,
+diff --git a/src/core/paged_kv_cache.h b/src/core/paged_kv_cache.h
+index d7d7e3e872ef97066313d3d53432c415eb8314ef..0ba74a5adddd969b1b1cd4f22fdf6a68475a3c31 100644
+--- a/src/core/paged_kv_cache.h
++++ b/src/core/paged_kv_cache.h
+@@ -308,6 +308,18 @@ public:
+     // pinned allocation and within the device's maximum copy pitch: `record_groups` (empty, or
+     // one id per record) names the allocation each record lies in, and records of different
+     // groups, or further apart than the maximum pitch, are never joined into one run.
++    struct HostRecordCopyStats {
++        std::uint64_t runs = 0;
++        std::uint64_t copies = 0;
++        std::uint64_t payload_bytes = 0;
++    };
++    // Diagnostic-only description of the same run plan used by the record copies below.
++    // Counts cudaMemcpy2DAsync calls, including each head on head-major planes; padding is
++    // excluded from payload_bytes. This does not enqueue a copy or synchronize a stream.
++    [[nodiscard]] HostRecordCopyStats host_record_copy_stats(
++        std::span<const DeviceKVPageHandle> pages, std::span<const std::byte* const> records,
++        std::span<const std::uint32_t> record_groups, const HostKVPageLayout& layout) const;
++
+     void copy_to_host_records(std::span<const DeviceKVPageHandle> source,
+                               std::span<std::byte* const> records,
+                               std::span<const std::uint32_t> record_groups,
 diff --git a/src/core/resident_memory.cpp b/src/core/resident_memory.cpp
 new file mode 100644
 index 0000000000000000000000000000000000000000..d5841f3e799de281e5c8ac7c01f393272d0f2f01
@@ -6730,15 +6793,157 @@ index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575
  }
  
  
+diff --git a/src/models/qwen3_5/program/storage/kvmem_transfer_trace.h b/src/models/qwen3_5/program/storage/kvmem_transfer_trace.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..17052b71a874111621aca5bc6eb1d868b466afac
+--- /dev/null
++++ b/src/models/qwen3_5/program/storage/kvmem_transfer_trace.h
+@@ -0,0 +1,135 @@
++#pragma once
++
++#include "core/paged_kv_cache.h"
++#include "core/host_kv_arena.h"
++
++#include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <memory>
++#include <vector>
++
++namespace ninfer::models::qwen3_5::detail {
++
++// Opt-in transfer diagnostics. All event reads follow the caller's existing batch fence.
++// Event spans include stream idle time during host submission; they are not copy-engine busy
++// time. Across ranks report the longest span per batch, rather than adding concurrent spans.
++class KvmemTransferTrace {
++    using Clock = std::chrono::steady_clock;
++    struct RankTimer {
++        int device;
++        cudaStream_t stream;
++        cudaEvent_t start = nullptr, stop = nullptr;
++        RankTimer(int device, cudaStream_t stream) : device(device), stream(stream) {
++            const DeviceBinding bind(device);
++            CUDA_CHECK(cudaEventCreate(&start));
++            const auto status = cudaEventCreate(&stop);
++            if (status != cudaSuccess) {
++                (void)cudaEventDestroy(start);
++                CUDA_CHECK(status);
++            }
++        }
++        ~RankTimer() {
++            int previous = device;
++            (void)cudaGetDevice(&previous);
++            (void)cudaSetDevice(device);
++            (void)cudaEventDestroy(stop);
++            (void)cudaEventDestroy(start);
++            (void)cudaSetDevice(previous);
++        }
++    };
++public:
++    KvmemTransferTrace(const DeviceContext& device, RankStreams streams,
++                       const char* direction, std::size_t pages, std::size_t staging_bytes,
++                       bool asynchronous)
++        : enabled_(enabled()), direction_(direction), pages_(pages), staging_bytes_(staging_bytes),
++          asynchronous_(asynchronous) {
++        if (!enabled_) return;
++        started_ = last_ = Clock::now();
++        for (std::size_t rank = 0; rank < device.size(); ++rank) {
++            timers_.push_back(std::make_unique<RankTimer>(device.rank(rank).device, streams[rank]));
++        }
++    }
++    void add_copy(const DeviceKVPagePool& pool, std::span<const DeviceKVPageHandle> pages,
++                   std::span<const std::byte* const> records,
++                   const HostKVPageLayout& layout,
++                   std::span<const std::uint32_t> groups = {}) {
++        if (!enabled_) return;
++        const auto stats = pool.host_record_copy_stats(pages, records, groups, layout);
++        runs_ += stats.runs;
++        copies_ += stats.copies;
++        payload_bytes_ += stats.payload_bytes;
++    }
++    void host_done() { checkpoint(host_us_); }
++    void prepare_done() { checkpoint(prepare_us_); }
++    void begin_copy() {
++        if (!enabled_) return;
++        prepare_done();
++        for (const auto& timer : timers_) {
++            const DeviceBinding bind(timer->device);
++            CUDA_CHECK(cudaEventRecord(timer->start, timer->stream));
++        }
++    }
++    void end_copy() {
++        if (!enabled_) return;
++        for (const auto& timer : timers_) {
++            const DeviceBinding bind(timer->device);
++            CUDA_CHECK(cudaEventRecord(timer->stop, timer->stream));
++        }
++        checkpoint(submit_us_);
++    }
++    void batch_complete() {
++        if (!enabled_) return;
++        checkpoint(wait_us_);
++        float longest = 0;
++        for (const auto& timer : timers_) {
++            const DeviceBinding bind(timer->device);
++            float ms = 0;
++            CUDA_CHECK(cudaEventElapsedTime(&ms, timer->start, timer->stop));
++            longest = std::max(longest, ms);
++        }
++        gpu_span_ms_ += longest;
++        ++batches_;
++        prepare_done();
++    }
++    void finish() {
++        if (!enabled_) return;
++        prepare_done();
++        const auto total = std::chrono::duration_cast<std::chrono::microseconds>(last_ - started_).count();
++        std::fprintf(stderr,
++            "KVMEM_TRANSFER direction=%s async=%d pages=%zu batches=%llu pool_runs=%llu "
++            "copy_calls=%llu payload_bytes=%llu staging_bytes=%zu prepare_us=%lld host_us=%lld "
++            "submit_us=%lld wait_us=%lld gpu_span_ms=%.3f total_us=%lld\n",
++            direction_, int(asynchronous_), pages_, static_cast<unsigned long long>(batches_),
++            static_cast<unsigned long long>(runs_), static_cast<unsigned long long>(copies_),
++            static_cast<unsigned long long>(payload_bytes_), staging_bytes_, prepare_us_, host_us_,
++            submit_us_, wait_us_, gpu_span_ms_, static_cast<long long>(total));
++    }
++private:
++    static bool enabled() {
++        static const bool value = [] {
++            const char* flag = std::getenv("KVMEM_TRANSFER_TRACE");
++            return flag && std::strcmp(flag, "1") == 0;
++        }();
++        return value;
++    }
++    void checkpoint(long long& accumulated) {
++        if (!enabled_) return;
++        const auto now = Clock::now();
++        accumulated += std::chrono::duration_cast<std::chrono::microseconds>(now - last_).count();
++        last_ = now;
++    }
++    bool enabled_;
++    const char* direction_;
++    std::size_t pages_, staging_bytes_;
++    bool asynchronous_;
++    Clock::time_point started_{}, last_{};
++    std::vector<std::unique_ptr<RankTimer>> timers_;
++    std::uint64_t batches_ = 0, runs_ = 0, copies_ = 0, payload_bytes_ = 0;
++    long long prepare_us_ = 0, host_us_ = 0, submit_us_ = 0, wait_us_ = 0;
++    double gpu_span_ms_ = 0;
++};
++
++} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/storage/kvmem_window.cpp b/src/models/qwen3_5/program/storage/kvmem_window.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd5835fbbe668
+index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e0ae86448
 --- /dev/null
 +++ b/src/models/qwen3_5/program/storage/kvmem_window.cpp
-@@ -0,0 +1,1534 @@
+@@ -0,0 +1,1569 @@
 +#include "models/qwen3_5/program/program_impl.h"
 +#include "models/qwen3_5/program/context.h"
 +#include "models/qwen3_5/program/context_work.h"
++#include "models/qwen3_5/program/storage/kvmem_transfer_trace.h"
 +
 +#include <atomic>
 +#include <cstdio>
@@ -6949,6 +7154,8 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +    void start_spill() override {
 +        auto& p = backend.program;
 +        auto& seq = backend.sequence;
++        KvmemTransferTrace trace(p.device, p.compute_streams, "d2h", spill_ids.size(),
++            p.memory_kv_staging ? p.memory_kv_staging->size() : 0, asynchronous);
 +        if (before) {
 +            std::array<std::byte*, 1> rows{static_cast<std::byte*>(before->data())};
 +            p.state_images->copy_to_host_segments(p.state_store->physical_slot(seq.state.write),
@@ -6972,17 +7179,30 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +            const auto count = std::min(batch_pages(), spill_ids.size() - begin);
 +            auto rows = staging_records(count);
 +            std::memset(rows.front(), 0, count * backend.page_bytes);
-+            const auto ids = std::span(spill_ids).subspan(begin, count);
-+            p.text_kv_pages->physical_pool().copy_to_host_records(
-+                std::span(sources).subspan(begin, count), rows, ids, backend.layout, p.compute_streams);
++            // Every row is a slot of this one pinned batch. Logical block IDs are not allocation
++            // groups: supplying them would disable physical run merging, one copy per page.
++            const std::span<const std::uint32_t> record_groups;
++            std::vector<std::byte*> mtp_rows;
 +            if (backend.mtp_layout) {
-+                auto mtp_rows = rows;
++                mtp_rows = rows;
 +                for (auto& row : mtp_rows) row += backend.layout.page_stride;
++                trace.add_copy(p.backend_kv_pages->physical_pool(),
++                    std::span(mtp_sources).subspan(begin, count), mtp_rows, *backend.mtp_layout,
++                    record_groups);
++            }
++            trace.add_copy(p.text_kv_pages->physical_pool(), std::span(sources).subspan(begin, count),
++                rows, backend.layout, record_groups);
++            trace.begin_copy();
++            p.text_kv_pages->physical_pool().copy_to_host_records(
++                std::span(sources).subspan(begin, count), rows, record_groups, backend.layout, p.compute_streams);
++            if (backend.mtp_layout) {
 +                p.backend_kv_pages->physical_pool().copy_to_host_records(
 +                    std::span(mtp_sources).subspan(begin, count), mtp_rows,
-+                    ids, *backend.mtp_layout, p.compute_streams);
++                    record_groups, *backend.mtp_layout, p.compute_streams);
 +            }
++            trace.end_copy();
 +            p.device.synchronize();
++            trace.batch_complete();
 +            for (std::size_t i = 0; i < count; ++i) {
 +                const auto index = begin + i;
 +                if (source_epochs[index] != p.text_kv_addresses->content_epoch(seq.kv->text, spill_slots[index]))
@@ -6999,6 +7219,7 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +                    if (valid_columns(spill_ids[index], seq.text_kv_valid) == page_tokens) destination->seal();
 +                }
 +            }
++            trace.host_done();
 +            begin += count;
 +        }
 +        if (asynchronous) {
@@ -7025,9 +7246,11 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +                }
 +            });
 +            seq.window.pending_window_io = ticket;
++            trace.finish(); // The storage worker's asynchronous I/O is outside this CPU call.
 +            return;
 +        }
 +        publish_host();
++        trace.finish();
 +    }
 +
 +    kvmem::TransferPoll poll() override {
@@ -7058,6 +7281,8 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +    void start_restore() override {
 +        auto& p = backend.program;
 +        auto& seq = backend.sequence;
++        KvmemTransferTrace trace(p.device, p.compute_streams, "h2d", selected.size(),
++            p.memory_kv_staging ? p.memory_kv_staging->size() : 0, asynchronous);
 +        if (!restore_enabled) throw std::logic_error("KVMem archive-only transfer cannot restore");
 +        if (asynchronous && !host_published)
 +            throw std::logic_error("KVMem restored before storage completion");
@@ -7074,6 +7299,7 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +                resident.push_back(std::move(lease));
 +            }
 +        }
++        trace.prepare_done();
 +        destructive = true;
 +        p.text_kv_addresses->destructive_truncate(seq.kv->text, 0);
 +        const auto compact_end = static_cast<std::uint32_t>(plan.next.visible_tokens) + backend.end - seq.text_kv_valid;
@@ -7086,31 +7312,43 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +        for (std::size_t begin = 0; begin < selected.size();) {
 +            const auto count = std::min(batch_pages(), selected.size() - begin);
 +            auto rows = staging_records(count);
++            trace.prepare_done();
 +            for (std::size_t i = 0; i < count; ++i) {
 +                if (asynchronous)
 +                    std::memcpy(rows[i], storage_work->restored.data() + (begin + i) * backend.page_bytes,
 +                        backend.page_bytes);
 +                else std::memcpy(rows[i], resident[begin + i].data(), backend.page_bytes);
 +            }
++            trace.host_done();
 +            if (before) expected.assign(rows.front(), rows.front() + count * backend.page_bytes);
 +            const std::vector<const std::byte*> input(rows.begin(), rows.end());
-+            const auto ids = std::span(selected).subspan(begin, count);
++            // As in spill, all rows belong to this batch's single pinned allocation.
++            const std::span<const std::uint32_t> record_groups;
 +            std::vector<DeviceKVPageHandle> destinations, mtp_destinations;
 +            for (std::size_t i = 0; i < count; ++i)
 +                destinations.push_back(p.text_kv_addresses->physical_page(seq.kv->text,
 +                    static_cast<std::uint32_t>(begin + i)));
 +            auto& pool = p.text_kv_pages->physical_pool();
-+            pool.copy_from_host_records(input, ids, destinations, backend.layout, p.compute_streams);
++            std::vector<const std::byte*> mtp_input;
 +            if (backend.mtp_layout) {
-+                auto mtp_input = input;
++                mtp_input = input;
 +                for (auto& row : mtp_input) row += backend.layout.page_stride;
 +                for (std::size_t i = 0; i < count; ++i)
 +                    mtp_destinations.push_back(p.backend_kv_addresses->physical_page(*seq.kv->backend,
 +                        static_cast<std::uint32_t>(begin + i)));
-+                p.backend_kv_pages->physical_pool().copy_from_host_records(mtp_input, ids,
++                trace.add_copy(p.backend_kv_pages->physical_pool(), mtp_destinations, mtp_input,
++                    *backend.mtp_layout, record_groups);
++            }
++            trace.add_copy(pool, destinations, input, backend.layout, record_groups);
++            trace.begin_copy();
++            pool.copy_from_host_records(input, record_groups, destinations, backend.layout, p.compute_streams);
++            if (backend.mtp_layout) {
++                p.backend_kv_pages->physical_pool().copy_from_host_records(mtp_input, record_groups,
 +                    mtp_destinations, *backend.mtp_layout, p.compute_streams);
 +            }
++            trace.end_copy();
 +            p.device.synchronize();
++            trace.batch_complete();
 +            if (before) {
 +                // Verify through the same pin window; expected bytes stay in pageable RAM.
 +                pool.copy_to_host_records(destinations, rows, {}, backend.layout, p.compute_streams);
@@ -7135,6 +7373,7 @@ index 0000000000000000000000000000000000000000..f56d7ee9812cdcf312671fec804dd583
 +                throw std::logic_error("KVMem page transfer changed recurrent state");
 +        }
 +        seq.window.restored_bytes += selected.size() * backend.page_bytes;
++        trace.finish();
 +    }
 +
 +    void publish(const kvmem::ExecutionView& view) override {
@@ -18014,6 +18253,39 @@ index 1217c4d7d2e73dab2d5597ef5c3a146e38438ee4..f5a002803458f55a80c0dc26879835bd
      // A single request can materialize up to kMaximumPreparedPromptCacheCandidatesPerRequest
      // distinct shared-prefix candidates on its own: four explicit markers plus the engine's
      // tool/leading-instruction/full-prompt automatic candidates. The default
+diff --git a/tests/test_kv_cache.cpp b/tests/test_kv_cache.cpp
+index 12d4543a028eec60f280ac1a9fdd379643081f35..5df62ee22971ece7f985e73e3fad7c6af9b3dce9 100644
+--- a/tests/test_kv_cache.cpp
++++ b/tests/test_kv_cache.cpp
+@@ -467,6 +467,28 @@ int exercise_layout_and_transfer(ninfer::DeviceContext& context, ninfer::KVPageG
+         const std::vector<ninfer::DeviceKVPageHandle> record_handles = handles(from_records);
+         destination.zero_pages(record_handles, context.stream);
+         std::vector<const std::byte*> const_records(records.begin(), records.end());
++        // The diagnostic must describe the transfer's actual host-allocation and pitch
++        // boundaries, rather than just the physical page runs. The scattered slabs above
++        // form three copy runs; assigning a different allocation group to every row splits
++        // those into five without changing the byte payload.
++        const auto merged = source.host_record_copy_stats(source_handles, const_records, {}, host_layout);
++        const std::array<std::uint32_t, 5> individual_groups{0, 1, 2, 3, 4};
++        const auto individual = source.host_record_copy_stats(
++            source_handles, const_records, individual_groups, host_layout);
++        std::uint64_t bytes_per_record = 0, calls_per_run = 0;
++        for (std::size_t plane = 0; plane < source.plane_count(); ++plane) {
++            bytes_per_record += host_layout.planes[plane].page_payload_bytes;
++            calls_per_run += geometry.device_plane_order == ninfer::PagedKVPlaneOrder::PageMajor
++                ? 1U : static_cast<std::uint64_t>(source.plane(plane).ne[3]);
++        }
++        failures += expect(merged.runs == 3 && merged.copies == 3 * calls_per_run &&
++                           individual.runs == 5 && individual.copies == 5 * calls_per_run &&
++                           merged.payload_bytes == 5 * bytes_per_record &&
++                           individual.payload_bytes == merged.payload_bytes,
++                           label + " copy diagnostics lost run, head or allocation boundaries");
++        const auto empty = source.host_record_copy_stats({}, {}, {}, host_layout);
++        failures += expect(empty.runs == 0 && empty.copies == 0 && empty.payload_bytes == 0,
++                           label + " empty transfer has nonzero diagnostic work");
+         destination.copy_from_host_records(const_records, {}, record_handles, host_layout,
+                                            context.stream);
+         std::optional<ninfer::HostKVAllocation> record_roundtrip =
 diff --git a/tests/test_kv_cache_ranks.cpp b/tests/test_kv_cache_ranks.cpp
 index 4202802dab819e816594d2d4cf7bad1c1de17b9e..18aae4d52560c6f7e6f1745b9a7f17bdcbf4a943 100644
 --- a/tests/test_kv_cache_ranks.cpp

@@ -57,6 +57,10 @@ llama.cpp 示例：
 
 ## ninfer 功能与组合
 
+当前源码的召回传输保留 64 MiB 目标分批中转，并在批内合并连续物理页；可用默认关闭的
+`KVMEM_TRANSFER_TRACE=1` 查看拷贝规划、字节和分段计时。使用方法、计时边界及验证范围见
+[召回传输合并与诊断](ninfer-recall-transfer-validation-20261019.md)。
+
 当前源码支持固定 MTP1–15、多个 Host 会话、最多八条文本或 resident/CPU 图像请求，可在同一服务中混合图文；BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 沿用相同的请求预算规则。2026-10-10 起，磁盘入口接入公共进程内 RAM/SSD 分层，活动 KV 和非活动历史共享 D 配额；旧持久化快照已被替换。自适应 MTP 允许文本及 resident/CPU 图片 C1–8；ngram1–15 可用于九种 KV 的多路文本及 resident/CPU 图片，启动并发大于1时，配置的 ngram16–63 自动降至15并提示，单路保留原宽度。快速 prefill 允许 INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 的文本及 resident/CPU 图片。CPU 图片编码沿用原生串行编码器，八条活动请求不表示八张图片同时编码。冻结的 P5 运行包仍只有单请求文本能力；新源码的参数不适用于旧包。最终可用组合以随包验收报告为准。原生非 KVMem 模式保持原来的参数入口。
 
 双 NVFP4 已接入源码，5050 上的聚焦数值／页搬运测试及 Bonsai B128/R128 ordinary、MTP1 eager、MTP4 Graph 功能检查已通过。
