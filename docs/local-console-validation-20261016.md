@@ -1,5 +1,8 @@
 # Mainline desktop console validation - 2026-10-16
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
+
 The console and runtime monitor integrate with the mainline NInfer and llama.cpp
 launchers. Experimental Strata/PolyStrata adapters are excluded from the UI and
 controller allowlist. No experimental engine dependency or submodule revision is added.
@@ -30,7 +33,7 @@ controller allowlist. No experimental engine dependency or submodule revision is
   backend-root override. Covers presets, autosave, incomplete edits, templates, ordered GPUs,
   LRFU switch semantics, listen selection, progress/readiness/failure and responsive rows.
 - Real llama.cpp browser lifecycle: Qwen3.5-0.8B-Q8_0 on RTX 5050 Laptop
-  (`GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`), canonical preview, Start, ready,
+  (`GPU-A`), canonical preview, Start, ready,
   generation, monitor proxy, duplicate-start rejection, Stop and worker-port closure.
 - MSVC 14.44/CUDA Release build checks for llama-kvmem-server and ninfer-serve, 8 jobs.
   NInfer native sources were already built; its build check required no source recompilation.

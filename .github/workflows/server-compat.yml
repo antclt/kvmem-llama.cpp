@@ -30,6 +30,13 @@ jobs:
       - name: Test CI change detection
         if: steps.classify.outputs.run_ci == 'true'
         run: python3 tests/test_ci_changes.py
+      - name: Check portable validation and public evidence
+        run: |
+          python3 scripts/public_evidence.py --check
+          python3 tests/test_validation_portability.py
+          python3 tests/test_public_evidence.py
+          python3 tests/test_multi_needle.py
+          python3 -m unittest discover -s scripts -p test_native_stats.py
   host-linux:
     needs: changes
     if: needs.changes.outputs.run_ci == 'true'
@@ -78,6 +85,10 @@ jobs:
         with:
           python-version: '3.12'
       - run: python scripts/test_build_rocm.py
+      - name: Test portable validation and evidence export
+        run: |
+          python tests/test_validation_portability.py
+          python tests/test_public_evidence.py
       - name: Test local console and monitor packaging
         run: |
           python tests/test_local_console.py

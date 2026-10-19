@@ -5,7 +5,7 @@ Regression report, not a race against kvmem-qw3. A large tok/s drop is
 reported for a human go/no-go; it does not fail the script unless
 --fail-on-drop is set. Crashes / wrong GPU still abort.
 
-CLI mode selects the RTX 5050 by UUID via gpu_env. HTTP mode reads native
+CLI mode resolves the selected GPU to its UUID via gpu_env. HTTP mode reads native
 responses from explicitly configured workers; it does not launch or reconfigure them.
 """
 from __future__ import annotations
@@ -22,7 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpu_env  # noqa: E402
-from native_stats import http_series, speculative_report  # noqa: E402
+from native_stats import http_series, speculative_report
+from public_evidence import write_report  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = ROOT / "models/unsloth/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf"
@@ -34,14 +35,7 @@ PERF_RE = re.compile(
 
 
 def find_cli() -> Path:
-    for p in (
-        ROOT / "build/bin/llama-kvmem-cli.exe",
-        ROOT / "build/bin/llama-kvmem-cli",
-        ROOT / "build/llama-kvmem-cli",
-    ):
-        if p.is_file():
-            return p
-    raise SystemExit("llama-kvmem-cli not found; run scripts/build-cuda.sh")
+    return gpu_env.find_binary("llama-kvmem-cli")
 
 
 @dataclass
@@ -83,7 +77,7 @@ def parse_perf(stderr: str) -> Perf:
 
 
 def run_once(cli: Path, model: Path, extra: list[str], prompt: str, n_predict: int, n_ctx: int) -> Perf:
-    env = gpu_env.apply_gpu(os.environ.copy(), "small")
+    env = gpu_env.apply_gpu(os.environ.copy())
     cmd = [
         str(cli),
         "-m", str(model),
@@ -99,7 +93,7 @@ def run_once(cli: Path, model: Path, extra: list[str], prompt: str, n_predict: i
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"command failed rc={proc.returncode}")
-    gpu_env.require_device(proc.stderr, "RTX 5050")
+    gpu_env.require_device(proc.stderr, env)
     return parse_perf(proc.stderr)
 
 
@@ -161,6 +155,7 @@ def main() -> int:
     ap.add_argument("--spec-draft-n-max", type=int, default=2)
     ap.add_argument("--spec-kv-dtype", help="CLI mode: native draft KV type")
     ap.add_argument("--mtp-state", choices=("replay", "snapshots"), help="CLI mode: KVMem MTP state strategy")
+    gpu_env.add_gpu_argument(ap)
     args = ap.parse_args()
     if args.runs < 1 or args.warmup < 0 or not 0 <= args.seed < 4294967295:
         ap.error("runs must be positive, warmup nonnegative, seed in 0..4294967294")
@@ -172,13 +167,14 @@ def main() -> int:
         records, metadata = http_series(args, prompt)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(json.dumps({"metadata": metadata, "runs": records}, indent=2), encoding="utf-8")
+            write_report(args.output, {"metadata": metadata, "runs": records})
         return 0
     if args.backend != "llamacpp" or args.baseline_url:
         ap.error("ninfer and baseline-url require --url; ninfer's native statistics are read over HTTP")
     if not args.model.is_file():
         raise SystemExit(f"missing model {args.model}")
 
+    args.gpu = gpu_env.configure(args.gpu)
     cli = args.cli or find_cli()
     records = {}
     common = ["--seed", str(args.seed)]
@@ -198,7 +194,7 @@ def main() -> int:
         ]
 
     print(f"model={args.model.name} ctx={args.ctx} n_predict={args.n_predict} "
-          f"warmup={args.warmup} runs={args.runs} device=RTX 5050")
+          f"warmup={args.warmup} runs={args.runs} device={os.environ['KVMEM_GPU_NAME']}")
     off = series([])
     on = series(["--kvmem", "--kvmem-method", "recency"])  # budget 0 → n_ctx, no capture
     tight = series(["--kvmem", "--kvmem-method", "recency",
@@ -211,14 +207,14 @@ def main() -> int:
                    (("off", off), ("recency_identity", on), ("recency_tight", tight),
                     ("retrieval_identity", retr_ident), ("retrieval_tight", retr_tight))}
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps({"metadata": {"backend": "llamacpp", "cli": str(cli),
+        write_report(args.output, {"metadata": {"backend": "llamacpp", "cli": str(cli),
             "model": str(args.model.resolve()), "seed": args.seed, "ctx": args.ctx,
             "n_predict": args.n_predict, "spec_type": args.spec_type,
-            "gpu_uuid": gpu_env.UUID_5050,
+            "gpu_uuid": args.gpu, "gpu_name": os.environ["KVMEM_GPU_NAME"],
             "source_backend_versions": json.loads((ROOT / "backends/versions.json").read_text(encoding="utf-8")),
             "spec_kv_dtype": args.spec_kv_dtype, "mtp_state": args.mtp_state,
             "spec_draft_n_max": args.spec_draft_n_max, "runs": args.runs, "warmup": args.warmup},
-            "runs": records}, indent=2), encoding="utf-8")
+            "runs": records})
 
     print()
     s_off = summarize("off", off)

@@ -1,5 +1,7 @@
 # KVMem 原生命令行与公共配置规范
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
 本规范以当前 `llama-kvmem-server.exe` 和 `ninfer-serve.exe` 的命令行接口为基础，覆盖原生参数、KVMem 自有接口、公共配置映射和组合校验。llama.cpp/NInfer 原生参数名称和含义保持不变；KVMem 自己增加的接口统一名称、定义和配置来源，必要时修改两个适配层。启动脚本的现有参数不限制本规范的范围。
 
 基线为 2026 年 10 月 17 日的 KVMem CLI v1；本轮 `feat/ninfer-all-27b-refresh` 工作分支将 NInfer 更新到 `08fd7019925f`，精确来源以 [版本清单](../backends/versions.json) 为准。“公共入口建议”和“UI 建议”仍包含后续配置系统设计。当前范围是 llama.cpp 与 NInfer 的服务 worker；离线实验工具 `llama-kvmem-cli` 和底层 Engine API 不属于本轮服务 CLI 迁移。
@@ -700,7 +702,7 @@ UI 继续通过 JSON 参数数组调用内部脚本。直接脚本增加 `Worker
 | NInfer 实际启动及请求 | Qwen3.8-27B-GSQ-RCO-IQ3_S-vision-mtp；通过公共 CLI 启用 KVMem，B=384、R=128、H=512 MiB、sessions=1、SSD=0；19 项检查通过；普通聊天与流式返回正常，流式完成 192 个输出 tokens，活动/非活动计数分开报告 |
 | 源码补丁 | NInfer 改动已记录到版本化补丁及版本清单；精确源码准备检查通过 |
 
-llama 功能测试使用 RTX 5050 Laptop（`GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`）；NInfer 27B 功能测试使用空闲 RTX 5060 Ti（`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`）。本轮为功能验证，不形成性能比较结论。测试仅启动和关闭自身的临时服务。
+llama 功能测试使用 RTX 5050 Laptop（`GPU-A`）；NInfer 27B 功能测试使用空闲 RTX 5060 Ti（`GPU-B`）。本轮为功能验证，不形成性能比较结论。测试仅启动和关闭自身的临时服务。
 
 可复现入口：[llama 会话配额测试](../scripts/test_server_session_quota.py)、[NInfer CLI 实际请求测试](../scripts/test_ninfer_kvmem_cli.py)、[启动器测试](../scripts/windows/test-backend-launcher.ps1)、[启动配置浏览器测试](../ui/test-launcher.cjs)及[设置专项测试](../ui/test-launcher-settings.cjs)。本次实际模型验证使用纯文本和单卡，没有重新验收视觉、MTP 或多卡推理；llama 的 R 输出能力限制继续保留。
 
@@ -741,7 +743,7 @@ Chat/Responses schema tests，以及 `scripts/test_native_metrics_http.py`。GPU
 ### 2026-10-19 首轮核心验证范围
 
 两项 C++ 统计/参数测试和 NInfer 原生 Chat/Responses schema tests 通过。
-GPU 验证全部使用 RTX 5050 Laptop（`GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`）：
+GPU 验证全部使用 RTX 5050 Laptop（`GPU-A`）：
 llama 普通解码使用 Qwen3.5-0.8B-Q8_0；llama MTP 与 NInfer 使用已有四层执行夹具。
 覆盖单 token、普通/流式末尾统计、usage 开关、取消后恢复、Responses 终态及监控计数。
 NInfer 的 KVMem 监控直接复用其原生计时序列化，以保持首 token 和零耗时约定一致。
@@ -754,7 +756,7 @@ Windows 构建的声明/类型适配问题已修正；补丁打包中的行尾�
 
 ### 2026-10-19 RTX 5060 Ti 补充验证
 
-经用户授权，使用 RTX 5060 Ti（`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`）
+经用户授权，使用 RTX 5060 Ti（`GPU-B`）
 和实际 27B 模型补测，所有临时 worker 已退出。
 
 - llama 使用 `Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf`：MTP replay 30 项检查通过，

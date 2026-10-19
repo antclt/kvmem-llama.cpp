@@ -1,5 +1,8 @@
 # NInfer 分批复用 pinned KV 搬运缓冲验证
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
+
 日期：2026-10-18。关联问题：#114。此次改动针对重建时的大块 Host 锁页分配，不缩小 device KV 池，也不宣称完整修复该问题。
 
 ## 改动与不变量
@@ -12,7 +15,7 @@
 
 ## RTX 5050 A/B 与正确性
 
-- GPU：RTX 5050 Laptop 8GB，UUID `GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`，Windows 驱动 617.42。
+- GPU：RTX 5050 Laptop 8GB，UUID `GPU-A`，Windows 驱动 617.42。
 - 现有 0.8B 制品的投影几何不受该后端支持，未扩展模型支持范围。采用完整 27B 制品裁出的四层执行夹具（3 GDN、1 Attention，保留原始投影/heads 与权重字节，可选原始 MTP）；用于内存和原生状态验证，不代表模型回答质量。
 - 主对照：BF16 KV、MTP 关闭、C=1、context=65,536、B=32,768、R=8,192、prefill512、Host=2,048MiB、sink128/recent512，关闭 CUDA Graph 与设备自动校准。
 - 同一输入按短请求、58,438-token 跨池请求、热历史复用、末尾指令改写执行，两个版本各两个新进程，顺序 A/B/B/A。其余链接输入一致，只替换窗口翻译单元。
@@ -30,7 +33,7 @@
 
 ## RTX 5060 Ti / 27B / 256K
 
-GPU：RTX 5060 Ti 16GB，UUID `GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`，驱动617.42。完整模型 `Qwen3.8-27B-GSQ-RCO-IQ3_S-vision-mtp.ninfer`，SHA256 `9025edb5c5831cd7c617dfcf745179db277171f68bc21dc9e5b30881411a2ca1`。
+GPU：RTX 5060 Ti 16GB，UUID `GPU-B`，驱动617.42。完整模型 `Qwen3.8-27B-GSQ-RCO-IQ3_S-vision-mtp.ninfer`，SHA256 `9025edb5c5831cd7c617dfcf745179db277171f68bc21dc9e5b30881411a2ca1`。
 
 保持2026-10-13 RC3测试配方：context262,144、B36,864/R16,384、主/MTP KV INT8、GDN FP16、MTP3固定、ngram/lookup关闭、prefill512、Host12GiB、SSD关闭、会话/并发1、sink/recent各5120、LRFU0.5/0.9、GQA=max、GPU resident vision、关闭设备校准、thinking128/output512。重放相同的33个请求JSON和模拟工具结果，输入token数逐轮一致，末轮261,522+512 tokens；33/33成功、32/32工具轮次命中历史。未执行真实文件工具，未验证生成代码正确性。
 

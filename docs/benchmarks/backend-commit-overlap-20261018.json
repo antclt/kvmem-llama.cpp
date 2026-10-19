@@ -1,7 +1,7 @@
 {
   "date": "2026-10-18",
   "baseline_kvmem_commit": "8a5843e84a0e03969580f143ca91a6fa689c896a",
-  "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+  "gpu_uuid": "GPU-B",
   "gpu_model": "NVIDIA GeForce RTX 5060 Ti",
   "toolchain": {
     "os": "Windows",
@@ -368,17 +368,17 @@
   ],
   "merge_validation": {
     "master_commit": "1723b27e111d2f6fc5909bb2a4ad8eab2c7c3e9a",
-    "gpu_uuid": "GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29",
+    "gpu_uuid": "GPU-A",
     "results": {
-      "gpu_uuid": "GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29",
+      "gpu_uuid": "GPU-A",
       "cases": {
         "ninfer-fixture": {
           "command": [
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\llama-v070-integration-20261018\\ninfer-merge-validation\\ninfer_p4_history_5050.exe",
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\ninfer-pin-window-20261018\\four-layer-test.ninfer",
+            "$ARTIFACTS\\llama-v070-integration-20261018\\ninfer-merge-validation\\ninfer_p4_history_5050.exe",
+            "$ARTIFACTS\\ninfer-pin-window-20261018\\four-layer-test.ninfer",
             "bf16",
             "graph",
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\llama-v070-integration-20261018\\overlap-merge-validation-retry\\ninfer-fixture\\tokens.txt",
+            "$ARTIFACTS\\llama-v070-integration-20261018\\overlap-merge-validation-retry\\ninfer-fixture\\tokens.txt",
             "3",
             "prefix-anchor-ssd",
             "0"
@@ -387,28 +387,28 @@
         },
         "llama-prefix": {
           "command": [
-            "C:\\Users\\leyew\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe",
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\llama-v070-integration-20261018\\kvmem\\tests\\prefix-reuse-regression.py",
+            "$RUNTIME\\codex-primary-runtime\\dependencies\\python\\python.exe",
+            "$ARTIFACTS\\llama-v070-integration-20261018\\kvmem\\tests\\prefix-reuse-regression.py",
             "--exe",
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\llama-v070-integration-20261018\\build\\bin\\llama-kvmem-server.exe",
+            "$ARTIFACTS\\llama-v070-integration-20261018\\build\\bin\\llama-kvmem-server.exe",
             "--model",
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\models\\gguf\\Qwen3.5-0.8B-Q8_0\\Qwen3.5-0.8B-Q8_0.gguf",
+            "$ARTIFACTS\\models\\gguf\\Qwen3.5-0.8B-Q8_0\\Qwen3.5-0.8B-Q8_0.gguf",
             "--gpu",
-            "GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29",
+            "GPU-A",
             "--out",
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\llama-v070-integration-20261018\\overlap-merge-validation-retry\\llama-prefix"
+            "$ARTIFACTS\\llama-v070-integration-20261018\\overlap-merge-validation-retry\\llama-prefix"
           ],
           "exit_code": 0
         },
         "core-contract": {
           "command": [
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\llama-v070-integration-20261018\\build\\bin\\memory_contract_test.exe"
+            "$ARTIFACTS\\llama-v070-integration-20261018\\build\\bin\\memory_contract_test.exe"
           ],
           "exit_code": 0
         },
         "prefix-checkpoint": {
           "command": [
-            "C:\\Users\\leyew\\AppData\\Local\\KVMem\\llama-v070-integration-20261018\\build\\bin\\prefix_checkpoint_test.exe"
+            "$ARTIFACTS\\llama-v070-integration-20261018\\build\\bin\\prefix_checkpoint_test.exe"
           ],
           "exit_code": 0
         }
@@ -431,5 +431,10 @@
     "initial_fixture_attempt": "64MiB Host did not trigger SSD; coverage assertion failed; retained log; repeated with 12MiB and unchanged assertions",
     "full_27b_and_performance_rerun_after_master_sync": false,
     "preserves_master_pin_staging": true
+  },
+  "_sanitization": {
+    "version": 1,
+    "original_sha256": "86d0b1222c46ce2d551fa84485aac548ed52ac79f9163d0b8e64d90cfbae3bf9",
+    "scope": "Device identities/private paths anonymized, credential fields redacted; measurements unchanged."
   }
 }

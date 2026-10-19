@@ -1,6 +1,8 @@
 # Shared speculative contract and native DFlash2 validation
 
-All successful GPU checks for this integration used the explicitly selected RTX 5060 Ti, UUID `GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`. The host runs Windows, CUDA 13.2 and MSVC 19.44. Compilation used eight jobs. No new throughput comparison, 256K task or RC3 run was performed.
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
+All successful GPU checks for this integration used the explicitly selected RTX 5060 Ti, UUID `GPU-B`. The host runs Windows, CUDA 13.2 and MSVC 19.44. Compilation used eight jobs. No new throughput comparison, 256K task or RC3 run was performed.
 
 ## Focused results
 
@@ -25,7 +27,7 @@ Reproduce the state check with the pinned backend's `gguf-py`, NumPy and a targe
 
 ```powershell
 python tests/make-dflash2-fixture.py --target 'D:/models/Qwen3.5-0.8B-Q8_0.gguf' --output 'D:/tests/dflash2-fixture.gguf'
-python tests/session-restore-regression.py --exe 'D:/build/llama-kvmem-server.exe' --model 'D:/models/Qwen3.5-0.8B-Q8_0.gguf' --dflash2-draft 'D:/tests/dflash2-fixture.gguf' --gpu 'GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c' --mtp-state snapshots --turns 2 --cancel-rounds 1 --out 'D:/tests/dflash2-session'
+python tests/session-restore-regression.py --exe 'D:/build/llama-kvmem-server.exe' --model 'D:/models/Qwen3.5-0.8B-Q8_0.gguf' --dflash2-draft 'D:/tests/dflash2-fixture.gguf' --gpu 'GPU-B' --mtp-state snapshots --turns 2 --cancel-rounds 1 --out 'D:/tests/dflash2-session'
 ```
 
 ## Model and build provenance

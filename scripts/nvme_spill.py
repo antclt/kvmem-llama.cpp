@@ -6,6 +6,8 @@ trace on a short prompt, then 512K does not OOM and KV cells stay bounded.
 """
 from __future__ import annotations
 
+import argparse
+
 import os
 import re
 import subprocess
@@ -21,17 +23,11 @@ DEFAULT_MODEL = ROOT / "models/unsloth/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf"
 
 
 def find_cli() -> Path:
-    for p in (
-        ROOT / "build/bin/llama-kvmem-cli",
-        ROOT / "build/llama-kvmem-cli",
-    ):
-        if p.is_file():
-            return p
-    raise SystemExit("llama-kvmem-cli not found")
+    return gpu_env.find_binary("llama-kvmem-cli")
 
 
 def run(cli: Path, model: Path, ntok: int, ctx: int, nvme_dir: str) -> dict:
-    env = gpu_env.apply_gpu(os.environ.copy(), "small")
+    env = gpu_env.apply_gpu(os.environ.copy())
     env.setdefault("KVMEM_TRACE", "1")
     prompt = " ping" * ntok
     with tempfile.NamedTemporaryFile("w", prefix="kvmem_nvme_", suffix=".txt",
@@ -59,7 +55,7 @@ def run(cli: Path, model: Path, ntok: int, ctx: int, nvme_dir: str) -> dict:
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr[-8000:])
         raise SystemExit(f"decode failed rc={proc.returncode}")
-    gpu_env.require_device(proc.stderr, "RTX 5050")
+    gpu_env.require_device(proc.stderr, env)
     info = {
         "n_prompt": None,
         "cells": None,
@@ -88,7 +84,12 @@ def run(cli: Path, model: Path, ntok: int, ctx: int, nvme_dir: str) -> dict:
 
 
 def main() -> int:
-    model = DEFAULT_MODEL
+    ap = argparse.ArgumentParser()
+    gpu_env.add_gpu_argument(ap)
+    ap.add_argument("-m", "--model", type=Path, default=DEFAULT_MODEL)
+    args = ap.parse_args()
+    args.gpu = gpu_env.configure(args.gpu)
+    model = args.model
     cli = find_cli()
     nvme_dir = tempfile.mkdtemp(prefix="kvmem_nvme_")
     print(f"nvme_dir={nvme_dir}", flush=True)

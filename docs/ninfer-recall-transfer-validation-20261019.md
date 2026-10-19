@@ -1,5 +1,7 @@
 # NInfer 召回传输合并与诊断
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
 日期：2026-10-19。基线：主仓库 `c558e08`，NInfer 固定基线 `08fd7019925f`。
 
 ## 行为与范围
@@ -47,7 +49,7 @@ CUDA 事件只在已有批同步后读取，不增加同步。事件区间可能
 
 ## RTX 5050 正确性证据
 
-设备：RTX 5050 Laptop 8 GB，UUID `GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`。
+设备：RTX 5050 Laptop 8 GB，UUID `GPU-A`。
 工具链：CUDA 13.2、MSVC 19.44；编译并行上限 8。Python 验证工具使用已有 3.12.13 环境。
 
 - 独立字节布局 oracle 覆盖 PageMajor/HeadMajor、碎片页、不同锁页分配区、分 plane 恢复、
@@ -67,7 +69,7 @@ CUDA 事件只在已有批同步后读取，不增加同步。事件区间可能
 
 ## 性能与构建范围
 
-RTX 5060 Ti，UUID `GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`，驱动 617.42；
+RTX 5060 Ti，UUID `GPU-B`，驱动 617.42；
 测量时链路为 PCIe Gen4 x4，与贡献者的 Gen4 x8 环境不同。完整
 `Qwen3.8-27B-GSQ-RCO-IQ3_S-vision-mtp.ninfer`，启用文本与 MTP2、INT8 KV、CUDA Graph，
 关闭设备校准、ngram、thinking；context65536、B32768/R8192、prefill512、Host12GiB、SSD关闭、

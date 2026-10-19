@@ -1,6 +1,6 @@
 {
   "complete": true,
-  "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+  "gpu_uuid": "GPU-B",
   "gpu_model": "RTX 5060 Ti 16GB",
   "binary": "ninfer-serve.exe",
   "binary_sha256": "a2834c1ddb9cdbd6d570f52273653e34433b33ecaa0d6d05561d5039b2f07531",
@@ -598,7 +598,7 @@
       "manifest": {
         "binary": "ninfer-serve.exe",
         "binary_sha256": "c21de70477dc8381a064c48c1d02535db4e3cfb034e5d29e642693d3142d43c3",
-        "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+        "gpu_uuid": "GPU-B",
         "draft_tokens": 5,
         "labels": [
           "d1-dflash2-5",
@@ -840,5 +840,10 @@
     "source_results_sha256": "f0634feaaa383a658c23601a1c9ef4f40c66d5a109f2b5da437237b68aa44dde",
     "draft5_results_sha256": "d9f009d96770cd64f792c7bee91bdbd801498c86ba5f4ae5b9603a2640f1e9f5",
     "note": "Paths reduced to basenames; model weights, local build outputs and image payloads are not committed."
+  },
+  "_sanitization": {
+    "version": 1,
+    "original_sha256": "b240069905b28d172d961697c8375d1569b27703d0aaa2d7f346d1170f7b7aa5",
+    "scope": "Device identities/private paths anonymized, credential fields redacted; measurements unchanged."
   }
 }

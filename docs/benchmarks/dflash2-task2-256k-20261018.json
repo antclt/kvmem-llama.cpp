@@ -1,7 +1,7 @@
 {
   "context": 262144,
   "baseline_rerun": false,
-  "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+  "gpu_uuid": "GPU-B",
   "hardware": "NVIDIA GeForce RTX 5060 Ti",
   "cohorts": {
     "rc3_mtp3": {
@@ -29,7 +29,7 @@
         },
         "peak_vram_mib": 14456.0,
         "min_available_ram_mib": 8.78125,
-        "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+        "gpu_uuid": "GPU-B",
         "settings": {
           "budget": 36864,
           "gen_reserve": 16384,
@@ -1335,7 +1335,7 @@
           "source": "long-tool-031.request.json",
           "reason": "Keep final prompt plus its 512-token output within ctx=262144."
         },
-        "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+        "gpu_uuid": "GPU-B",
         "settings": {
           "context": 262144,
           "budget": 32768,
@@ -2973,7 +2973,7 @@
           "source": "long-tool-031.request.json",
           "reason": "Keep final prompt plus its 512-token output within ctx=262144."
         },
-        "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+        "gpu_uuid": "GPU-B",
         "settings": {
           "context": 262144,
           "budget": 36864,
@@ -4877,5 +4877,10 @@
     "existing_bytes_unchanged": true,
     "all_object_hashes_verified": true,
     "bytes": 14504396032
+  },
+  "_sanitization": {
+    "version": 1,
+    "original_sha256": "b2a9f9bdced80e13aec937d0917213b282bf4bbcd346c288284a7626007ba716",
+    "scope": "Device identities/private paths anonymized, credential fields redacted; measurements unchanged."
   }
 }
