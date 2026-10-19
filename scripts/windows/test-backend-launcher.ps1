@@ -39,7 +39,7 @@ try {
             if (!$rejected) { throw 'Invalid or conflicting new service setting accepted' }
         }
     }
-    $thinkingOn = & $launcher @common -Backend llamacpp -Model (Join-Path $testDir 'model.gguf') -ThinkingMode on -Concurrency 4 | ConvertFrom-Json
+    $thinkingOn = & $launcher @common -Backend llamacpp -Model (Join-Path $testDir 'model.gguf') -ThinkingMode on -Concurrency 8 | ConvertFrom-Json
     if ($thinkingOn.argv -notcontains '--enable-thinking') { throw 'llama thinking-on mapping failed' }
     $splitKv = & $launcher @common -Backend llamacpp -Model (Join-Path $testDir 'model.gguf') -KvTypeK q8_0 -KvTypeV q4_0 | ConvertFrom-Json
     if ($splitKv.argv -contains '--kv-dtype' -or
@@ -52,7 +52,7 @@ try {
         @{Backend='ninfer'; Model=(Join-Path $testDir 'model with spaces.ninfer'); KvTypeK='q8_0'},
         @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); KvTypeK='q8_0'; KvTypeV='f16'},
         @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); KvTypeK='q8_0'; WorkerArgs=@('--cache-type-v', 'q5_0')},
-        @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); Concurrency=5},
+        @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); Concurrency=9},
         @{Backend='llamacpp'; Model=(Join-Path $testDir 'model.gguf'); Concurrency=2; DiskPath='cache'}
     )) {
         $rejected = $false

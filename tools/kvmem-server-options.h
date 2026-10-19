@@ -227,7 +227,7 @@ struct kvmem_server_options : kvmem::CliOptions {
         } else if (arg == "--api-key-file") {
             add_key_file(need(arg.c_str()));
         } else if (arg == "-np" || arg == "--parallel") {
-            parallel = kvmem_cli_int(arg.c_str(), need(arg.c_str()), 1, 4);
+            parallel = kvmem_cli_int(arg.c_str(), need(arg.c_str()), 1, 8);
         } else if (arg == "--mmap" || arg == "--no-mmap") {
             load_mode = arg == "--mmap" ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
         } else if (arg == "--mlock") {

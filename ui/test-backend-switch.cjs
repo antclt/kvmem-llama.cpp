@@ -79,9 +79,9 @@ module.exports=async({browser,base,info})=>{
   for(const key of ['StageLayers','DraftTokens','Vision','ThinkingBudget'])assert.equal(await field(key).isDisabled(),true,key);
   await page.locator('[data-language-select]').selectOption('en');assert.deepEqual(await order(),[gpus[0].uuid]);
   await page.locator('[data-language-select]').selectOption('zh-CN');
-  await group(4);await field('Concurrency').fill('8');
-  await field('Backend').selectOption('ninfer');assert.equal(await field('Concurrency').inputValue(),'8');
-  await field('Backend').selectOption('llamacpp');assert.equal(await field('Concurrency').inputValue(),'8','a narrower backend range must not silently clamp the value');
+  await group(4);await field('Concurrency').fill('9');
+  await field('Backend').selectOption('ninfer');assert.equal(await field('Concurrency').inputValue(),'9');
+  await field('Backend').selectOption('llamacpp');assert.equal(await field('Concurrency').inputValue(),'9','switching backends must retain invalid user input');
   await page.locator('[data-action=preview]').click();await page.locator('[data-check-summary]').waitFor();
   assert.ok((await page.locator('[data-check-summary]').textContent()).includes('需要补全'));assert.equal(previews.length,0);
   await closeCheck();await field('Concurrency').fill('1');

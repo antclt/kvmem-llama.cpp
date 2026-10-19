@@ -22,16 +22,17 @@ class ConsoleTests(unittest.TestCase):
             return console.normalize({'schema_version': 1, 'parameters': {
                 **console.DEFAULTS, 'SpeculativeMode': 'dflash2', 'DraftTokens': 5, **overrides}}, ['ninfer', 'llamacpp'])
         self.assertEqual(normalize()['parameters']['SpeculativeMode'], 'dflash2')
-        self.assertEqual(normalize(Concurrency=4)['parameters']['Concurrency'], 4)
-        for invalid in ({'DraftPolicy': 'adaptive'}, {'Concurrency': 5}, {'DraftTokens': 16},
+        for lanes in (4, 5, 8):
+            self.assertEqual(normalize(Concurrency=lanes)['parameters']['Concurrency'], lanes)
+        for invalid in ({'DraftPolicy': 'adaptive'}, {'Concurrency': 9}, {'DraftTokens': 16},
                         {'DraftTokens': 0}, {'DraftModel': 'external.gguf'},
                         {'SpeculativeMode': 'none'}, {'MtpDrafts': 3}, {'DraftPolicy': 'unknown'}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError): normalize(**invalid)
         draft = Path(self.tmp.name) / 'draft with spaces.gguf'; draft.touch()
         value = normalize(Backend='llamacpp', DraftModel=str(draft))
         self.assertEqual(value['parameters']['DraftModel'], str(draft))
-        self.assertEqual(normalize(Backend='llamacpp', DraftModel=str(draft), Concurrency=4)['parameters']['Concurrency'], 4)
-        for invalid in ({'DraftModel': ''}, {'DraftTokens': 6}, {'NgramDrafts': 8}, {'Concurrency': 5}):
+        self.assertEqual(normalize(Backend='llamacpp', DraftModel=str(draft), Concurrency=8)['parameters']['Concurrency'], 8)
+        for invalid in ({'DraftModel': ''}, {'DraftTokens': 6}, {'NgramDrafts': 8}, {'Concurrency': 9}):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 normalize(Backend='llamacpp', **{'DraftModel': str(draft), **invalid})
 
@@ -111,9 +112,9 @@ class ConsoleTests(unittest.TestCase):
             bad = json.loads(json.dumps(self.config)); bad['parameters'][key] = value
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 console.normalize(bad, self.controller.backends)
-        self.config['parameters'].update(Backend='llamacpp', ThinkingMode='on', Concurrency=4)
+        self.config['parameters'].update(Backend='llamacpp', ThinkingMode='on', Concurrency=8)
         self.assertEqual(console.normalize(self.config, self.controller.backends), self.config)
-        self.config['parameters']['Concurrency'] = 5
+        self.config['parameters']['Concurrency'] = 9
         with self.assertRaises(ValueError):
             console.normalize(self.config, self.controller.backends)
 
