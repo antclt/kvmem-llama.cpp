@@ -21,10 +21,7 @@ NEEDLE = "The secret code is BLUEBIRD-42."
 
 
 def find_server() -> Path:
-    for p in (ROOT / "build/bin/llama-kvmem-server", ROOT / "build/llama-kvmem-server"):
-        if p.is_file():
-            return p
-    raise SystemExit("llama-kvmem-server not found; run scripts/build-cuda.sh")
+    return gpu_env.find_binary("llama-kvmem-server")
 
 
 def post_json(url: str, body: dict, timeout: int = 180) -> tuple[int, str]:

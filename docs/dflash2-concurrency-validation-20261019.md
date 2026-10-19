@@ -1,6 +1,8 @@
 # DFlash2 concurrency qualification, 2026-10-19
 
-The user requested testing the conservative single-lane/single-GPU restrictions on the RTX 5060 Ti before changing execution logic. All GPU checks in this record use `GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`, 16 GB, Windows, CUDA 13.2, MSVC 19.44. No other physical GPU, new download, RC3 run or throughput campaign is involved.
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
+The user requested testing the conservative single-lane/single-GPU restrictions on the RTX 5060 Ti before changing execution logic. All GPU checks in this record use `GPU-B`, 16 GB, Windows, CUDA 13.2, MSVC 19.44. No other physical GPU, new download, RC3 run or throughput campaign is involved.
 
 ## Result and promoted boundaries
 
@@ -72,6 +74,6 @@ The machine-readable [qualification summary](benchmarks/dflash2-concurrency-2026
 
 Before submission, this branch was rebased onto `c558e08e` (PR #153). Existing native per-response diagnostics, Prometheus series, timings and CLI seed handling are retained. The common counters now reuse native proposal/acceptance counters; internal replay proposals are excluded from `drafted_tokens`, and `rounds` maps to native verification steps, separately from native generation rounds. The earlier 5060 Ti records above retain their original pre-rebase counter definitions and are not a new post-rebase performance comparison.
 
-The necessary post-rebase regression uses the RTX 5050 Laptop, UUID `GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`, with the small 0.8B Q8_0 target and untrained DFlash2 fixture. C4 reaches four active requests and passes isolated/concurrent output checks, historical cache reuse, cancellation recovery and native error checks. After the four isolated requests, common drafted, accepted, verification and fallback counters exactly match the summed native per-response values; the native backend label and Prometheus endpoint also pass. The first harness run omitted `--metrics` and received the expected HTTP 501; the corrected run explicitly enables the endpoint. No product change was needed for that harness correction.
+The necessary post-rebase regression uses the RTX 5050 Laptop, UUID `GPU-A`, with the small 0.8B Q8_0 target and untrained DFlash2 fixture. C4 reaches four active requests and passes isolated/concurrent output checks, historical cache reuse, cancellation recovery and native error checks. After the four isolated requests, common drafted, accepted, verification and fallback counters exactly match the summed native per-response values; the native backend label and Prometheus endpoint also pass. The first harness run omitted `--metrics` and received the expected HTTP 501; the corrected run explicitly enables the endpoint. No product change was needed for that harness correction.
 
 On the same card, shared-weight lifetime checks and mixed-placement native checkpoint-byte restoration pass. Ordinary decoding, MTP and DFlash2 rejection produce the same 24 greedy tokens across the tested SWA rollover. Both backend patch/tree checks pass. The 37 console and seven Windows argument tests pass again; the previously passing browser suite is reused because its implementation did not change during the rebase. NInfer's affected CPU serving units were rebuilt against unchanged native CUDA libraries, and serving-options, OpenAI Chat schema and Prometheus metrics tests pass. No additional 27B, 256K, RC3 or throughput campaign was run for submission.

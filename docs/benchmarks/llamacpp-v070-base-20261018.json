@@ -1,7 +1,7 @@
 {
   "upstream_release": "v0.7.0",
   "upstream_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
-  "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+  "gpu_uuid": "GPU-B",
   "gpu_model": "NVIDIA GeForce RTX 5060 Ti",
   "model_filename": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
   "model_sha256": "58fd826723939933dc86f45b7fe04545cbc2de1c70f6fe2cdd3858c87a98c12f",
@@ -124,5 +124,10 @@
     "old_backend_version": "7fe450e+kvmem-native-v1",
     "final_backend_version": "620d222+kvmem-native-v1",
     "compute_or_memory_logic_changed": false
+  },
+  "_sanitization": {
+    "version": 1,
+    "original_sha256": "dd864a6d8af160ac8199a9b1ae548d3f9e22117e0e947ab1091cfc7057deec1e",
+    "scope": "Device identities/private paths anonymized, credential fields redacted; measurements unchanged."
   }
 }

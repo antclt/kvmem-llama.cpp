@@ -6,6 +6,7 @@ import io
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -71,6 +72,15 @@ class DeviceSelectionTest(unittest.TestCase):
             device = gpu_env.inventory({'PATH': 'inherited'})[0]
         self.assertEqual((device['index'], device['uuid']), ('7', B))
         self.assertIn('--format=csv,noheader,nounits', run.call_args.args[0])
+
+    def test_binary_discovery_accepts_windows_suffix_in_a_fresh_build_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'build/bin').mkdir(parents=True)
+            executable = root/'build/bin/llama-kvmem-cli.exe'
+            executable.touch()
+            with patch.object(gpu_env, 'ROOT', root):
+                self.assertEqual(gpu_env.find_binary('llama-kvmem-cli'), executable)
 
     def test_toolchain_paths_retain_the_callers_environment(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -147,6 +157,46 @@ class IsolatedBenchmarkTest(unittest.TestCase):
                     capture_output=True, text=True, encoding='utf-8')
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('--gpu', result.stdout)
+
+
+@unittest.skipUnless(os.name != 'nt' and shutil.which('bash'), 'Requires a POSIX Bash runtime')
+class BashIntegrationTest(unittest.TestCase):
+    def executable(self, path, content):
+        path.write_text('#!/bin/sh\n' + content, encoding='utf-8')
+        path.chmod(0o755)
+        return str(path)
+
+    def test_shell_selector_uses_discovery_without_evaluating_device_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            name = "Example GPU's $(false); literal"
+            row = f'0, {A}, {name}, 00000000:01:00.0, 8192'
+            self.executable(base/'nvidia-smi', 'printf "%s\\n" ' + shlex.quote(row) + '\n')
+            env = dict(os.environ, PATH=str(base)+os.pathsep+os.environ.get('PATH', ''),
+                       PYTHON=sys.executable, KVMEM_LOCAL_CONFIG=str(base/'absent.json'))
+            code = 'source "$1" 0 && printf "%s\\n%s\\n" "$CUDA_VISIBLE_DEVICES" "$KVMEM_GPU_NAME"'
+            result = subprocess.run(['bash', '-c', code, 'check', str(ROOT/'scripts/gpu.sh')],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), [A, name])
+
+    def test_cuda_builder_discovers_environment_and_defaults_to_eight_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            (base/'cuda/bin').mkdir(parents=True)
+            nvcc = self.executable(base/'cuda/bin/nvcc', 'exit 0\n')
+            fake_python = self.executable(base/'prepare-only', 'exit 0\n')
+            cmake = self.executable(base/'cmake', 'printf "%s\\n" "$*" >> "$CALLS"\n')
+            env = dict(os.environ, CUDA_HOME=str(base/'cuda'), CMAKE=cmake,
+                       PYTHON=fake_python, CALLS=str(base/'calls'), BUILD_DIR=str(base/'build'))
+            env.pop('CU13', None)
+            env.pop('NPROC', None)
+            result = subprocess.run(['bash', str(ROOT/'scripts/build-cuda.sh')],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (base/'calls').read_text()
+            self.assertIn('-DCMAKE_CUDA_COMPILER=' + nvcc, calls)
+            self.assertIn('--parallel 8', calls)
 
 
 if __name__ == '__main__':

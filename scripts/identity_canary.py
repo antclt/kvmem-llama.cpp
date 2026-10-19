@@ -20,13 +20,7 @@ DEFAULT_PROMPT = "Hello my name is"
 
 
 def find_cli() -> Path:
-    for p in (
-        ROOT / "build/bin/llama-kvmem-cli",
-        ROOT / "build/llama-kvmem-cli",
-    ):
-        if p.is_file():
-            return p
-    raise SystemExit("llama-kvmem-cli not found; run scripts/build-cuda.sh")
+    return gpu_env.find_binary("llama-kvmem-cli")
 
 
 def run(cli: Path, model: Path, extra: list[str], prompt: str, gpu: str) -> list[int]:

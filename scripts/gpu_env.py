@@ -14,6 +14,16 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def find_binary(name: str) -> Path:
+    names = (name + '.exe', name) if os.name == 'nt' else (name, name + '.exe')
+    for directory in (ROOT / 'build/bin', ROOT / 'build'):
+        for filename in names:
+            path = directory / filename
+            if path.is_file():
+                return path
+    raise SystemExit(f'{name} not found; build it or supply an explicit worker path where supported')
+
+
 def local_config(env: dict) -> dict:
     path = Path(env.get("KVMEM_LOCAL_CONFIG", ROOT / ".kvmem-local.json"))
     config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}

@@ -88,7 +88,7 @@ class ConsoleTests(unittest.TestCase):
         ):
             model = Path(self.tmp.name) / ('model' + suffix); model.touch()
             self.config['parameters'].update(Backend=backend, Model=str(model), Worker=str(worker),
-                Gpu='GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29', ApiKey=key,
+                Gpu='GPU-00000000-0000-0000-0000-000000000001', ApiKey=key,
                 ModelAlias="friendly & ' $literal", ChatTemplateFile=str(template), LogLevel='debug',
                 ThinkingMode='off', Concurrency=2)
             plan = self.controller.plan(self.config)
@@ -122,7 +122,7 @@ class ConsoleTests(unittest.TestCase):
         worker = Path(self.tmp.name) / 'worker.exe'; worker.touch()
         model = Path(self.tmp.name) / 'model with spaces.ninfer'; model.touch()
         self.config['parameters'].update(Model=str(model), Worker=str(worker),
-            Gpu='GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29', ThinkingBudget=256,
+            Gpu='GPU-00000000-0000-0000-0000-000000000001', ThinkingBudget=256,
             ReasoningEffort='medium', PreserveThinking=True, WorkerArgs=['--threads', '2'])
         argv = self.controller.plan(self.config)['argv']
         self.assertEqual(argv[-2:], ['--threads', '2'])
@@ -145,7 +145,7 @@ class ConsoleTests(unittest.TestCase):
         registration = Path(self.tmp.name) / 'worker-paths.json'
         registration.write_text(json.dumps({'ninfer': str(worker)}), encoding='utf-8')
         self.config['parameters'].update(Model=str(model), Worker='',
-                                         Gpu='GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29')
+                                         Gpu='GPU-00000000-0000-0000-0000-000000000001')
         self.assertEqual(self.controller.plan(self.config)['argv'][0], str(worker))
         self.assertEqual(self.config['parameters']['Worker'], '', 'do not mutate draft')
         self.config['parameters']['Worker'] = str(explicit)
@@ -384,7 +384,7 @@ class ConsoleTests(unittest.TestCase):
         worker = Path(self.tmp.name) / 'worker space.exe'
         model.touch(); worker.touch()
         self.config['parameters'].update(Model=str(model), Worker=str(worker),
-                                         Gpu='GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29')
+                                         Gpu='GPU-00000000-0000-0000-0000-000000000001')
         plan = self.controller.plan(self.config)
         self.assertEqual(plan['argv'][:2], [str(worker), str(model)])
         self.assertEqual(plan['environment']['CUDA_VISIBLE_DEVICES'], self.config['parameters']['Gpu'])
@@ -395,8 +395,8 @@ class ConsoleTests(unittest.TestCase):
     def test_multigpu_order_and_layers_reach_native_launcher(self):
         model = Path(self.tmp.name) / 'multi.ninfer'; model.touch()
         worker = Path(self.tmp.name) / 'worker.exe'; worker.touch()
-        gpu_order = ['GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c',
-                     'GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29']
+        gpu_order = ['GPU-00000000-0000-0000-0000-000000000002',
+                     'GPU-00000000-0000-0000-0000-000000000001']
         for devices, layers in [(gpu_order, [40, 24]), (gpu_order[::-1], [24, 40])]:
             self.config['parameters'].update(Model=str(model), Worker=str(worker),
                                              Gpu=','.join(devices), StageLayers=layers)
@@ -413,7 +413,7 @@ class ConsoleTests(unittest.TestCase):
         model = Path(self.tmp.name) / 'split kv.gguf'; model.touch()
         worker = Path(self.tmp.name) / 'worker.exe'; worker.touch()
         base = dict(console.DEFAULTS, Backend='llamacpp', Model=str(model), Worker=str(worker),
-                    Gpu='GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29')
+                    Gpu='GPU-00000000-0000-0000-0000-000000000001')
         quantized = ('q8_0', 'q5_0', 'q4_0')
         for key_type in (*quantized, 'f16', 'f32'):
             for value_type in (*quantized, 'f16', 'f32'):
@@ -456,7 +456,7 @@ class ConsoleTests(unittest.TestCase):
         model = Path(self.tmp.name) / 'port.ninfer'; model.touch()
         worker = Path(self.tmp.name) / 'port.exe'; worker.touch()
         self.config['parameters'].update(Model=str(model), Worker=str(worker),
-                                         Gpu='GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29')
+                                         Gpu='GPU-00000000-0000-0000-0000-000000000001')
         with socket.socket() as occupied:
             occupied.bind(('127.0.0.1', 0)); occupied.listen()
             port = occupied.getsockname()[1]

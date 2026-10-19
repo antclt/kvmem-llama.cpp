@@ -43,10 +43,7 @@ TOOLS = [{
 
 
 def find_server() -> Path:
-    for p in (ROOT / "build/bin/llama-kvmem-server", ROOT / "build/llama-kvmem-server"):
-        if p.is_file():
-            return p
-    raise SystemExit("llama-kvmem-server not found; run scripts/build-cuda.sh")
+    return gpu_env.find_binary("llama-kvmem-server")
 
 
 def load_notes(source: Path) -> str:
@@ -222,6 +219,7 @@ def main() -> int:
     if not args.model.is_file():
         raise SystemExit(f"missing model {args.model}")
 
+    (ROOT / "logs").mkdir(parents=True, exist_ok=True)
     notes = load_notes(args.notes)
     (ROOT / "logs" / "kvmem_prog_60k_notes.txt").write_text(notes)
 

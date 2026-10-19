@@ -48,3 +48,30 @@ Additional MTP worker arguments use `--server-args` with a JSON string array.
 Optional `--expected-prompt-tokens` checks a workload's known token count.
 The long tool workload also requires `--notes PATH` rather than a private
 temporary file left by a previous experiment.
+
+## Publishing evidence
+
+The canary's `--output` writes an anonymized public report. Its original JSON is
+retained by SHA256 under ignored `private-evidence/`; the public copy records
+that original hash. GPU model and measurements remain available, while physical
+UUIDs become consistent anonymous device labels. Credential fields and command
+arguments are redacted. No private-file location is embedded in the public copy.
+
+Other JSON or text records can be exported without changing their inputs:
+
+```sh
+python scripts/public_evidence.py "$PRIVATE_REPORT" --output "$PUBLIC_REPORT"
+python scripts/public_evidence.py --check
+```
+
+The source check runs in CI and reports locations only. It rejects physical GPU
+UUIDs, private home/workspace paths and recognizable credential formats in
+project files and added backend-patch lines. Zero-prefix synthetic UUIDs,
+generic paths, public citations and contributor attribution are retained.
+Pinned upstream source is checked through the maintained additions rather than
+rewriting upstream documentation or licenses.
+
+Existing public validation records were anonymized from the original bytes;
+JSON numeric/boolean results were checked unchanged. Historical measurements
+remain scoped to their original builds and workloads. Original files and the
+identity mapping are retained locally under ignored `private-evidence/`.

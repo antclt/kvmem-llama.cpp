@@ -1,5 +1,8 @@
 # ninfer-all 迁移验收记录
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
+
 日期：2026-10-07。状态：**M0–M6 迁移完成，核心测试通过**。
 
 2026-10-17 的 `08fd7019925f` 刷新单独记录在本文末尾。上述完成状态和下文旧版本表只对应
@@ -53,7 +56,7 @@ Ryan 原有 strict/mixed 内存策略已在 M1 保留和适配，default/strict/
 | 双卡 C2 图像 | 实际 Vision/MTP 制品，CPU Vision，RK8V4/Graph、自适应 MTP3；混合并发、重复、取消恢复、替换及保留；图像替换实际触发 `identity_rejected=2` | `pipeline-c2-images` |
 | 三格式数值和旧制品 | Q2_0/Q4_0/Q5_0 + Q8_0 控制，K=1536/5120，T=1/8/9；独立 host byte decoder 和 FP64 oracle，linear/add/SwiGLU/embedding；旧三格式 writer 制品由新 reader/materializer 校验 | `gguf-numerics`、`old-writer` |
 
-功能测试先查占用，以 UUID 选择空闲设备。数值检查使用 RTX 5050 Laptop `GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`；较大图像/MTP 使用 RTX 5060 Ti `GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`；双卡使用上述两张实际设备。没有性能实验。
+功能测试先查占用，以 UUID 选择空闲设备。数值检查使用 RTX 5050 Laptop `GPU-A`；较大图像/MTP 使用 RTX 5060 Ti `GPU-B`；双卡使用上述两张实际设备。没有性能实验。
 
 ## 转换、真实格式与交付入口
 
@@ -152,7 +155,7 @@ load report、mean-K、INT8 prompt 与量化 attention 深度、历史恢复、L
 功能性检查按空闲卡选择：小夹具与独立数值检查使用 RTX 5050 Laptop；实际 27B 模型使用
 RTX 5060 Ti。没有把功能运行期间的耗时作为性能结果。
 
-性能方案固定使用 RTX 5060 Ti（`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`）和同一 IQ3_S 文件，
+性能方案固定使用 RTX 5060 Ti（`GPU-B`）和同一 IQ3_S 文件，
 INT8 KV、prefill256、Graph。原版 logical ctx 和 Main KV 容量均为 B+G；整合版使用相同 B、G、
 逻辑长度和实际 Main KV 容量。输入 P=B，每次请求 257 个输出（首 token 后计时 256 个），
 不触发容量换页。先测关闭 MTP，再测固定 MTP4/ngram0；自适应 MTP/ngram31 单独列出，
@@ -272,7 +275,7 @@ Windows/MSVC14.44、CUDA13.2、SM120a Release 构建完成，最终使用4路并
 保留grammar，以及none加JSON拒绝工具分支。约束测试继续覆盖strict参数、allowed/parallel限制和
 不完整调用边界，没有通过放宽这些显式契约来取得通过。
 
-同一5060 Ti（`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`）和27B IQ3_S的六个真实HTTP请求全部通过。
+同一5060 Ti（`GPU-B`）和27B IQ3_S的六个真实HTTP请求全部通过。
 三次默认none请求均为3222输入、512输出，原生请求日志中的零草稿轮次分别为2、2、1，均实际生成了
 MTP草稿，未再出现短请求诊断中的频繁零草稿现象。普通auto请求成功解析一次工具调用；none加显式
 JSON Schema得到合法的 `{"ok":true}`；强制strict工具调用得到 `ping({})`；此后再运行none也通过。

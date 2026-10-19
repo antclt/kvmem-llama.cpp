@@ -35,11 +35,11 @@ def post(base, body):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     gpu_env.add_gpu_argument(parser)
-    parser.add_argument("--server", type=Path, default=ROOT / "build/bin/llama-kvmem-server")
+    parser.add_argument("--server", type=Path, default=None)
     parser.add_argument("--model", type=Path)
     args = parser.parse_args()
     gpu_env.configure(args.gpu)
-    binary = args.server
+    binary = args.server or gpu_env.find_binary("llama-kvmem-server")
     model = args.model or find_mtp_model()
     folder = ROOT / 'logs' / ('chat_sampling_' + time.strftime('%Y%m%d_%H%M%S'))
     folder.mkdir()

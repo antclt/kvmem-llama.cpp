@@ -1,5 +1,7 @@
 # DFlash2 KVMem context integration
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
 The common launcher and console now also expose llama.cpp DFlash2 through its pinned upstream native implementation. Configuration, capabilities and `/props` statistics are shared; inference execution remains backend-owned. See the [interface contract](speculative-interface.md) and [focused RTX 5060 Ti validation](speculative-validation-20261019.md). The NInfer performance results below retain their original backend and workload scope.
 
 This integrates the DFlash2 context fixes from
@@ -31,7 +33,7 @@ ring capacity, null and per-row floors, empty context and inactive columns, and 
 floors while replaying the same CUDA Graph. The server build checks all integration call sites.
 
 The initial kernel/state validation uses the RTX 5050 Laptop
-(`GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`), CUDA 13.2 and MSVC 19.44.
+(`GPU-A`), CUDA 13.2 and MSVC 19.44.
 
 ## GGUF companion and serving entry points
 
@@ -51,7 +53,7 @@ SHA-256: `1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd`.
 
 ## Local Task 1 qualification, 2026-10-18
 
-The RTX 5060 Ti (`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`) runs the existing
+The RTX 5060 Ti (`GPU-B`) runs the existing
 Qwen3.8-27B GSQ-RCO IQ3_S target, Vision and MTP objects unchanged. The imported mixed-format
 draft occupies 1.73 GB on disk. Each variant runs two measured long-text/image/code conversations
 after a full warmup per process. MTP3 and DFlash2-3 run in ABBA order; the documented DFlash2-7
@@ -101,7 +103,7 @@ The source and Windows worker packages provide `scripts/windows/start-dflash2.ps
 
 ```powershell
 .\scripts\windows\start-dflash2.ps1 -Model 'D:/models/iq3-dflash2.ninfer' `
-  -Gpu 'GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c' -DryRun
+  -Gpu 'GPU-B' -DryRun
 ```
 
 Omit `-DryRun` to start; source builds also supply `-Worker` for their `ninfer-serve.exe`.

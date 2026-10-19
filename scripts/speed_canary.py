@@ -22,7 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpu_env  # noqa: E402
-from native_stats import http_series, speculative_report  # noqa: E402
+from native_stats import http_series, speculative_report
+from public_evidence import write_report  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = ROOT / "models/unsloth/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf"
@@ -34,14 +35,7 @@ PERF_RE = re.compile(
 
 
 def find_cli() -> Path:
-    for p in (
-        ROOT / "build/bin/llama-kvmem-cli.exe",
-        ROOT / "build/bin/llama-kvmem-cli",
-        ROOT / "build/llama-kvmem-cli",
-    ):
-        if p.is_file():
-            return p
-    raise SystemExit("llama-kvmem-cli not found; run scripts/build-cuda.sh")
+    return gpu_env.find_binary("llama-kvmem-cli")
 
 
 @dataclass
@@ -173,7 +167,7 @@ def main() -> int:
         records, metadata = http_series(args, prompt)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(json.dumps({"metadata": metadata, "runs": records}, indent=2), encoding="utf-8")
+            write_report(args.output, {"metadata": metadata, "runs": records})
         return 0
     if args.backend != "llamacpp" or args.baseline_url:
         ap.error("ninfer and baseline-url require --url; ninfer's native statistics are read over HTTP")
@@ -213,14 +207,14 @@ def main() -> int:
                    (("off", off), ("recency_identity", on), ("recency_tight", tight),
                     ("retrieval_identity", retr_ident), ("retrieval_tight", retr_tight))}
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps({"metadata": {"backend": "llamacpp", "cli": str(cli),
+        write_report(args.output, {"metadata": {"backend": "llamacpp", "cli": str(cli),
             "model": str(args.model.resolve()), "seed": args.seed, "ctx": args.ctx,
             "n_predict": args.n_predict, "spec_type": args.spec_type,
-            "gpu_uuid": args.gpu,
+            "gpu_uuid": args.gpu, "gpu_name": os.environ["KVMEM_GPU_NAME"],
             "source_backend_versions": json.loads((ROOT / "backends/versions.json").read_text(encoding="utf-8")),
             "spec_kv_dtype": args.spec_kv_dtype, "mtp_state": args.mtp_state,
             "spec_draft_n_max": args.spec_draft_n_max, "runs": args.runs, "warmup": args.warmup},
-            "runs": records}, indent=2), encoding="utf-8")
+            "runs": records})
 
     print()
     s_off = summarize("off", off)

@@ -1,6 +1,6 @@
 {
   "date": "2026-10-19",
-  "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+  "gpu_uuid": "GPU-B",
   "purpose": "bounded concurrency/state qualification, no throughput benchmark",
   "toolchain": {
     "os": "Windows",
@@ -1583,7 +1583,7 @@
     }
   ],
   "llamacpp_c4_memory": {
-    "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+    "gpu_uuid": "GPU-B",
     "probe_pid": 42152,
     "windows_gpu_process_memory": {
       "dedicated_bytes": 16798728192,
@@ -1624,9 +1624,9 @@
   },
   "cpu_offload_control": {
     "argv": [
-      "C:\\Users\\leyew\\AppData\\Local\\KVMem\\dflash2-llama-validation-20261018\\build\\bin\\llama-kvmem-server.exe",
+      "$ARTIFACTS\\dflash2-llama-validation-20261018\\build\\bin\\llama-kvmem-server.exe",
       "-m",
-      "C:\\Users\\leyew\\AppData\\Local\\KVMem\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
+      "$ARTIFACTS\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "--host",
       "127.0.0.1",
       "--port",
@@ -1664,7 +1664,7 @@
       "q8_0",
       "--kvmem-trace"
     ],
-    "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+    "gpu_uuid": "GPU-B",
     "ordinary": true,
     "lanes": 1,
     "props": {
@@ -1776,7 +1776,7 @@
       "model_alias": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "model_ftype": "",
       "model_name": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
-      "model_path": "C:\\Users\\leyew\\AppData\\Local\\KVMem\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
+      "model_path": "$ARTIFACTS\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "role": "model",
       "speculative": {
         "adaptive": false,
@@ -1842,7 +1842,7 @@
     ],
     "native_checkpoint_bytes_coverage_and_fresh_recovery": "pass",
     "same_sparse_layout_test_before_after": {
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-B",
       "before_dll_sha256": "c796c70569a2e60a7bef867a2f3452abb2edfd7f19e3d8511f770030b83340ad",
       "fixed_dll_sha256": "404370faf4123aa3447cbccc8519f0a23257aad12ebeb7c299340ba5238622a8",
       "runs": [
@@ -1869,9 +1869,9 @@
   },
   "ordinary_after_layout_fix": {
     "argv": [
-      "C:\\Users\\leyew\\AppData\\Local\\KVMem\\dflash2-llama-validation-20261018\\build\\bin\\llama-kvmem-server.exe",
+      "$ARTIFACTS\\dflash2-llama-validation-20261018\\build\\bin\\llama-kvmem-server.exe",
       "-m",
-      "C:\\Users\\leyew\\AppData\\Local\\KVMem\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
+      "$ARTIFACTS\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "--host",
       "127.0.0.1",
       "--port",
@@ -1909,7 +1909,7 @@
       "q8_0",
       "--kvmem-trace"
     ],
-    "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+    "gpu_uuid": "GPU-B",
     "ordinary": true,
     "lanes": 1,
     "props": {
@@ -2021,7 +2021,7 @@
       "model_alias": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "model_ftype": "",
       "model_name": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
-      "model_path": "C:\\Users\\leyew\\AppData\\Local\\KVMem\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
+      "model_path": "$ARTIFACTS\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "role": "model",
       "speculative": {
         "adaptive": false,
@@ -2137,9 +2137,9 @@
   },
   "ordinary_after_capture_fix": {
     "argv": [
-      "C:\\Users\\leyew\\AppData\\Local\\KVMem\\dflash2-llama-validation-20261018\\build\\bin\\llama-kvmem-server.exe",
+      "$ARTIFACTS\\dflash2-llama-validation-20261018\\build\\bin\\llama-kvmem-server.exe",
       "-m",
-      "C:\\Users\\leyew\\AppData\\Local\\KVMem\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
+      "$ARTIFACTS\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "--host",
       "127.0.0.1",
       "--port",
@@ -2177,7 +2177,7 @@
       "q8_0",
       "--kvmem-trace"
     ],
-    "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+    "gpu_uuid": "GPU-B",
     "ordinary": true,
     "lanes": 1,
     "props": {
@@ -2289,7 +2289,7 @@
       "model_alias": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "model_ftype": "",
       "model_name": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
-      "model_path": "C:\\Users\\leyew\\AppData\\Local\\KVMem\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
+      "model_path": "$ARTIFACTS\\models\\Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
       "role": "model",
       "speculative": {
         "adaptive": false,
@@ -2414,5 +2414,10 @@
     "wider concurrent drafts",
     "parallel n-gram matrix",
     "long-context performance"
-  ]
+  ],
+  "_sanitization": {
+    "version": 1,
+    "original_sha256": "c5885fdbbd264029a447be3ff9687c86c5ccc5930207be91493e02fe4d14af7b",
+    "scope": "Device identities/private paths anonymized, credential fields redacted; measurements unchanged."
+  }
 }

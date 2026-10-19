@@ -1,5 +1,8 @@
 # llama.cpp v0.7.0 基础接入
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
+
 接入工作和性能测量基于 KVMem `203e7d90`；提交前同步 master `c88e7b24`，
 保留 PR #143 的 NInfer tool-open token 修复。后端固定到官方 v0.7.0：
 `620d2225cc436ab0b001e3200e590e3b286ef9ab`。
@@ -33,7 +36,7 @@ Windows 静态构建专用的 MTP/KV 测试已完成新版 API 编译检查，�
 手工驱动 `tests/llama-backend-perf.cpp` 默认不参与构建；需要时启用 `KVMEM_BUILD_PERF_TOOLS`。
 同一份源文件也可直接链接到纯原生 v0.7.0 的库，以排除不同 HTTP 接口和聊天模板的影响。
 
-- GPU：RTX 5060 Ti，UUID `GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`。
+- GPU：RTX 5060 Ti，UUID `GPU-B`。
 - 同一 IQ3_S GGUF、同一份 36864 个输入 token、固定 256 个输出。
 - B=36864，R=16384；原生及关闭 KVMem 时 ctx=53248，开启时逻辑 ctx=131072。
 - batch=ubatch=512，目标 KV q8_0，draft KV f16，MTP=3，greedy，屏蔽 EOS，无提示词复用。

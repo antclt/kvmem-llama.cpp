@@ -1,5 +1,8 @@
 # KVMem Windows rc3 runtime / Windows rc3 运行包
 
+> Device identifiers and private paths have been anonymized; reported measurements are unchanged.
+
+
 ## Multi-backend launchers / 多后端启动入口
 
 The current launch UI calls `start-backend.ps1` internally with typed JSON settings.
@@ -136,7 +139,7 @@ FP16 GDN、INT8 KV、CPU 视觉、关闭 ngram、CUDA 图规划余量64 MiB。�
 
 ```powershell
 .\scripts\windows\start-dflash2.ps1 -Model 'D:/models/iq3-dflash2.ninfer' `
-  -Gpu 'GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c' -DryRun
+  -Gpu '0' -DryRun
 ```
 
 Omit `-DryRun` to start. Source builds can also pass `-Worker` with the path to `ninfer-serve.exe`.
