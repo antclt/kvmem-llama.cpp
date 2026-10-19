@@ -69,8 +69,6 @@ struct kvmem_server_options : kvmem::CliOptions {
     int conversations = 1;
     bool legacy_conversations = false;
     uint64_t conversation_bytes = 0; // Accounted host store bytes; zero = count cap only.
-    uint64_t session_disk_bytes = 0;
-    std::string session_cache_dir;
     int verbosity = 3; // Same default and levels as llama-server.
     int trace = -1; // -1 inherits KVMEM_TRACE; CLI overrides only after parsing.
     int threads = -1;
@@ -172,12 +170,6 @@ struct kvmem_server_options : kvmem::CliOptions {
             const double gb = kvmem_cli_real(arg.c_str(), need(arg.c_str()), 0, 1048576);
             conversation_bytes = gb <= 0.0 ? 0
                 : static_cast<uint64_t>(gb * 1024.0 * 1024.0 * 1024.0);
-        } else if (arg == "--kvmem-session-nvme-gb") {
-            const double gb = kvmem_cli_real(arg.c_str(), need(arg.c_str()), 0, 1048576);
-            session_disk_bytes = static_cast<uint64_t>(gb * 1024.0 * 1024.0 * 1024.0);
-        } else if (arg == "--kvmem-session-cache-dir") {
-            session_cache_dir = need(arg.c_str());
-            if (session_cache_dir.empty()) throw std::invalid_argument("session cache directory is empty");
         } else if (arg == "--kvmem-trace" || arg == "--no-kvmem-trace") {
             trace = arg == "--kvmem-trace" ? 1 : 0;
         } else if (arg == "-lv" || arg == "--verbosity" || arg == "--log-verbosity") {

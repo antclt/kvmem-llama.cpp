@@ -125,9 +125,9 @@ module.exports = async function settingsChecks({browser,base,info}) {
   await disabled(['Vision','VisionTokens','VisionResidency','ThinkingBudget','DraftTokens','DraftPolicy','StageLayers']);
   await disabled(['ReasoningEffort','PreserveThinking']);
   await group(0);await field('DiskEnabled').check();await field('DiskPath').fill('C:/cache/llama fixture');await field('DiskMiB').fill('512');
-  await group(4);await field('Concurrency').fill('2');await disabled(['DiskEnabled','DiskPath','DiskMiB']);
-  assert.equal(await field('DiskEnabled').isChecked(),true,'incompatible concurrency preserves SSD choice');
-  const parallel=await preview();assert.equal(parallel.Concurrency,2);assert.equal(Object.hasOwn(parallel,'DiskPath'),false);
+  await group(4);await field('Concurrency').fill('8');await disabled(['DiskEnabled','DiskPath','DiskMiB'],false);
+  assert.equal(await field('DiskEnabled').isChecked(),true,'concurrency preserves SSD choice');
+  const parallel=await preview();assert.equal(parallel.Concurrency,8);assert.equal(parallel.DiskPath,'C:/cache/llama fixture');assert.equal(parallel.DiskMiB,512);
   assert.equal(Object.hasOwn(parallel,'ReasoningEffort'),false);assert.equal(Object.hasOwn(parallel,'PreserveThinking'),false);
   await field('Concurrency').fill('1');await disabled(['DiskEnabled','DiskPath','DiskMiB'],false);
   const serial=await preview();assert.equal(serial.DiskPath,'C:/cache/llama fixture');assert.equal(serial.DiskMiB,512);assert.equal(Object.hasOwn(serial,'DiskEnabled'),false);

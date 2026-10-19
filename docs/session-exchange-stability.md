@@ -1,5 +1,7 @@
 # 1:10 multi-session exchange stability test
 
+> Historical separate-file cache evidence. Its manual runners were retired with the [public SSD migration](legacy-ssd-retirement-20261019.md); the measurements below retain their original scope.
+
 > Device identifiers and private paths have been anonymized; reported measurements are unchanged.
 
 

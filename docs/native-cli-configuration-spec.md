@@ -4,7 +4,7 @@
 
 本规范以当前 `llama-kvmem-server.exe` 和 `ninfer-serve.exe` 的命令行接口为基础，覆盖原生参数、KVMem 自有接口、公共配置映射和组合校验。llama.cpp/NInfer 原生参数名称和含义保持不变；KVMem 自己增加的接口统一名称、定义和配置来源，必要时修改两个适配层。启动脚本的现有参数不限制本规范的范围。
 
-基线为 2026 年 10 月 17 日的 KVMem CLI v1；本轮 `feat/ninfer-all-27b-refresh` 工作分支将 NInfer 更新到 `08fd7019925f`，精确来源以 [版本清单](../backends/versions.json) 为准。“公共入口建议”和“UI 建议”仍包含后续配置系统设计。当前范围是 llama.cpp 与 NInfer 的服务 worker；离线实验工具 `llama-kvmem-cli` 和底层 Engine API 不属于本轮服务 CLI 迁移。
+基线为 2026 年 10 月 17 日的 KVMem CLI v1；本轮 `feat/ninfer-all-27b-refresh` 工作分支将 NInfer 更新到 `08fd7019925f`，精确来源以 [版本清单](../backends/versions.json) 为准。“公共入口建议”和“UI 建议”仍包含后续配置系统设计。当前范围是 llama.cpp 与 NInfer 的服务 worker；离线实验工具 `llama-kvmem-cli` 的 RAM/SSD 参数已迁到公共 H/D；其余实验参数和底层 Engine API 不等同于服务 CLI。
 
 ## 一 接口归属与命名边界
 
@@ -13,7 +13,7 @@
 | 后端原生接口 | 原名、已有别名、原生含义保持不变；公共入口可做显式映射 | ctx-size/max-context、spec-type/spec、chat-template、kv-dtype、原生缓存及内核选项 |
 | KVMem 公共扩展 | 一套规范名称、一套定义、一份配置来源；由两个适配层实现，不保留按后端分叉的公共定义 | kvmem-budget、kvmem-gen-reserve、kvmem-sessions、kvmem-host-mib、LRFU |
 | KVMem 适配高级扩展 | 名称和含义仍统一，但按后端能力开放；暂不支持时明确不可用 | kvmem-query-policy、kvmem-mtp-state、kvmem-block-tokens |
-| KVMem 旧接口 | 归入迁移说明；只有语义等价才能作为兼容别名，不生成新的模板或重复的 UI 字段 | kvmem-conversations、旧会话 GiB 软上限、旧 NVMe 配置 |
+| KVMem 旧接口 | 归入迁移说明；只有语义等价才能作为兼容别名，不生成新的模板或重复的 UI 字段 | kvmem-conversations、旧会话 GiB 软上限；旧磁盘参数已退役并明确报错 |
 
 参数出现在后端 EXE 中，不代表它就是上游原生接口。尤其 `--kvmem-*` 是本项目扩展，不能借“原生兼容”保留两套公共定义。下文第三、四节是当前 EXE 的接口盘点，包含这类扩展；其旧行为用于迁移核对，不是新规范必须保留的契约。
 
@@ -245,15 +245,15 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--kvmem-disk-mib` | 非负整数 MiB；默认 0 关闭公共 SSD 层；关闭时目录必须省略 |
 | `--kvmem-disk-path` | 公共 SSD 层目录，与 disk-mib 配对 |
 | `--kvmem-cpu-gb` | 非负 GiB，0 关闭旧 CPU spill arena |
-| `--kvmem-nvme-gb` | 非负 GiB，0 关闭旧在线 NVMe 文件 |
-| `--kvmem-nvme-dir` | 旧 NVMe 目录，默认 /tmp/kvmem_nvme |
+| `--kvmem-nvme-gb` | 已退役；报错提示改用公共 host-mib/disk-mib/disk-path，不自动换算旧预算 |
+| `--kvmem-nvme-dir` | 已退役；报错提示改用公共 host-mib/disk-mib/disk-path，不自动换算旧预算 |
 | `--kvmem-harvest-v` | 预填充时将 V 连同 raw-K 搬到 Host，默认关 |
-| `--kvmem-raw-k-nvme` | raw-K/V 存 NVMe；依赖旧 nvme-gb |
+| `--kvmem-raw-k-nvme` | 已退役；报错提示改用公共 host-mib/disk-mib/disk-path，不自动换算旧预算 |
 | `--kvmem-sessions` | 正整数，默认 4；非活动历史上限，不包含活动请求或空 lane |
 | `--kvmem-conversations` | 已弃用的显式兼容模式：活动及非活动总数，并发时至少为 parallel；与 sessions 互斥，不自动换算 |
 | `--kvmem-conversations-gb` / `--kvmem-session-ram-gb` | 非负 GiB；旧会话 RAM 软上限，默认 0 不限；活动会话可超过软上限 |
-| `--kvmem-session-nvme-gb` | 非负 GiB；旧非活动会话磁盘预算，默认 0 关闭 |
-| `--kvmem-session-cache-dir` | 旧会话磁盘目录；与公共原生 KV SSD 层分别配置，不能混合启用冲突路径 |
+| `--kvmem-session-nvme-gb` | 已退役；报错提示改用公共 host-mib/disk-mib/disk-path，不自动换算旧预算 |
+| `--kvmem-session-cache-dir` | 已退役；报错提示改用公共 host-mib/disk-mib/disk-path，不自动换算旧预算 |
 | `--kv-dtype` | 同时设置 K/V；f16/f32/q8_0/q5_0/q4_0，默认 q8_0 |
 | `--cache-type-k` / `-ctk` | 单独设置 K 格式；组合能力由原生适配器校验 |
 | `--cache-type-v` / `-ctv` | 单独设置 V 格式；组合能力由原生适配器校验 |
@@ -541,7 +541,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | R 与输出 | llama 当前开启 KVMem 时，R>0 会限制单次输出；NInfer 可在输出中复用 B+R 追加空间 | R 的公共定义只表示追加工作空间；当前限制如实展示，行为对齐须单独完成正确性设计和回归 |
 | 会话数 | 两边 sessions 均只计非活动历史；llama 的旧 conversations 仅显式兼容 | llama 在请求退出时执行配额，活动与切换中的状态不得淘汰；排队中的缓存预览可失效并重算 |
 | 公共 SSD 层 | 目录与预算配对；llama 还要求 H>0 且 KVMem 开启；两边不代表跨重启持久恢复 | SSD 开关关闭时省略目录和预算；不与原生持久缓存合并 |
-| llama 公共 SSD 与旧层 | 公共 SSD 不可与旧 CPU arena、在线 NVMe、raw-K NVMe 或旧会话磁盘预算混用 | 旧接口只进入兼容迁移说明；新 UI 和新模板只使用公共 H/D；不能把软上限或局部磁盘额度直接改名为全局硬预算 |
+| llama 公共 SSD | 需 Flash Attention；不可与独立旧 CPU arena 混用；旧磁盘实现及其构建开关已移除 | UI、模板和 CLI 统一使用公共 H/D；旧磁盘参数明确报错，不把原每会话预算当成全局预算 |
 | llama 并发 | 1–8；多 lane 受 GPU、切分、旧磁盘路径等限制；显式 HTTP 线程至少为 2×并发 | 按实际组合校验，不只检查数字范围 |
 | llama MTP | replay 草稿 1–5；tensor+KVMem MTP 只允许 snapshots | 根据所选状态策略和切分限制草稿及状态选项 |
 | llama DFlash2 | 独立匹配 GGUF、最多八路、单 GPU；公共入口固定 1–5，无 adaptive/ngram | 使用上游原生 draft-dflash；各路共享只读草稿权重，上下文/KV/回滚独立。5060 Ti 的 27B IQ3＋Q4 四路验证使用 CPU 卸载与 snapshots，全 GPU 显存不足，详见并发验收记录 |
@@ -633,7 +633,7 @@ UI 只提供常用设置，不复制完整原生命令行。以下名称属于 U
 | `LogLevel` | 服务与并发 → 高级 | `--verbosity`：off=0、error=1、warning=2、info=3、trace=4、debug=5 | `--log-level` 对应文字值 |
 | `ChatTemplateFile` | 模板与图像 → 高级 | `--chat-template-file PATH` | `--chat-template PATH`（此处原生含义就是文件） |
 | `ThinkingMode` | 生成与思考 | default 不传覆盖，on=`--enable-thinking`，off=`--no-think` | default 不传覆盖，off=`--no-thinking`；缺少原生启动 on 选项，UI 禁用 on，不模拟成其他参数 |
-| `Concurrency` | 服务与并发 | `--parallel N`，1–8；当前控制台单卡，并发大于 1 时要求关闭 SSD | `--max-concurrency N`，1–8 |
+| `Concurrency` | 服务与并发 | `--parallel N`，1–8；当前控制台单卡，允许公共 SSD，H 需容纳所有并发工作集 | `--max-concurrency N`，1–8 |
 
 模型名、日志和模板文件留空时不产生覆盖参数；思考模式继承各自原生默认，不能把 llama 的默认关闭和 NInfer 的模型默认描述为相同的运行状态。思考预算仍仅对 NInfer 开放，UI 关闭思考时不发送预算。温度、top-p 等继续交给聊天请求。
 
@@ -663,7 +663,7 @@ UI 继续通过 JSON 参数数组调用内部脚本。直接脚本增加 `Worker
 | N-gram 推测为 0 | 最短匹配设置变灰并省略 |
 | KV 格式不支持快速预填充 | 快速预填充变灰并省略，预填充分块仍独立设置 |
 | 少于两张显卡 | NInfer 层数分配不可编辑；显卡数量变化时清除已失效的层数分配 |
-| llama.cpp 并发大于 1 | SSD 开关及目录/预算均不可用，不导出 SSD 实参；回到单并发可恢复先前选择 |
+| llama.cpp 并发大于 1 | 公共 SSD 开关及目录/预算继续可用；配置 1–8 路时保留 SSD 实参，并检查实际 H/D 容量 |
 
 由于依赖条件暂时禁用的值仍保存在草稿和个人模板中，刷新、套用模板和后端来回切换后可恢复。后端本身不支持的控件不会因其他开关变化而被启用。旧草稿缺少 `DiskEnabled` 时，按已有非空目录与非零预算推断开关状态。
 

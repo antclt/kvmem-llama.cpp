@@ -148,7 +148,7 @@ class IsolatedBenchmarkTest(unittest.TestCase):
 
     def test_all_migrated_commands_support_help_without_gpu_discovery(self):
         names = ('identity_canary', 'long_ctx_vram', 'mtp_canary', 'mtp_vram_canary',
-                 'multi_needle', 'needle_recall', 'nvme_spill', 'prefill_speed',
+                 'multi_needle', 'needle_recall', 'ssd_spill', 'prefill_speed',
                  'reselect_overlap', 'server_smoke', 'speed_canary', 'tools_60k_27b',
                  'chat_sampling_canary', 'mtp_kv_ab')
         for name in names:

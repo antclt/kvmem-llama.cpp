@@ -48,7 +48,6 @@
 #include <stdexcept>
 #include <thread>
 
-
 struct llama_memory_kvmem::GdnReplay {
     struct Group {
         ggml_backend_buffer_ptr descriptors;
@@ -141,7 +140,7 @@ std::shared_ptr<kvmem::HostKvStorage> kvmem_execution_payload_storage() {
         if (p.payload_disk_bytes) {
             if (!p.payload_host_bytes || !p.payload_disk_dir || !*p.payload_disk_dir)
                 throw std::invalid_argument("shared KV SSD requires RAM quota and directory");
-            if (p.raw_k_nvme || p.nvme_bytes || p.cpu_bytes)
+            if (p.cpu_bytes)
                 throw std::invalid_argument("shared KV storage cannot be combined with legacy spill arenas");
             spill = std::make_shared<kvmem::SpillFile>(
                 std::filesystem::u8path(p.payload_disk_dir), p.payload_disk_bytes);
@@ -553,16 +552,6 @@ static kvmem::KvMemRuntimeConfig make_runtime_cfg(
     cfg.store.estimated_block_bytes = block_bytes;
     cfg.store.gpu_resident_block_bytes = block_bytes;
     cfg.cpu_bytes = kvmem_current_execution().params.cpu_bytes;
-    // GPU-block NVMe spill is separate from raw-K NVMe. When raw-K owns the
-    // SSD budget, skip the 2 MiB GPU-format copies (V already lives in raw).
-    if (!kvmem_current_execution().params.raw_k_nvme) {
-        cfg.nvme_bytes = kvmem_current_execution().params.nvme_bytes;
-        if (kvmem_current_execution().params.nvme_dir && kvmem_current_execution().params.nvme_dir[0]) {
-            cfg.nvme_dir = kvmem_current_execution().params.nvme_dir;
-        } else if (cfg.nvme_bytes > 0) {
-            cfg.nvme_dir = "/tmp/kvmem_nvme";
-        }
-    }
     return cfg;
 }
 
@@ -1025,15 +1014,7 @@ llama_memory_kvmem::llama_memory_kvmem(
     if (!v_trans_) {
         rcfg.v_gpu_row_bytes = ggml_row_size(type_v_, n_embd_v_);
     }
-    if (kvmem_current_execution().params.raw_k_nvme) {
-        rcfg.nvme_bytes = kvmem_current_execution().params.nvme_bytes
-                ? kvmem_current_execution().params.nvme_bytes
-                : (32ull * 1024ull * 1024ull * 1024ull);
-        rcfg.nvme_dir = (kvmem_current_execution().params.nvme_dir && kvmem_current_execution().params.nvme_dir[0])
-                ? kvmem_current_execution().params.nvme_dir
-                : "/tmp/kvmem_nvme";
-        rcfg.nvme_file = "kvmem_raw_k.bin";
-    }
+
     raw_ = std::make_unique<kvmem::RawKvStore>(rcfg);
     content_ = std::make_unique<kvmem::KvContent>(block_tokens_);
     q_sum_.assign(n_layer_, std::vector<float>(n_head_ * n_embd_head_, 0.0f));
@@ -1227,12 +1208,7 @@ bool llama_memory_kvmem::conv_swap_supported(std::string & reason) const {
         reason = "v_trans";
         return false;
     }
-    // Each RawKvStore opens its own arena, sized for one conversation and named
-    // by a fixed nvme_file.
-    if (kvmem_current_execution().params.raw_k_nvme) {
-        reason = "raw_k_nvme";
-        return false;
-    }
+
     return true;
 }
 
@@ -1395,9 +1371,6 @@ std::unique_ptr<llama_memory_kvmem::ConvStore> llama_memory_kvmem::detach_conv()
     decode_mean_reset();
     harvest_flush();
     harvest_gpu_v_commit();
-    if (raw_) {
-        raw_->wait_writes();
-    }
     if (mtp_) {
         mtp_->harvest_flush();
     }
@@ -1504,9 +1477,6 @@ std::unique_ptr<llama_memory_kvmem::ConvStore> llama_memory_kvmem::detach_conv()
 
     // The drain above wrote the packed K/V of every resident block through
     // harvest_gpu_v_commit(), which does not wait for the store's own writes.
-    if (raw_) {
-        raw_->wait_writes();
-    }
     if (mtp_) {
         mtp_->harvest_flush();
     }
@@ -3066,9 +3036,6 @@ void llama_memory_kvmem::d2h_commit(int slot) {
         wait_us = ggml_time_us() - tw;
     }
     cur_pos_ = s.pos;
-    const uint64_t nv0 = raw_ ? raw_->nvme_wait_ns() : 0;
-    const uint64_t sc0 = raw_ ? raw_->nvme_syscalls() : 0;
-    const uint64_t b0 = raw_ ? raw_->nvme_bytes_written() : 0;
     const int64_t tp = ggml_time_us();
     for (const auto & it : s.items) {
         if (it.which == 'q') {
@@ -3083,19 +3050,11 @@ void llama_memory_kvmem::d2h_commit(int slot) {
         }
     }
     const int64_t pack_wall_us = ggml_time_us() - tp;
-    const uint64_t nvme_us = raw_ ? (raw_->nvme_wait_ns() - nv0) / 1000 : 0;
     perf_.last_d2h_wait_us = wait_us;
-    perf_.last_nvme_us = static_cast<int64_t>(nvme_us);
-    perf_.last_pack_us = pack_wall_us > static_cast<int64_t>(nvme_us)
-            ? pack_wall_us - static_cast<int64_t>(nvme_us) : 0;
-    perf_.last_nvme_bytes = raw_ ? (raw_->nvme_bytes_written() - b0) : 0;
-    perf_.last_nvme_syscalls = raw_ ? (raw_->nvme_syscalls() - sc0) : 0;
+    perf_.last_pack_us = pack_wall_us;
     perf_.last_commit_us = ggml_time_us() - t0;
     perf_.d2h_wait_us += perf_.last_d2h_wait_us;
     perf_.pack_us += perf_.last_pack_us;
-    perf_.nvme_us += perf_.last_nvme_us;
-    perf_.nvme_bytes += perf_.last_nvme_bytes;
-    perf_.nvme_syscalls += perf_.last_nvme_syscalls;
     perf_.commit_us += perf_.last_commit_us;
     s.items.clear();
     s.pos.clear();
@@ -3120,9 +3079,6 @@ void llama_memory_kvmem::harvest_flush() {
         d2h_commit(1 - d2h_->next);
         d2h_commit(d2h_->next);
     }
-    if (raw_) {
-        raw_->wait_writes();
-    }
     if (mtp_) {
         mtp_->harvest_flush();
     }
@@ -3139,35 +3095,16 @@ void llama_memory_kvmem::harvest_perf_emit_graph_line() {
 }
 
 void llama_memory_kvmem::harvest_perf_print_sum() {
-    if (!perf_.enabled || perf_.sum_printed || perf_.n_ubatch == 0) {
-        return;
-    }
+    if (!perf_.enabled || perf_.sum_printed || perf_.n_ubatch == 0) return;
     perf_.sum_printed = true;
-    int64_t mtp_sync_us = 0;
-    uint64_t mtp_nvme_bytes = 0;
-    uint64_t mtp_nvme_syscalls = 0;
-    uint32_t mtp_n = 0;
-    if (mtp_) {
-        mtp_n = mtp_->harvest_perf_n_ubatch();
-        mtp_sync_us = mtp_->harvest_perf_sync_us();
-        mtp_nvme_bytes = mtp_->harvest_perf_nvme_bytes();
-        mtp_nvme_syscalls = mtp_->harvest_perf_nvme_syscalls();
-    }
+    const uint32_t mtp_n = mtp_ ? mtp_->harvest_perf_n_ubatch() : 0;
+    const int64_t mtp_sync_us = mtp_ ? mtp_->harvest_perf_sync_us() : 0;
     fprintf(stderr, "KVMEM_HARVEST_SUM n_ubatch=%u n_tok=%u "
-            "sync_ms=%.3f d2d_ms=%.3f d2h_wait_ms=%.3f pack_ms=%.3f nvme_ms=%.3f "
-            "nvme_bytes=%llu nvme_syscalls=%llu "
-            "n_pressure=%u n_pressure_out=%u "
-            "mtp_n_ubatch=%u mtp_sync_ms=%.3f mtp_nvme_bytes=%llu mtp_nvme_syscalls=%llu\n",
-            perf_.n_ubatch, perf_.n_tok,
-            perf_.sync_us / 1000.0, perf_.d2d_us / 1000.0,
+            "sync_ms=%.3f d2d_ms=%.3f d2h_wait_ms=%.3f pack_ms=%.3f "
+            "n_pressure=%u n_pressure_out=%u mtp_n_ubatch=%u mtp_sync_ms=%.3f\n",
+            perf_.n_ubatch, perf_.n_tok, perf_.sync_us / 1000.0, perf_.d2d_us / 1000.0,
             perf_.d2h_wait_us / 1000.0, perf_.pack_us / 1000.0,
-            perf_.nvme_us / 1000.0,
-            (unsigned long long) perf_.nvme_bytes,
-            (unsigned long long) perf_.nvme_syscalls,
-            perf_.n_pressure, perf_.n_pressure_out,
-            mtp_n, mtp_sync_us / 1000.0,
-            (unsigned long long) mtp_nvme_bytes,
-            (unsigned long long) mtp_nvme_syscalls);
+            perf_.n_pressure, perf_.n_pressure_out, mtp_n, mtp_sync_us / 1000.0);
 }
 
 bool llama_memory_kvmem::d2h_submit(ggml_backend_t be) {
@@ -3378,9 +3315,6 @@ void llama_memory_kvmem::harvest_pending_impl(ggml_backend_sched_t sched) {
     perf_.last_commit_us = 0;
     perf_.last_d2h_wait_us = 0;
     perf_.last_pack_us = 0;
-    perf_.last_nvme_us = 0;
-    perf_.last_nvme_bytes = 0;
-    perf_.last_nvme_syscalls = 0;
     perf_.last_sync_us = 0;
     perf_.last_d2d_us = 0;
     perf_.last_snap_wait_us = 0;
@@ -3473,7 +3407,7 @@ void llama_memory_kvmem::harvest_pending_impl(ggml_backend_sched_t sched) {
         fprintf(stderr, "KVMEM_HARVEST ubatch=%u n=%u is_mtp=0 "
                 "harvest_entry_us=%lld sync_us=%lld d2d_us=%lld snap_wait_us=%lld "
                 "d2h_submit_us=%lld commit_us=%lld pack_us=%lld "
-                "nvme_us=%lld nvme_bytes=%llu nvme_syscalls=%llu\n",
+                "\n",
                 perf_.n_ubatch, n_pos,
                 (long long) entry_us,
                 (long long) perf_.last_sync_us,
@@ -3481,10 +3415,7 @@ void llama_memory_kvmem::harvest_pending_impl(ggml_backend_sched_t sched) {
                 (long long) perf_.last_snap_wait_us,
                 (long long) perf_.last_d2h_submit_us,
                 (long long) perf_.last_commit_us,
-                (long long) perf_.last_pack_us,
-                (long long) perf_.last_nvme_us,
-                (unsigned long long) perf_.last_nvme_bytes,
-                (unsigned long long) perf_.last_nvme_syscalls);
+                (long long) perf_.last_pack_us);
     }
 }
 
@@ -5763,8 +5694,8 @@ void llama_memory_kvmem::restore_attached(const kvmem::NativeResidencyPlan & pla
 bool llama_memory_kvmem::native_contract_supported() const {
     // The native packed-row bridge has complete K AND V on this path. Other
     // engine configurations retain their existing bridge until qualified.
-    return !v_trans_ && !multi_gpu_ && !kv_->get_layer_ids().empty() && !raw_cfg_.nvme_bytes &&
-            !rt_cfg_.cpu_bytes && !rt_cfg_.nvme_bytes && store().config().optimize_stage_in;
+    return !v_trans_ && !multi_gpu_ && !kv_->get_layer_ids().empty() &&
+            !rt_cfg_.cpu_bytes && store().config().optimize_stage_in;
 }
 
 bool llama_memory_kvmem::packed_complete(uint32_t id, uint32_t tokens) const {
@@ -5858,7 +5789,6 @@ struct llama_memory_kvmem::NativeTransfer final : kvmem::MemoryTransfer {
         auto & o = backend.owner;
         for (const auto & b : plan.spill) o.harvest_gpu_v((uint32_t) b.id);
         o.harvest_gpu_v_commit();
-        o.raw_->wait_writes();
         for (const auto & b : plan.evict) {
             if (!o.packed_complete((uint32_t) b.id, b.valid_tokens))
                 throw kvmem::MemoryError(kvmem::MemoryErrorCode::TransferFailed, "incomplete native spill");
@@ -5926,7 +5856,6 @@ struct llama_memory_kvmem::NativeTransfer final : kvmem::MemoryTransfer {
             kvmem_stagein_flush_sync(nullptr, nullptr, nullptr, nullptr);
             o.harvest_flush();
             o.harvest_gpu_v_commit();
-            if (o.raw_) o.raw_->wait_writes();
         } catch (...) { destructive = true; }
         if (destructive) {
             o.conv_reset_to_empty("native transfer abort");
@@ -5978,7 +5907,6 @@ std::unique_ptr<kvmem::MemoryTransfer> llama_memory_kvmem::NativeBackend::prepar
 void llama_memory_kvmem::run_native_transaction(const std::vector<uint32_t> & selected, NativePurpose purpose) {
     harvest_flush();
     harvest_gpu_v_commit();
-    raw_->wait_writes();
     if (!content_->stamp().valid || evaluation_cursor_ != evaluation_queue_.size() ||
         content_->evaluated() != content_->stamp().frontier ||
         (purpose != NativePurpose::Pressure && content_->reserved() != content_->stamp().frontier))

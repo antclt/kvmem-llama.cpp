@@ -1,5 +1,7 @@
 # Three-session 5 GiB K8/V4 stability and cold-prefill comparison
 
+> Historical separate-file cache evidence. Its manual runners were retired with the [public SSD migration](legacy-ssd-retirement-20261019.md); the measurements below retain their original scope.
+
 > Device identifiers and private paths have been anonymized; reported measurements are unchanged.
 
 

@@ -108,7 +108,7 @@ KV 格式名称代表不同字节布局和量化方法。例如 ninfer int8 与 
 | 自适应 MTP | 当前 worker 未开放对应参数 | `--adaptive-mtp`，必须启用 MTP，并遵守各组合限制 |
 | ngram 草稿 | 当前 worker 未开放 ninfer 的对应参数 | `--ngram-draft-tokens` / `--ngram-min-match`；KVMem 要求 MTP；1..8路可用，启动并发大于1时，配置的16..63自动降至15并提示；单路保留宽度，文本及 resident/CPU 图片均放行九种原生 KV |
 | MTP 隐含的 ngram 默认值 | 启用本 worker 的 MTP 不会接通 ninfer ngram | 直接启动时，启用 spec 且未指定 ngram 宽度会默认 15；统一脚本的 `NgramDrafts` 默认 0 并显式传入 |
-| 活动请求数 | `-np` / `--parallel`，默认 1，开放 1..4；公共 RAM/SSD 分层支持并发，旧 NVMe 与部分设备组合仍受限制 | `--max-concurrency`，默认 1；KVMem 开放文本及 resident/CPU 图像 1..8，多路 ngram 宽度上限15；公共 RAM/SSD 分层支持并发 |
+| 活动请求数 | `-np` / `--parallel`，默认 1，开放 1..8；公共 RAM/SSD 分层支持并发，仍需足够 H/D 和受支持设备组合 | `--max-concurrency`，默认 1；KVMem 开放文本及 resident/CPU 图像 1..8，多路 ngram 宽度上限15；公共 RAM/SSD 分层支持并发 |
 
 固定草稿长度、自适应上限和 ngram 草稿长度是不同配置。比较两个后端的 MTP 时，应显式列出这些设置，不能仅用“MTP 已开启”代表同一执行方式。
 
@@ -120,7 +120,7 @@ KV 格式名称代表不同字节布局和量化方法。例如 ninfer int8 与 
 |---|---|---|
 | Host 历史数量 | `--kvmem-sessions N`，默认 4；只计非活动历史。旧 conversations 保留显式兼容模式，不能同值换名 | `--kvmem-sessions N`，默认 4，范围 1..16；计保留的非活动 Host 历史，活动请求另占原生资源 |
 | Host 历史预算 | `--kvmem-host-mib`，MiB；共享原生 KV payload 硬预算，默认 16384；旧 GiB 软预算仅兼容模式使用 | `--kvmem-host-mib`，单位 MiB；Main/MTP 原生 KV payload 的全局硬预算，默认 16384，必须为正；不含 mean 索引、GDN checkpoint、模型及其他缓冲 |
-| 公共 RAM/SSD 层 | `--kvmem-host-mib H` 限定原生 K/V 的 RAM payload；`--kvmem-disk-path PATH --kvmem-disk-mib D` 开启 SSD，不能与旧在线 NVMe 或旧会话磁盘配置同时开启 | 相同参数和公共存储实现；Main/MTP 原生 K/V 均可下沉，mean-K 留 RAM；引擎通过异步 CPU I/O 队列接入 |
+| 公共 RAM/SSD 层 | `--kvmem-host-mib H` 限定原生 K/V 的 RAM payload；`--kvmem-disk-path PATH --kvmem-disk-mib D` 开启 SSD，旧磁盘参数已退役；需要 Flash Attention，不能与旧 CPU arena 混用 | 相同参数和公共存储实现；Main/MTP 原生 K/V 均可下沉，mean-K 留 RAM；引擎通过异步 CPU I/O 队列接入 |
 | 非活动会话冷缓存 | 公共层保留同一份 KV 所有权，只将 checkpoint 附件另行写入共享 D；旧 `--kvmem-session-cache-dir` 路径仍可单独使用 | 公共层保留原生 KV 所有权，将非活动历史的状态 checkpoint 写入同一 D；不再序列化一份重复 KV |
 | 生命周期和身份 | 公共层只在当前进程内复用；会话恢复仍遵守 llama 的 checkpoint 规则 | 公共层只在当前进程内复用；恢复仍校验原生布局、执行配置、精确前缀及状态点；不能跨后端读取 |
 
