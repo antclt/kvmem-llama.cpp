@@ -55,7 +55,7 @@ def parse_stats(stderr: str) -> dict:
 
 def run(cli: Path, model: Path, prompt: str, n_ctx: int, budget: int,
         gen_reserve: int, batch: int, block_tokens: int) -> dict:
-    env = gpu_env.apply_gpu(os.environ.copy(), "small")
+    env = gpu_env.apply_gpu(os.environ.copy())
     env.setdefault("KVMEM_TRACE", "1")
     with tempfile.NamedTemporaryFile("w", prefix="kvmem_long_", suffix=".txt",
                                      delete=False) as fh:
@@ -82,7 +82,7 @@ def run(cli: Path, model: Path, prompt: str, n_ctx: int, budget: int,
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr[-8000:])
         raise SystemExit(f"decode failed rc={proc.returncode}")
-    gpu_env.require_device(proc.stderr, "RTX 5050")
+    gpu_env.require_device(proc.stderr, env)
     return parse_stats(proc.stderr)
 
 
@@ -95,7 +95,9 @@ def main() -> int:
     ap.add_argument("--ctx", type=int, default=131072)
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--skip-128k", action="store_true")
+    gpu_env.add_gpu_argument(ap)
     args = ap.parse_args()
+    args.gpu = gpu_env.configure(args.gpu)
 
     lengths = [8192, 32768, 65536]
     if not args.skip_128k:
