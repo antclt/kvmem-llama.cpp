@@ -17,7 +17,7 @@
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "KVMem integration is maintained in the versioned patch; the submodule remains pinned to base_commit",
     "patch": "backends/patches/ninfer-kvmem.patch",
-    "patch_sha256": "ab08691df40baa61e10986ebb75c630cefcc1c0ed9766a5cc92f271e9e7ab8bf",
-    "patched_tree": "0d6104eca1dd5efb6609b9b6c02ecdf2182abc43"
+    "patch_sha256": "e47bed801d4e355b0ec0bff84f4e75c99e53d13886e0d41f7ec64a107c4731e4",
+    "patched_tree": "ec4a784e7ea4372f251d9579c36401252dd09365"
   }
 }
