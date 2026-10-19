@@ -4,6 +4,18 @@
 
 日期：2026-10-19。基线：主仓库 `c558e08`，NInfer 固定基线 `08fd7019925f`。
 
+## 贡献归属与共同作者署名更正
+
+[PR #155](https://github.com/kvmem/kvmem/pull/155) 的连续页召回搬运合并借鉴了
+[melis2023 的原始修正](https://github.com/melis2023/ninfer-kvmem-actkv/commit/b6c8337a6833ceee4d65447e624398425f3d2028)。
+本仓库在既有64 MiB分批搬运路径上完成适配，并补充默认关闭的诊断及本机验证。
+
+该 PR 的代码提交 `5378c6155a42d08d98873961134ef421ada0ce8d` 和合并提交
+`feb4742cb0327c115b17c13e4c291675866555ee` 遗漏了 Git 共同作者 trailer。
+本次追加署名更正提交，使用原作者公开提交中的身份：
+`Co-authored-by: melis2023 <zhuangisme@gmail.com>`。
+这是后续提交中的归属更正，不追溯修改原提交的作者信息或标识，也不改变运行时代码与验证结果。
+
 ## 行为与范围
 
 本次借鉴 [melis2023 的连续页搬运修正](https://github.com/melis2023/ninfer-kvmem-actkv/commit/b6c8337a6833ceee4d65447e624398425f3d2028)：
