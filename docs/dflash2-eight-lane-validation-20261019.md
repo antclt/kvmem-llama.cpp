@@ -26,3 +26,5 @@ The previous trained 27B C4 and all-GPU C2 results retain their original scope i
 ## Test-environment corrections
 
 Private probes use the already installed browser executable and the repository's GGUF module. The static-library helper reconstructs Ninja's removed response file from the known object inventory. Native route calibration is explicitly disabled to avoid an unrelated calibration campaign. A first truncated artifact omitted the source model's proposal dependency; the corrected artifact preserves it. A proposed per-request logit-bias oracle is rejected by NInfer's existing protocol contract and is not used. These corrections do not change product inference behavior. No new model download, 256K run, RC3 run or throughput campaign is performed.
+
+Initial Linux CI caught a second parameter-alias test that still expected five lanes to be rejected. Both aliases now test every supported count through eight and reject nine; the rebuilt native options test passes locally. This correction changes the test expectation only.

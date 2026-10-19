@@ -176,12 +176,12 @@ int main() {
     check(kvmem_config_key("--kvmem-conversations-gb") == "--kvmem-conversations-gb");
     // Both parallel aliases accept exactly the supported lane counts.
     for (const char * flag : {"-np", "--parallel"}) {
-        for (const char * value : {"2", "3", "4"}) {
+        for (const char * value : {"2", "3", "4", "5", "6", "7", "8"}) {
             parse(flag, value);
             check(o.parallel == std::stoi(value));
         }
         rejects([&] { parse(flag, "0"); });
-        rejects([&] { parse(flag, "5"); });
+        rejects([&] { parse(flag, "9"); });
         parse(flag, "1");
         check(o.parallel == 1);
     }
