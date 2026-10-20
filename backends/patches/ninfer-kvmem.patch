@@ -592,10 +592,10 @@ index 0b8433ae2a50fbc679ebcff2b0d1b9a3db216705..55f8131923dd8a8bc299dafb2ba727ba
  Draft frames are compact at each round's actual proposal width, which may be narrower than the
  maximum ngram/copy window. D2H staging must preserve the fixed host-row pitch used by the grammar
 diff --git a/docs/maintainer/paged-kv-cache.md b/docs/maintainer/paged-kv-cache.md
-index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..da1b169a125f943e3e70ba66109ce2b1335e3db6 100644
+index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..863f2f7ad953272231ad6dd1ba6742c6c1252ca3 100644
 --- a/docs/maintainer/paged-kv-cache.md
 +++ b/docs/maintainer/paged-kv-cache.md
-@@ -781,3 +781,204 @@ Exact model state 和 backend mathematics 见
+@@ -781,3 +781,214 @@ Exact model state 和 backend mathematics 见
  [Qwen3.5 model](qwen3_5-model.md)与 [DFlash](dflash.md)；persistent KV codec 和 causal consumer
  numerical contract 由上表中的 growing-cache Ops 定义。路径用于定位当前实现，不把文件或类名本身提升为
  外部接口。
@@ -626,6 +626,16 @@ index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..da1b169a125f943e3e70ba66109ce2b1
 +as well as evicted pages. Its preparation therefore accounts for those additional host
 +records in H; current completed records are reused. `verify_transfers` additionally checks
 +native payload and recurrent-state bytes and is disabled for ordinary product execution.
++
++RAM-only execution owns one bounded CPU preparation worker when H is nonzero.
++An admitted request with a Host payload reservation prepares missing records for its
++next prompt chunk before the current GPU chunk. The next safe boundary joins and
++publishes those records before use. Existing RAM records keep their original owner
++borrows and writes; lookahead neither adds copy-on-write capacity nor changes zero
++initialization or H accounting. Cancellation waits for an already-started preparation
++to drain. Requests with no Host reservation keep their original path. RAM bulk
++transfers and decode/control scheduling remain synchronous, with the same GPU
++executor, workspace and Graphs; this worker performs only Host preparation.
 +
 +Durable KVMem records use ordinary pageable RAM. Program owns one reusable pinned transfer
 +buffer, bounded by B+R native page payload bytes, rather than registering every history page
@@ -5407,7 +5417,7 @@ index 120f013f4d4cc7e47114315ab6d61093d2855f79..eae23c71a9be09bae7fa93b74b0f812b
      std::uint32_t main_page_groups          = 0;
      std::uint32_t max_concurrency           = 1;
 diff --git a/src/models/qwen3_5/program/prefill.cpp b/src/models/qwen3_5/program/prefill.cpp
-index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385acae12adbb6 100644
+index 87862274889d8e6679ee2041dd56e8f54d7418ea..3563ee8c02c5f411784a506809031afc0e98b423 100644
 --- a/src/models/qwen3_5/program/prefill.cpp
 +++ b/src/models/qwen3_5/program/prefill.cpp
 @@ -1,5 +1,6 @@
@@ -5632,7 +5642,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
      std::uint32_t processed_prompt_tokens = 0;
      // After a failed disk restore the admitted prefix is recomputed without being reported.
      const auto reported_tokens = [&staged, &processed_prompt_tokens] {
-@@ -1123,6 +1248,26 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1123,6 +1248,32 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
          // Prefill attention addresses its KV through the shared step table-row scalars. Another
          // lane's staging or capture can rebind them between this lane's steps, so every step
          // binds its own rows before any Prefill or MTP-bridge work.
@@ -5655,11 +5665,17 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
 +                staged.elapsed_seconds += std::chrono::duration<double>(Clock::now() - started).count();
 +                return runtime::PrefillStepResult{.summary = summary, .timing = timing.finish()};
 +            }
++            if (memory_io && !kvmem_options.disk_bytes && chunk_end < staged.prompt_tokens) {
++                // Current records are ready. Overlap next-chunk first touch with this
++                // GPU forward; prepare_window joins and publishes before later use.
++                (void)prepare_memory_append(sequence, chunk_end,
++                    std::min(staged.prompt_tokens, chunk_end + prefill_chunk), true);
++            }
 +        }
          bind_sequence_kv(sequence);
          StateImageSelectors selectors = state_selectors(sequence);
          // Hybrid prefix cache taps (docs/maintainer/hybrid-prefix-cache-spec.md §7.1): an exact tap
-@@ -1169,6 +1314,10 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1169,6 +1320,10 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
              selectors.destination,
              staged.initial_mtp_extent,
              0};
@@ -5670,7 +5686,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
          // The first pass after a Host restore waits for each layer's copies (hybrid spec §6.5).
          // The chunk function takes the events itself: they are a view into the landing batch, and
          // the KV commits between chunks (the MTP bridge's among them) poll the cache, which frees
-@@ -1208,7 +1357,7 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1208,7 +1363,7 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
  
          if (staged.cursor < staged.prompt_tokens) {
              const std::uint32_t nominal =
@@ -5679,7 +5695,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
              mark_workspace_usage(staged.prepare_mtp ? workspace_plan.mtp_prefill
                                                      : workspace_plan.text_prefill);
              if (is_masked_draft_backend(speculative_backend)) {
-@@ -1234,7 +1383,8 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1234,7 +1389,8 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                      schedule_state.rewrite_checkpoint_hidden = nullptr;
                  }
  
@@ -5689,7 +5705,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
                  const std::optional<std::uint32_t> capture_frontier =
                      staged.next_capture < staged.capture_groups.size()
                          ? std::optional<std::uint32_t>(
-@@ -1258,6 +1408,25 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1258,6 +1414,25 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                  if (hybrid_split && (!split_frontier || *hybrid_split < *split_frontier)) {
                      split_frontier = *hybrid_split;
                  }
@@ -5715,7 +5731,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
                  execution::PrefillChunkResult result;
                  timing.pause();
                  if (staged.vision) {
-@@ -1281,7 +1450,11 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1281,7 +1456,11 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                  if (result.processed_tokens == 0 || result.processed_tokens > remaining) {
                      throw std::logic_error("ordinary prefill chunk made invalid progress");
                  }
@@ -5728,7 +5744,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
                  staged.cursor += result.processed_tokens;
                  processed_prompt_tokens += result.processed_tokens;
                  remaining -= result.processed_tokens;
-@@ -1296,6 +1469,22 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1296,6 +1475,22 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                  // Prompt transitions are canonical immediately. If this was the first write after
                  // an immutable source, close the Fork before potentially freezing a new rewrite.
                  settle_state_fork(sequence);
@@ -5751,7 +5767,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
                  if (hybrid_lane != nullptr && !result.finalized) {
                      hybrid_after_prefill_chunk(sequence, staged.cursor, staged.prompt_tokens);
                  }
-@@ -1322,6 +1511,17 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1322,6 +1517,17 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
              }
  
              if (!finalized) {
@@ -5769,7 +5785,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
                  if (staged.cursor == staged.prompt_tokens) {
                      throw std::logic_error("staged prefill reached the prompt without sampling");
                  }
-@@ -1366,6 +1566,30 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1366,6 +1572,30 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
              }
          }
  
@@ -5800,7 +5816,7 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..b4ec6e21224313ed91b7f1c984385aca
          copy_round_token();
          if (request.logprobs) { fetch_logprobs(1); }
          std::array<TokenId, qwen3_5::kMtpDecodeMaximumDrafts> initial_drafts{};
-@@ -1440,6 +1664,10 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1440,6 +1670,10 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
              .complete                = true,
              .timing                  = timing.finish(),
          };
@@ -5920,7 +5936,7 @@ index 36af6e27ead9c3ce27d0c61d3f8be45f35972730..c631ffe55da38750d3abeadeee522602
      // Hybrid prefix cache mode (ContextCacheMode::Hybrid). Admission runs as the same context
      // transaction the Engine drives for Legacy materialization: quote, reserve, then
 diff --git a/src/models/qwen3_5/program/program_impl.cpp b/src/models/qwen3_5/program/program_impl.cpp
-index fe4ad6a6ad4c8394f1de3b942a6c942f21d1cbcd..3125563797d60c240f3b347299c0e621bdcd2cc1 100644
+index fe4ad6a6ad4c8394f1de3b942a6c942f21d1cbcd..72c6c4ff694a79d69abc95e01ba8e715af37e896 100644
 --- a/src/models/qwen3_5/program/program_impl.cpp
 +++ b/src/models/qwen3_5/program/program_impl.cpp
 @@ -1,3 +1,4 @@
@@ -5966,7 +5982,7 @@ index fe4ad6a6ad4c8394f1de3b942a6c942f21d1cbcd..3125563797d60c240f3b347299c0e621
      if (&parameters != plan.parameters || parameters.model.options() != plan.features) {
          throw std::invalid_argument("Program parameters do not match the frozen sequence plan");
      }
-@@ -445,6 +461,23 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -445,6 +461,30 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
              *backend_kv_pages, backend->execution_tables(), address_capacity,
              backend->execution_tables().logical_page_capacity());
      }
@@ -5986,11 +6002,18 @@ index fe4ad6a6ad4c8394f1de3b942a6c942f21d1cbcd..3125563797d60c240f3b347299c0e621
 +            std::min<std::size_t>(2, max_concurrency));
 +        memory_transfer_storage = kvmem::HostKvStorage(2 * headroom);
 +        memory_state_staging = kvmem::HostKvStorage(state_bytes);
++    } else if (kvmem_window_tokens && kvmem_options.host_bytes) {
++        // Prepare zero-filled RAM records off the GPU executor. The queue is bounded;
++        // payload allocations still consume the existing request Host reservation.
++        const auto page_bytes = text_host_kv_page_stride + backend_host_kv_page_stride;
++        const auto headroom = std::uint64_t(kvmem_window_tokens / 64) * max_concurrency * page_bytes;
++        memory_io = std::make_unique<kvmem::StorageIoQueue>(
++            std::max<std::size_t>(2, max_concurrency + 1), headroom, 1);
 +    }
      pressure_text_page_scratch_.resize(text_kv_pages->capacity());
      pressure_text_selected_pages_.reserve(text_kv_pages->capacity());
      if (backend_kv_pages) {
-@@ -556,6 +589,45 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -556,6 +596,45 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
          throw std::logic_error("DFlash decode frame does not match the sequence plan");
      }
      prefill_hidden = plan.persistent.prefill_hidden.bind(backing);
@@ -6036,7 +6059,7 @@ index fe4ad6a6ad4c8394f1de3b942a6c942f21d1cbcd..3125563797d60c240f3b347299c0e621
      if (plan.persistent.score_hidden) {
          score_hidden = plan.persistent.score_hidden->bind(backing);
      }
-@@ -638,6 +710,12 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -638,6 +717,12 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
      }
      if (use_cuda_graph) {
          StartupPhaseScope graph_phase(startup_observer, StartupPhase::CudaGraphPrepare);
@@ -6049,7 +6072,7 @@ index fe4ad6a6ad4c8394f1de3b942a6c942f21d1cbcd..3125563797d60c240f3b347299c0e621
          const std::size_t free_before = device.free_bytes();
          prepare_graphs();
          device.synchronize();
-@@ -647,6 +725,15 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -647,6 +732,15 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
              free_after == 0 ? std::nullopt
                              : std::optional<std::size_t>(
                                    free_before > free_after ? free_before - free_after : 0);
@@ -6065,7 +6088,7 @@ index fe4ad6a6ad4c8394f1de3b942a6c942f21d1cbcd..3125563797d60c240f3b347299c0e621
          graph_phase.complete();
      }
      work.reset();
-@@ -869,6 +956,66 @@ runtime::ContextTransferObservation ProgramImpl::context_transfer_observation(
+@@ -869,6 +963,66 @@ runtime::ContextTransferObservation ProgramImpl::context_transfer_observation(
  
  MemorySummary ProgramImpl::memory_summary() const noexcept {
      MemorySummary out;
@@ -6936,10 +6959,10 @@ index 0000000000000000000000000000000000000000..17052b71a874111621aca5bc6eb1d868
 +} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/storage/kvmem_window.cpp b/src/models/qwen3_5/program/storage/kvmem_window.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e0ae86448
+index 0000000000000000000000000000000000000000..b3b7c60cda67496a3015092b13cc9bbf6b8c09de
 --- /dev/null
 +++ b/src/models/qwen3_5/program/storage/kvmem_window.cpp
-@@ -0,0 +1,1569 @@
+@@ -0,0 +1,1575 @@
 +#include "models/qwen3_5/program/program_impl.h"
 +#include "models/qwen3_5/program/context.h"
 +#include "models/qwen3_5/program/context_work.h"
@@ -7081,7 +7104,8 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +    WindowMemoryTransfer(WindowMemoryBackend& backend, const kvmem::WorkingSetPlan& plan,
 +                         bool verify_restore = true)
 +        : backend(backend), plan(plan), restore_enabled(verify_restore),
-+          asynchronous(backend.program.memory_io && verify_restore && !backend.resident_native) {
++          asynchronous(backend.program.memory_io && backend.program.kvmem_options.disk_bytes &&
++                       verify_restore && !backend.resident_native) {
 +        auto& seq = backend.sequence;
 +        auto& p = backend.program;
 +        const auto count = kv_pages_for_tokens(seq.text_kv_valid);
@@ -7502,6 +7526,8 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +bool ProgramImpl::prepare_memory_append(SequenceState& sequence, std::uint32_t begin,
 +                                       std::uint32_t end, bool allow_pending) {
 +    if (!memory_io || begin == end) return true;
++    // A legal short/non-reusable request may have no Host payload reservation.
++    if (!kvmem_options.disk_bytes && !requests.at(sequence.lane).memory_payload_reservation) return true;
 +    auto& window = sequence.window;
 +    if (window.pending_append) {
 +        auto& preparation = *window.pending_append;
@@ -7524,6 +7550,8 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +    std::shared_ptr<KvmemAppendPreparation::Work> work;
 +    for (auto id = begin / page_tokens; id < count; ++id) {
 +        const auto& record = window.archive[id];
++        // Preserve the existing RAM owner-borrow/write path, without speculative COW.
++        if (!kvmem_options.disk_bytes && record) continue;
 +        if (record.mutable_resident()) continue;
 +        if (!work) work = std::make_shared<KvmemAppendPreparation::Work>();
 +        work->ids.push_back(id);
@@ -7638,7 +7666,7 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +        }
 +        const kvmem::MemoryBudget budget{kvmem_options.selected_tokens, kvmem_options.reserve_tokens,
 +            kvmem_window_tokens, memory_retained_budget};
-+        if (memory_io) {
++        if (memory_io && kvmem_options.disk_bytes) {
 +            auto session = std::make_unique<kvmem::MemorySession>(backend);
 +            session->prepare(backend->stamp(), selected, mandatory, budget);
 +            sequence.window.pending_window_begin = begin;
@@ -7675,7 +7703,7 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +}
 +
 +bool ProgramImpl::prepare_decode_memory(SequenceHandle handle) {
-+    if (!memory_io) return true;
++    if (!memory_io || !kvmem_options.disk_bytes) return true;
 +    if (!valid_sequence(handle)) throw std::logic_error("KVMem decode preparation has a stale sequence");
 +    if (memory_pending(handle)) return false;
 +    auto& sequence = active_sequence(ContractAccess::lane(handle).value);
@@ -7684,10 +7712,11 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +        std::min(capacity, sequence.execution_frontier + append), false, true);
 +}
 +std::uint32_t ProgramImpl::memory_control_chunk() const noexcept {
-+    return memory_io ? std::min(prefill_chunk, kvmem_options.reserve_tokens) : UINT32_MAX;
++    return memory_io && kvmem_options.disk_bytes
++        ? std::min(prefill_chunk, kvmem_options.reserve_tokens) : UINT32_MAX;
 +}
 +bool ProgramImpl::prepare_control_memory(SequenceHandle handle, std::uint32_t tokens) {
-+    if (!memory_io) return true;
++    if (!memory_io || !kvmem_options.disk_bytes) return true;
 +    if (!valid_sequence(handle)) throw std::logic_error("KVMem control preparation has a stale sequence");
 +    if (memory_pending(handle)) return false;
 +    auto& sequence = active_sequence(ContractAccess::lane(handle).value);
@@ -8018,7 +8047,7 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +        for (;;) {
 +            const auto epoch = memory_io ? memory_io->completion_epoch() : 0;
 +            if (session.advance() == kvmem::MemoryPhase::Ready) break;
-+            if (memory_io && session.phase() == kvmem::MemoryPhase::Spilling)
++            if (memory_io && kvmem_options.disk_bytes && session.phase() == kvmem::MemoryPhase::Spilling)
 +                memory_io->wait_for_completion(epoch, std::chrono::milliseconds(1));
 +        }
 +        session.publish();
@@ -8090,7 +8119,7 @@ index 0000000000000000000000000000000000000000..f5a09be8344dd12d450a3b5124b6aa2e
 +}
 +
 +bool ProgramImpl::prepare_memory_materialization(MaterializationTransaction& transaction) {
-+    if (!memory_io) return true;
++    if (!memory_io || !kvmem_options.disk_bytes) return true;
 +    auto& staged = *requests[transaction.destination.value].prefill;
 +    if (!staged.memory_restore_frontier || !staged.memory_restore_generation) return true;
 +    if (transaction.memory_history && !transaction.memory_history->ticket.ready()) return false;
@@ -14251,10 +14280,10 @@ index 0000000000000000000000000000000000000000..dbbb34d9944497dde168c88345e275a7
 +}
 diff --git a/tests/experimental/memory_sessions.cpp b/tests/experimental/memory_sessions.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..fc8af13033606cb373ec4f2cb54b24106b6de7fd
+index 0000000000000000000000000000000000000000..a04109bdda08cfb9f1f52ffdf11601bf604924ae
 --- /dev/null
 +++ b/tests/experimental/memory_sessions.cpp
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,175 @@
 +#include "ninfer/engine.h"
 +#include "kvmem_test_options.h"
 +#include <atomic>
@@ -14289,11 +14318,27 @@ index 0000000000000000000000000000000000000000..fc8af13033606cb373ec4f2cb54b2410
 +}
 +struct Sink final : ninfer::OutputSink {
 +    bool cancel_enabled = false;
++    ninfer::Engine* memory_probe = nullptr;
++    bool observed_active_memory = false;
++    void observe_memory() {
++        if (!memory_probe) return;
++        // Read the gauges from the same published execution boundary. The full
++        // memory_summary() takes the execution lock and can wait for completion.
++        const auto snapshot = memory_probe->runtime_stats();
++        if (snapshot.running_requests != 1) return;
++        const auto& memory = snapshot.kvmem;
++        require(memory.active_payload_reservation_bytes == 0,
++                "short request unexpectedly obtained a Host reservation");
++        require(memory.host_payload_bytes == 0,
++                "active short unretained request allocated Host archive pages");
++        observed_active_memory = true;
++    }
 +    std::atomic<bool> cancelled{false};
 +    void start(ninfer::GenerationStart) override {}
 +    void progress(ninfer::PromptProgress) override {}
-+    void publish(ninfer::OutputDelta) override {}
++    void publish(ninfer::OutputDelta) override { observe_memory(); }
 +    void timing(ninfer::GenerationTimingObservation value) override {
++        if (value.generated_tokens) observe_memory();
 +        if (cancel_enabled && value.generated_tokens >= 8) cancelled.store(true);
 +    }
 +};
@@ -14347,6 +14392,41 @@ index 0000000000000000000000000000000000000000..fc8af13033606cb373ec4f2cb54b2410
 +                      << " evictions=" << memory.history_evictions << std::endl;
 +            return result;
 +        };
++        // Cross a Prefill chunk without crossing the physical window. With reuse
++        // disabled this request needs no Host reservation, even though RAM lookahead
++        // is enabled globally. Observe before terminal cleanup can hide an allocation.
++        ninfer::PromptInput short_unretained;
++        short_unretained.options.enable_thinking = false;
++        ninfer::ChatMessage short_message;
++        short_message.role = ninfer::ChatRole::User;
++        std::string short_text;
++        for (int repeat = 0; repeat < 24; ++repeat)
++            short_text += "The notebook contains ordinary observation notes. ";
++        short_text += "Continue with a detailed explanation.";
++        short_message.parts.push_back({.kind = ninfer::MessagePartKind::Text, .text = std::move(short_text)});
++        short_unretained.messages.push_back(std::move(short_message));
++        auto short_prepared = engine.prepare(std::move(short_unretained));
++        constexpr std::uint32_t short_output = 128;
++        require(short_prepared.summary().prompt_tokens > options.prefill_chunk,
++                "short-request fixture did not exercise next-chunk preparation");
++        require(short_prepared.summary().prompt_tokens + short_output <= options.kvmem.device_tokens(),
++                "short-request fixture unexpectedly requires Host archive capacity");
++        std::cout << "MEMORY_SHORT_UNRETAINED tokens=" << short_prepared.summary().prompt_tokens << std::endl;
++        ninfer::RequestOptions short_options;
++        short_options.execution.allow_prefix_reuse = false;
++        short_options.execution.requested_output_tokens = short_output;
++        short_options.execution.sampling.temperature = 0;
++        short_options.stop.include_model_defaults = false;
++        Sink short_sink;
++        short_sink.memory_probe = &engine;
++        const auto short_result = engine.submit(std::move(short_prepared), short_options,
++            ninfer::OutputConsumerMode::Streaming, {.live_timings = true})
++            .wait(&short_sink, ninfer::CancellationView([] { return false; }));
++        require(short_result.generated_token_ids.size() == short_output, "short request did not complete");
++        require(short_sink.observed_active_memory, "short request had no active memory observation");
++        require(engine.memory_summary().kvmem.host_payload_bytes == 0,
++                "short unretained request leaked Host archive pages");
++        std::cout << "MEMORY_SHORT_UNRETAINED PASS active_reservation=0 active_payload=0" << std::endl;
 +        auto a = history("A"), b = history("B"), c = history("C"), d = history("D");
 +        const auto first = run("A-cold", a, false);
 +        run("B-cold", b, false);
