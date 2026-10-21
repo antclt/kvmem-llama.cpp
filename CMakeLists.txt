@@ -323,6 +323,14 @@ if (KVMEM_BUILD_LLAMA)
         target_include_directories(llama-kvmem-server PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
     endif()
     target_compile_features(llama-kvmem-server PRIVATE cxx_std_17)
+    add_executable(kvmem-lane-conversations-test tests/lane-conversations-test.cpp
+        tools/llama-kvmem-driver.cpp tools/kvmem-spec.cpp tools/kvmem-vision.cpp
+        backends/llamacpp/tools/server/server-common.cpp
+        backends/llamacpp/tools/server/server-chat.cpp)
+    target_include_directories(kvmem-lane-conversations-test PRIVATE tools src/adapter
+        backends/llamacpp/src backends/llamacpp/vendor backends/llamacpp/tools/server)
+    target_link_libraries(kvmem-lane-conversations-test PRIVATE llama llama-common mtmd kvmem cpp-httplib)
+    add_test(NAME kvmem-lane-conversations-test COMMAND kvmem-lane-conversations-test)
     # std::getenv is standard C++ and portable; MSVC marks it deprecated in
     # favour of the Windows-only _dupenv_s, and warns on the POSIX-ish helpers
     # the server uses for the diagnostics toggle (_putenv_s). Make the same
