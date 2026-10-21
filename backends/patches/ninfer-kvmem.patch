@@ -592,10 +592,10 @@ index 0b8433ae2a50fbc679ebcff2b0d1b9a3db216705..55f8131923dd8a8bc299dafb2ba727ba
  Draft frames are compact at each round's actual proposal width, which may be narrower than the
  maximum ngram/copy window. D2H staging must preserve the fixed host-row pitch used by the grammar
 diff --git a/docs/maintainer/paged-kv-cache.md b/docs/maintainer/paged-kv-cache.md
-index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..7d363dec785fc94748d37314b19ad4338bb0c9c4 100644
+index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..3f1f6a5ddf0e8d4e19c53c023e08a842879396a5 100644
 --- a/docs/maintainer/paged-kv-cache.md
 +++ b/docs/maintainer/paged-kv-cache.md
-@@ -781,3 +781,217 @@ Exact model state 和 backend mathematics 见
+@@ -781,3 +781,223 @@ Exact model state 和 backend mathematics 见
  [Qwen3.5 model](qwen3_5-model.md)与 [DFlash](dflash.md)；persistent KV codec 和 causal consumer
  numerical contract 由上表中的 growing-cache Ops 定义。路径用于定位当前实现，不把文件或类名本身提升为
  外部接口。
@@ -639,6 +639,12 @@ index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..7d363dec785fc94748d37314b19ad433
 +RAM record preparation is capped at the request's admitted history pages. A speculative
 +device mapping can extend beyond the output limit; those extra positions do not consume
 +Host history capacity, including when active requests exactly fill H.
++
++Admission's service projection counts worker-visible prefill steps on KVMem's
++canonical chunk grid, including resumed suffixes and query replay. The final
++prompt chunk leaves room in R for the initial MTP proposal and may require an
++extra step. Reserve that allowance across the whole suffix, including captures
++inside its final chunk; storage waits consume no compute service units.
 +
 +Durable KVMem records use ordinary pageable RAM. Program owns one reusable pinned transfer
 +buffer, bounded by B+R native page payload bytes, rather than registering every history page
@@ -5046,6 +5052,44 @@ index c2ded94a0a0a1c31a2feec81f1e38a1b637eae06..117e4af7e4a6b24c263c9dd0173394b4
      }
      if (host_kv_extents) { (void)host_kv_extents->release_unreferenced(); }
      refresh_state_views(sequence);
+diff --git a/src/models/qwen3_5/program/planning/prefill_service_work.h b/src/models/qwen3_5/program/planning/prefill_service_work.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca6192ff6f69e6040e3cc0d537b11ccd1cdf5fa0
+--- /dev/null
++++ b/src/models/qwen3_5/program/planning/prefill_service_work.h
+@@ -0,0 +1,32 @@
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++
++namespace ninfer::models::qwen3_5::detail {
++
++// The initial proposal must leave room for the sampled Begin token and correction.
++[[nodiscard]] inline std::uint32_t initial_mtp_prefill_extent(
++    std::uint32_t draft_window, std::uint32_t output_tokens,
++    std::uint32_t capacity, std::uint32_t prompt_tokens) noexcept {
++    return std::min({draft_window, output_tokens > 1 ? output_tokens - 2 : 0U,
++                     capacity > prompt_tokens ? capacity - prompt_tokens - 1 : 0U});
++}
++
++// Count worker-visible prefill steps, not internal forward calls. KVMem resumes on
++// the canonical chunk grid; its last step also leaves room in R for the MTP lead.
++// Capture-separated intervals use the same grid. An empty suffix is accounted for
++// by the caller's single Begin step.
++[[nodiscard]] inline std::uint64_t prefill_service_units(
++    std::uint32_t begin, std::uint32_t end, std::uint32_t chunk,
++    std::uint32_t window_reserve = 0, std::uint32_t mtp_extent = 0) noexcept {
++    if (begin >= end) return 0;
++    if (window_reserve == 0) return 1ULL + (end - begin - 1ULL) / chunk;
++    const std::uint32_t last_begin = std::max(begin, ((end - 1U) / chunk) * chunk);
++    const std::uint32_t lead = mtp_extent == 0 ? 0U : mtp_extent - 1U;
++    const std::uint32_t final_limit = window_reserve - lead;
++    return 1ULL + (end - 1U) / chunk - begin / chunk +
++           (end - last_begin - 1ULL) / final_limit;
++}
++
++} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/planning/pressure.cpp b/src/models/qwen3_5/program/planning/pressure.cpp
 index 328a7bc0f7fb18a2a0633a9f6d1c41aa0eceffe8..99b8a32f261e5c2b9bcc7d54357f15fa7a36d069 100644
 --- a/src/models/qwen3_5/program/planning/pressure.cpp
@@ -5073,10 +5117,18 @@ index 328a7bc0f7fb18a2a0633a9f6d1c41aa0eceffe8..99b8a32f261e5c2b9bcc7d54357f15fa
  bool ProgramImpl::persistent_backfill_safe(
      const RequestBasePlan& blocked_head, const AdmissionCandidate& candidate,
 diff --git a/src/models/qwen3_5/program/planning/request_plan.cpp b/src/models/qwen3_5/program/planning/request_plan.cpp
-index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1734a7314 100644
+index 9811b10e74fcf5099736f13f261a3bd94ec989e7..5e09429dc5ac8365a0da4fda9ee9122b95bc10b0 100644
 --- a/src/models/qwen3_5/program/planning/request_plan.cpp
 +++ b/src/models/qwen3_5/program/planning/request_plan.cpp
-@@ -84,7 +84,7 @@ runtime::PrefillWork scheduled_prefill_work(std::uint32_t begin, std::uint32_t e
+@@ -1,6 +1,7 @@
+ #include "models/qwen3_5/program/internal.h"
+ #include "models/qwen3_5/program/program_impl.h"
+ #include "models/qwen3_5/program/planning/rebuild_work.h"
++#include "models/qwen3_5/program/planning/prefill_service_work.h"
+ #include "models/qwen3_5/program/context.h"
+ #include "models/qwen3_5/program/context_work.h"
+ #include <algorithm>
+@@ -84,14 +85,16 @@ runtime::PrefillWork scheduled_prefill_work(std::uint32_t begin, std::uint32_t e
  // A root admitted on a disk-restorable prefix recomputes that prefix if the restore fails, so its
  // service budget covers the prompt from the start.
  std::uint32_t service_work_base(const AdmissionCandidateImpl& plan) noexcept {
@@ -5085,28 +5137,70 @@ index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1
  }
  
  std::uint64_t projected_service_work(const runtime::RequestPlanSummary& summary,
-@@ -126,6 +126,20 @@ std::uint64_t projected_service_work(const runtime::RequestPlanSummary& summary,
+                                      std::uint32_t reuse_base, std::uint32_t prefill_chunk,
+                                      std::size_t prefill_splits,
+                                      std::span<const CaptureGroup> captures,
+-                                     std::span<const std::uint32_t> rewrite_frontiers) noexcept {
++                                     std::span<const std::uint32_t> rewrite_frontiers,
++                                     std::uint32_t window_reserve,
++                                     std::uint32_t mtp_extent) noexcept {
+     std::uint64_t prefill_units = 0;
+     std::uint32_t segment_begin = reuse_base;
+     std::size_t capture_index   = 0;
+@@ -107,12 +110,14 @@ std::uint64_t projected_service_work(const runtime::RequestPlanSummary& summary,
+         if (capture_frontier == frontier) { ++capture_index; }
+         if (rewrite_frontier == frontier) { ++rewrite_index; }
+         if (frontier <= segment_begin || frontier >= summary.prompt_tokens) { continue; }
+-        const std::uint64_t segment = frontier - segment_begin;
+-        prefill_units += 1ULL + (segment - 1ULL) / prefill_chunk;
++        prefill_units += prefill_service_units(segment_begin, frontier, prefill_chunk,
++                                               window_reserve);
+         segment_begin = frontier;
+     }
+     const std::uint64_t suffix = summary.prompt_tokens - segment_begin;
+-    prefill_units += suffix == 0 ? 1ULL : 1ULL + (suffix - 1ULL) / prefill_chunk;
++    prefill_units += suffix == 0 ? 1ULL :
++        prefill_service_units(segment_begin, summary.prompt_tokens, prefill_chunk,
++                              window_reserve);
+     // A capture at the selected reuse base (a shared promotion, an endpoint anchor) is offered
+     // before the ordinary zero/suffix prefill step. It executes no model work, but it is still one
+     // scheduler service unit.
+@@ -121,11 +126,34 @@ std::uint64_t projected_service_work(const runtime::RequestPlanSummary& summary,
+             return capture.frontier == reuse_base;
+         }));
+     prefill_units += prefill_splits;
++    // Reserve the MTP tail split for the whole suffix. A capture inside that
++    // final chunk can occur after the shortened step, so charging only the last
++    // capture-separated interval would still undercount. Earlier captures may
++    // make this allowance unnecessary, but cannot increase it.
++    prefill_units +=
++        prefill_service_units(reuse_base, summary.prompt_tokens, prefill_chunk,
++                              window_reserve, mtp_extent) -
++        prefill_service_units(reuse_base, summary.prompt_tokens, prefill_chunk,
++                              window_reserve);
+     const std::uint64_t decode_units =
+         summary.effective_output_tokens == 0 ? 0ULL : summary.effective_output_tokens - 1ULL;
      return prefill_units + decode_units;
  }
  
 +std::uint64_t memory_replay_service_work(const runtime::RequestPlanSummary& summary,
 +                                         const PreparedPromptData& prompt,
 +                                         std::uint32_t window_tokens,
-+                                         std::uint32_t chunk) noexcept {
++                                         std::uint32_t chunk, std::uint32_t window_reserve,
++                                         std::uint32_t mtp_extent) noexcept {
 +    if (!window_tokens || summary.prompt_tokens <= window_tokens || !prompt.memory_query ||
 +        prompt.memory_query->begin == 0 || prompt.memory_query->count == 0) return 0;
 +    auto replay = summary;
 +    replay.effective_output_tokens = 0;
 +    const auto begin = static_cast<std::uint32_t>(prompt.memory_query->begin);
-+    const auto canonical_chunks = 1ULL + (summary.prompt_tokens - 1ULL) / chunk - begin / chunk;
-+    return std::max<std::uint64_t>(canonical_chunks, projected_service_work(replay, begin,
-+        chunk, 0, {}, prompt.identity.rewrite_execution_frontiers));
++    return projected_service_work(replay, begin, chunk, 0, {},
++        prompt.identity.rewrite_execution_frontiers, window_reserve, mtp_extent);
 +}
 +
  } // namespace
  
  runtime::PrefillWork rebuild_work_at_frontier(const PreparedPromptData& prompt,
-@@ -306,6 +320,7 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
+@@ -306,6 +334,7 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
  
      auto base                             = std::make_unique<RequestBasePlanImpl>();
      base->context_cache                   = prompt.context_cache;
@@ -5114,7 +5208,7 @@ index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1
      base->summary.prompt_tokens           = static_cast<std::uint32_t>(prompt.token_ids.size());
      base->summary.requested_output_tokens = options.requested_output_tokens;
      const std::uint32_t capacity_output =
-@@ -317,6 +332,7 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
+@@ -317,6 +346,7 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
                                                 : FinishReason::ContextCapacity;
      base->sampling                       = translate_sampling(options.sampling);
      base->grammar                        = options.grammar;
@@ -5122,7 +5216,7 @@ index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1
      base->logprobs                       = options.logprobs;
      base->allow_prefix_reuse             = options.allow_prefix_reuse;
      base->summary.publish_continuation =
-@@ -351,6 +367,31 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
+@@ -351,6 +381,31 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
                  std::min(capacity, base->summary.prompt_tokens + backend_window_tokens - 1U));
          }
      }
@@ -5154,7 +5248,23 @@ index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1
      detail::PhysicalDeviceResources root_active{
          .active_lanes     = 1,
          .state_slots      = 1U,
-@@ -547,11 +588,15 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
+@@ -513,9 +568,14 @@ RequestBasePlan ProgramImpl::plan_request(const PreparedPromptData& prompt,
+     };
+     const std::size_t cold_prefill_splits =
+         base->vision_control_plan ? base->vision_control_plan->items.size() : 0ULL;
++    const auto service_mtp_extent = initial_mtp_prefill_extent(
++        speculative_backend == SpeculativeBackend::Mtp ? draft_window : 0U,
++        base->summary.effective_output_tokens, capacity, base->summary.prompt_tokens);
+     base->summary.service_work_quanta =
+         projected_service_work(base->summary, 0, prefill_chunk, cold_prefill_splits,
+-                               base->capture_groups, prompt.identity.rewrite_execution_frontiers);
++                               base->capture_groups, prompt.identity.rewrite_execution_frontiers,
++                               kvmem_window_tokens ? kvmem_options.reserve_tokens : 0U,
++                               service_mtp_extent);
+     base->root_rebuild_work =
+         rebuild_work_at_frontier(prompt, base->summary.prompt_tokens, prefill_chunk,
+                                  base->capture_groups, prompt.identity.rewrite_execution_frontiers);
+@@ -547,11 +607,15 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
      plan->summary                     = base.summary;
      plan->sampling                    = base.sampling;
      plan->grammar                     = base.grammar;
@@ -5170,7 +5280,7 @@ index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1
  
      if ((source != nullptr && shared_source != nullptr) ||
          ((source == nullptr && shared_source == nullptr) != !checkpoint.has_value())) {
-@@ -687,6 +732,15 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
+@@ -687,6 +751,15 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
          }
      }
  
@@ -5186,7 +5296,7 @@ index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1
      const std::optional<RewriteCheckpointSpec>& desired = base.rewrite_checkpoint;
      const bool can_retain_rewrite =
          desired && source != nullptr &&
-@@ -821,6 +875,14 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
+@@ -821,6 +894,14 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
      }
      plan->summary.reusable_prompt_tokens = plan->reuse_base;
      plan->summary.prefix_reuse_path      = plan->reuse;
@@ -5201,21 +5311,43 @@ index 9811b10e74fcf5099736f13f261a3bd94ec989e7..bdbd81f50565ccbcf1c3d44c85f86bd1
      if (speculative_backend == SpeculativeBackend::Mtp) {
          if (plan->reuse == ReusePath::Root) {
              plan->prepare_mtp = true;
-@@ -868,6 +930,8 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
+@@ -864,10 +945,18 @@ std::optional<AdmissionCandidate> ProgramImpl::inspect_lane(
+     }
+ 
+     const std::size_t prefill_splits = plan->vision ? plan->vision->uses.size() : 0ULL;
++    const auto service_mtp_extent = initial_mtp_prefill_extent(
++        speculative_backend == SpeculativeBackend::Mtp ? draft_window : 0U,
++        plan->summary.effective_output_tokens, capacity, plan->summary.prompt_tokens);
+     plan->summary.service_work_quanta =
          projected_service_work(plan->summary, service_work_base(*plan), prefill_chunk,
                                 prefill_splits, plan->capture_groups,
-                                prompt.identity.rewrite_execution_frontiers);
+-                               prompt.identity.rewrite_execution_frontiers);
++                               prompt.identity.rewrite_execution_frontiers,
++                               kvmem_window_tokens ? kvmem_options.reserve_tokens : 0U,
++                               service_mtp_extent);
 +    plan->summary.service_work_quanta +=
-+        memory_replay_service_work(plan->summary, prompt, kvmem_window_tokens, prefill_chunk);
++        memory_replay_service_work(plan->summary, prompt, kvmem_window_tokens, prefill_chunk,
++                                   kvmem_options.reserve_tokens, service_mtp_extent);
      std::uint64_t remaining_vision_items   = 0;
      std::uint64_t remaining_vision_patches = 0;
      if (plan->vision) {
-@@ -1423,6 +1487,8 @@ void ProgramImpl::select_shared_captures(AdmissionCandidate& candidate,
+@@ -1419,10 +1508,18 @@ void ProgramImpl::select_shared_captures(AdmissionCandidate& candidate,
+               });
+ 
+     const std::size_t prefill_splits = plan.vision ? plan.vision->uses.size() : 0ULL;
++    const auto service_mtp_extent = initial_mtp_prefill_extent(
++        speculative_backend == SpeculativeBackend::Mtp ? draft_window : 0U,
++        plan.summary.effective_output_tokens, capacity, plan.summary.prompt_tokens);
+     plan.summary.service_work_quanta =
          projected_service_work(plan.summary, service_work_base(plan), prefill_chunk,
                                 prefill_splits, plan.capture_groups,
-                                prompt.identity.rewrite_execution_frontiers);
+-                               prompt.identity.rewrite_execution_frontiers);
++                               prompt.identity.rewrite_execution_frontiers,
++                               kvmem_window_tokens ? kvmem_options.reserve_tokens : 0U,
++                               service_mtp_extent);
 +    plan.summary.service_work_quanta +=
-+        memory_replay_service_work(plan.summary, prompt, kvmem_window_tokens, prefill_chunk);
++        memory_replay_service_work(plan.summary, prompt, kvmem_window_tokens, prefill_chunk,
++                                   kvmem_options.reserve_tokens, service_mtp_extent);
      std::uint64_t vision_items   = 0;
      std::uint64_t vision_patches = 0;
      if (plan.vision) {
@@ -5831,10 +5963,18 @@ index 87862274889d8e6679ee2041dd56e8f54d7418ea..3563ee8c02c5f411784a506809031afc
          timing.begin_wait();
          try {
 diff --git a/src/models/qwen3_5/program/prefix/hybrid_program.cpp b/src/models/qwen3_5/program/prefix/hybrid_program.cpp
-index fc1ffbcfea4f0f7528d0d5915e5f5c31db0fc4c1..24a62dfc5ec5fc5b99f07c66762685d3962b5773 100644
+index fc1ffbcfea4f0f7528d0d5915e5f5c31db0fc4c1..f88160cdcbb9f9e69f04f43ab570fdb17e0d1b5e 100644
 --- a/src/models/qwen3_5/program/prefix/hybrid_program.cpp
 +++ b/src/models/qwen3_5/program/prefix/hybrid_program.cpp
-@@ -222,6 +222,7 @@ HybridAdmissionQuote ProgramImpl::hybrid_quote(const PreparedPromptData& prompt,
+@@ -4,6 +4,7 @@
+ // hybrid_cache.{h,cpp}.
+ 
+ #include "models/qwen3_5/program/program_impl.h"
++#include "models/qwen3_5/program/planning/prefill_service_work.h"
+ #include "models/qwen3_5/program/context.h"
+ #include "models/qwen3_5/program/context_work.h"
+ #include "models/qwen3_5/program/internal.h"
+@@ -222,6 +223,7 @@ HybridAdmissionQuote ProgramImpl::hybrid_quote(const PreparedPromptData& prompt,
      quote->summary                     = plan.summary;
      quote->sampling                    = plan.sampling;
      quote->grammar                     = plan.grammar;
@@ -5842,7 +5982,22 @@ index fc1ffbcfea4f0f7528d0d5915e5f5c31db0fc4c1..24a62dfc5ec5fc5b99f07c66762685d3
      quote->logprobs                    = plan.logprobs;
      quote->text_kv_page_entitlement    = plan.text_kv_page_entitlement;
      quote->backend_kv_page_entitlement = plan.backend_kv_page_entitlement;
-@@ -916,7 +917,8 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
+@@ -903,20 +905,16 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
+         sequence.rebuild_tail_begin = quote.root_rebuild_tail_begin;
+         bind_sequence_kv(sequence);
+ 
+-        const std::uint32_t initial_mtp_extent =
+-            prepare_mtp ? std::min({draft_window,
+-                                    quote.summary.effective_output_tokens > 1
+-                                        ? quote.summary.effective_output_tokens - 2
+-                                        : 0U,
+-                                    capacity - n > 0 ? capacity - n - 1 : 0U})
+-                        : 0U;
++        const auto initial_mtp_extent = initial_mtp_prefill_extent(
++            prepare_mtp ? draft_window : 0U, quote.summary.effective_output_tokens, capacity, n);
+         const std::uint32_t backend_materialized =
+             speculative_backend == SpeculativeBackend::Mtp
+                 ? std::min(capacity, n + (initial_mtp_extent == 0 ? 0U : initial_mtp_extent - 1U))
              : speculative_backend == SpeculativeBackend::DFlash ? n
                                                                  : 0U;
          ensure_sequence_kv_mapped(sequence, n, backend_materialized);
@@ -8895,10 +9050,35 @@ index 9a1a1b398f7e05a3fd002c282d7aad89989f0974..3b7e895ba40af86c676fb70ea6ce69be
      out.timings     = request.timings;
      out.speculative = std::move(request.speculative_stats);
 diff --git a/src/models/qwen3_5/program/transactions/materialization.cpp b/src/models/qwen3_5/program/transactions/materialization.cpp
-index 22b200945fea940d985630bda0daba7de9e514b7..fd4c3af3f24fd128218bdba63b1d0aa3b276e05b 100644
+index 22b200945fea940d985630bda0daba7de9e514b7..9fea8f1ab74d4ffbaceaac69d7b2ed7ac7d46283 100644
 --- a/src/models/qwen3_5/program/transactions/materialization.cpp
 +++ b/src/models/qwen3_5/program/transactions/materialization.cpp
-@@ -341,11 +341,14 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
+@@ -1,5 +1,6 @@
+ #include "models/qwen3_5/program/program_impl.h"
+ #include "models/qwen3_5/program/context_work.h"
++#include "models/qwen3_5/program/planning/prefill_service_work.h"
+ #include "models/qwen3_5/program/context.h"
+ 
+ #include <algorithm>
+@@ -324,14 +325,9 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
+         materialization_identity_.assign(prompt);
+         materialization_prefix_digests_.assign(prompt);
+ 
+-        const std::uint32_t initial_mtp_extent =
+-            speculative_backend == SpeculativeBackend::Mtp
+-                ? std::min({draft_window,
+-                            request_plan.summary.effective_output_tokens > 1
+-                                ? request_plan.summary.effective_output_tokens - 2
+-                                : 0U,
+-                            capacity - prompt_tokens > 0 ? capacity - prompt_tokens - 1 : 0U})
+-                : 0U;
++        const auto initial_mtp_extent = initial_mtp_prefill_extent(
++            speculative_backend == SpeculativeBackend::Mtp ? draft_window : 0U,
++            request_plan.summary.effective_output_tokens, capacity, prompt_tokens);
+         RequestControl::Prefill prefill{
+             .prompt             = std::move(prompt),
+             .vision_plan        = std::move(request_plan.vision),
+@@ -341,11 +337,14 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
              .base                  = request_plan.reuse == ReusePath::Root ? 0U : request_plan.reuse_base,
              .cursor                = request_plan.reuse == ReusePath::Root ? 0U : request_plan.reuse_base,
              .disk_restore_frontier = request_plan.disk_restore_frontier,
@@ -8913,7 +9093,7 @@ index 22b200945fea940d985630bda0daba7de9e514b7..fd4c3af3f24fd128218bdba63b1d0aa3
              .mtp_bridge         = request_plan.mtp_bridge,
          };
          request.prefill.emplace(std::move(prefill));
-@@ -2271,6 +2274,10 @@ ProgramImpl::progress_materialization_transaction(runtime::CancellationFlagView
+@@ -2271,6 +2270,10 @@ ProgramImpl::progress_materialization_transaction(runtime::CancellationFlagView
  
      // This is the unique physical publication point. ResourceManager still owns the logical
      // catalog capabilities and adopts them only after validating this terminal result.
@@ -8924,7 +9104,7 @@ index 22b200945fea940d985630bda0daba7de9e514b7..fd4c3af3f24fd128218bdba63b1d0aa3
      try {
          out.published.emplace(start_request(transaction));
          materialization_ledger_.clear();
-@@ -2376,6 +2383,11 @@ bool ProgramImpl::vision_pending(SequenceHandle sequence) const noexcept {
+@@ -2376,6 +2379,11 @@ bool ProgramImpl::vision_pending(SequenceHandle sequence) const noexcept {
  }
  
  bool ProgramImpl::wait_context_transfer() noexcept {
@@ -12523,7 +12703,7 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..30f080226ef29114c91db90e7ba81bac
 +ninfer_finalize_bundle(ninfer_kvmem_nvfp4_tests)
 +ninfer_stage_runtime_dlls(ninfer_kvmem_nvfp4_tests)
 diff --git a/tests/README.md b/tests/README.md
-index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..a909918d8bb25cba720e8276a79009c6223dfffb 100644
+index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..7d010d046055e9427595db94b5ab48055ba0ced4 100644
 --- a/tests/README.md
 +++ b/tests/README.md
 @@ -22,6 +22,12 @@ benchmark-report, and external protocol behavior. Repository verification princi
@@ -12539,7 +12719,7 @@ index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..a909918d8bb25cba720e8276a79009c6
  `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
  and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
  executables and CTest working directories under `build/tests/`.
-@@ -409,6 +415,142 @@ boundary preservation. `--concurrency 8 --draft-tokens 15 --modes dflash2` exerc
+@@ -409,6 +415,146 @@ boundary preservation. `--concurrency 8 --draft-tokens 15 --modes dflash2` exerc
  the largest draft and batch dimensions. A separate DFlash-capable artifact can use `--modes dflash`.
  The server is terminated on success or failure. An occupied test port causes the test to stop.
  
@@ -12671,6 +12851,10 @@ index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..a909918d8bb25cba720e8276a79009c6
 +the same execution under a roomy budget, verifies native transfers, and reuses the
 +Engine after each batch to detect failures or leaked reservations. In particular,
 +MTP must not allocate Host pages for speculative positions beyond the output limit.
++The same regression includes 129/257-token concurrent outputs and MTP prefill tails
++that require an extra worker step. Both must finish within the admitted service
++projection. `ninfer_prefill_service_work_test` independently enumerates prefill
++steps across chunk, reuse, capture, reserve and initial-proposal boundaries.
 +The historical cold-snapshot qualification included
 +cancellation, explicit clear, corruption/truncation and format-mismatch restart.
 +Those persistence checks are superseded by the process-local SSD lifecycle above;
@@ -12682,7 +12866,7 @@ index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..a909918d8bb25cba720e8276a79009c6
  ## Container build cache
  
  Check the Dockerfile's incremental-build and configuration-invalidation behavior without compiling
-@@ -525,3 +667,147 @@ The physical selection disables device-profile calibration (`device_profile=off`
+@@ -525,3 +671,147 @@ The physical selection disables device-profile calibration (`device_profile=off`
  correctness gate. It does not qualify device-profile performance. The runner must record distinct
  GPU UUIDs for CUDA devices 0 and 1. A `0,0` result does not qualify two physical GPUs. On `sm_75`,
  use the pinned groupwise Qwen3.6 artifact; NVFP4 expert banks are not supported.
@@ -12994,6 +13178,20 @@ index 02e48ccc8dc2672e5b736342b87d81960b14f3fa..24389c9d21d6f7b5cf9b58a51ededda1
 +  LIBRARIES ninfer_engine ninfer::json kvmem)
  
  target_include_directories(ninfer_bench_support_test PRIVATE ${PROJECT_SOURCE_DIR}/bench/inference)
+ 
+diff --git a/tests/cmake/RuntimeTests.cmake b/tests/cmake/RuntimeTests.cmake
+index d0c447f4dc227e989d530b8c4a499711041107c5..3d1ec5052b89022dd73c774abdbc991d70ad5602 100644
+--- a/tests/cmake/RuntimeTests.cmake
++++ b/tests/cmake/RuntimeTests.cmake
+@@ -1,6 +1,9 @@
+ ninfer_add_test(ninfer_admission_policy_test SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_admission_policy.cpp"
+   LIBRARIES ninfer_runtime_support)
+ 
++ninfer_add_test(ninfer_prefill_service_work_test STANDALONE
++  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../host/test_prefill_service_work.cpp")
++
+ ninfer_add_test(ninfer_host_memory_test SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_host_memory.cpp"
+   LIBRARIES ninfer_runtime_support)
  
 diff --git a/tests/convert/test_dflash2_gguf.py b/tests/convert/test_dflash2_gguf.py
 new file mode 100644
@@ -14338,10 +14536,10 @@ index 0000000000000000000000000000000000000000..dbbb34d9944497dde168c88345e275a7
 +}
 diff --git a/tests/experimental/memory_ram_budget.cpp b/tests/experimental/memory_ram_budget.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..f7e4931168ad4fbd1c7af5fd9d8a14ba92bf095c
+index 0000000000000000000000000000000000000000..8222dc71e6ba4df3691736cf7056bbe2cda8fc21
 --- /dev/null
 +++ b/tests/experimental/memory_ram_budget.cpp
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,156 @@
 +#include "ninfer/engine.h"
 +#include "kvmem_test_options.h"
 +#include <algorithm>
@@ -14446,9 +14644,13 @@ index 0000000000000000000000000000000000000000..f7e4931168ad4fbd1c7af5fd9d8a14ba
 +        struct Case { unsigned frontier, output; };
 +        // A one-token request finishes in prefill before another lane can be
 +        // admitted; the concurrent cases exercise decode across the page boundary.
++        // MTP can split the last prompt chunk to leave proposal space in R.
++        // Long outputs must still finish within the admitted service projection.
 +        const std::vector<Case> cases = options.max_concurrency == 1
-+            ? std::vector<Case>{{2047, 2}, {2048, 1}, {2048, 2}, {2048, 5}, {2049, 2}}
-+            : std::vector<Case>{{2047, 8}, {2048, 8}, {2049, 8}};
++            ? std::vector<Case>{{2047, 2}, {2048, 1}, {2048, 2}, {2048, 5}, {2049, 2},
++                                {2051, 5}, {2052, 5}, {2047, 129}}
++            : std::vector<Case>{{2047, 8}, {2048, 8}, {2049, 8},
++                                {2047, 129}, {2048, 129}, {2048, 257}, {2049, 129}};
 +        std::vector<ninfer::TokenId> corpus;
 +        std::vector<std::vector<Observed>> reference;
 +        std::uint64_t page_bytes = 0;
@@ -14458,7 +14660,7 @@ index 0000000000000000000000000000000000000000..f7e4931168ad4fbd1c7af5fd9d8a14ba
 +            for (unsigned i = 0; i < 1024; ++i)
 +                text += "The observatory archives pulsars, cosmic rays and distant galaxies. ";
 +            corpus = roomy.tokenize_text(text);
-+            require(corpus.size() >= 2049, "prompt corpus is too short");
++            require(corpus.size() >= 2052, "prompt corpus is too short");
 +            // Observe one admitted request to size H for this artifact's native
 +            // main+draft KV representation, independently of the allocation path.
 +            const auto sizing = batch(roomy, corpus, 2048, 1, 1);
@@ -17013,6 +17215,91 @@ index 0000000000000000000000000000000000000000..dd5f61073c604a3a2c0ea2b968be070c
 +        return 0;
 +    } catch (const std::exception& error) {
 +        std::cerr << "TOKEN_SUMS FAIL " << error.what() << '\n';
++        return 1;
++    }
++}
+diff --git a/tests/host/test_prefill_service_work.cpp b/tests/host/test_prefill_service_work.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..9a1eb9dc784330f343c780a33fd5789b7b47ef72
+--- /dev/null
++++ b/tests/host/test_prefill_service_work.cpp
+@@ -0,0 +1,79 @@
++#include "models/qwen3_5/program/planning/prefill_service_work.h"
++
++#include <algorithm>
++#include <cstdint>
++#include <iostream>
++#include <stdexcept>
++
++using ninfer::models::qwen3_5::detail::initial_mtp_prefill_extent;
++using ninfer::models::qwen3_5::detail::prefill_service_units;
++
++namespace {
++void require(bool value, const char* message) {
++    if (!value) throw std::runtime_error(message);
++}
++
++// Independent step-by-step execution model: stop at the next grid boundary,
++// leave proposal space at the prompt end, and yield at an offered capture.
++std::uint64_t executed(std::uint32_t cursor, std::uint32_t end, std::uint32_t chunk,
++                       std::uint32_t reserve, std::uint32_t extent, std::uint32_t capture) {
++    std::uint64_t units = 0;
++    while (cursor < end) {
++        auto count = reserve ? chunk - cursor % chunk : chunk;
++        if (reserve && end - cursor <= count)
++            count = std::min(count, reserve - (extent ? extent - 1U : 0U));
++        count = std::min(count, end - cursor);
++        if (capture > cursor) count = std::min(count, capture - cursor);
++        require(count != 0, "prefill made no progress");
++        cursor += count;
++        ++units;
++    }
++    return units;
++}
++}
++
++int main() {
++    try {
++        require(initial_mtp_prefill_extent(4, 129, 4096, 1919) == 4, "MTP extent");
++        require(initial_mtp_prefill_extent(4, 2, 4096, 1919) == 0, "short output extent");
++        require(initial_mtp_prefill_extent(15, 129, 4096, 4095) == 0, "context edge extent");
++        require(initial_mtp_prefill_extent(15, 129, 4096, 4092) == 3, "context clipping");
++        require(prefill_service_units(0, 1919, 128, 128, 4) == 16,
++                "1919-token prompt needs 16 service units, not 15");
++        require(prefill_service_units(0, 125, 128, 128, 4) == 1 &&
++                prefill_service_units(0, 126, 128, 128, 4) == 2 &&
++                prefill_service_units(0, 128, 128, 128, 4) == 2,
++                "MTP tail split boundary");
++        require(prefill_service_units(0, 1919, 128, 256, 4) == 15,
++                "roomy reserve should not split the tail");
++        require(prefill_service_units(63, 129, 128, 128) == 2,
++                "reused/query suffix must retain canonical boundaries");
++        for (std::uint32_t chunk : {128U, 256U}) {
++            for (std::uint32_t reserve : {0U, chunk, chunk + 64U}) {
++                for (std::uint32_t extent : {0U, 1U, 4U, 15U}) {
++                    for (std::uint32_t end = 1; end <= 3 * chunk; ++end) {
++                        for (std::uint32_t begin : {0U, end / 2, end - 1U}) {
++                            const auto projected = prefill_service_units(begin, end, chunk, reserve, extent);
++                            require(projected == executed(begin, end, chunk, reserve, extent, 0),
++                                    "projection disagrees with worker-visible steps");
++                            for (std::uint32_t capture : {begin + 1U, (begin + end) / 2, end - 1U}) {
++                                if (capture <= begin || capture >= end) continue;
++                                const auto with_capture =
++                                    prefill_service_units(begin, capture, chunk, reserve) +
++                                    prefill_service_units(capture, end, chunk, reserve) + projected -
++                                    prefill_service_units(begin, end, chunk, reserve);
++                                require(with_capture >= executed(begin, end, chunk, reserve, extent, capture),
++                                        "capture before prompt end exhausted the service budget");
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        std::cout << "PREFILL_SERVICE_WORK PASS\n";
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
 +        return 1;
 +    }
 +}
