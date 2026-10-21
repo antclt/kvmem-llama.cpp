@@ -592,10 +592,10 @@ index 0b8433ae2a50fbc679ebcff2b0d1b9a3db216705..55f8131923dd8a8bc299dafb2ba727ba
  Draft frames are compact at each round's actual proposal width, which may be narrower than the
  maximum ngram/copy window. D2H staging must preserve the fixed host-row pitch used by the grammar
 diff --git a/docs/maintainer/paged-kv-cache.md b/docs/maintainer/paged-kv-cache.md
-index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..e5bff13d9c61104bc64b3c9f02c267e2f41e7aca 100644
+index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..7d363dec785fc94748d37314b19ad4338bb0c9c4 100644
 --- a/docs/maintainer/paged-kv-cache.md
 +++ b/docs/maintainer/paged-kv-cache.md
-@@ -781,3 +781,214 @@ Exact model state 和 backend mathematics 见
+@@ -781,3 +781,217 @@ Exact model state 和 backend mathematics 见
  [Qwen3.5 model](qwen3_5-model.md)与 [DFlash](dflash.md)；persistent KV codec 和 causal consumer
  numerical contract 由上表中的 growing-cache Ops 定义。路径用于定位当前实现，不把文件或类名本身提升为
  外部接口。
@@ -636,6 +636,9 @@ index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..e5bff13d9c61104bc64b3c9f02c267e2
 +to drain. Requests with no Host reservation keep their original path. RAM bulk
 +transfers and decode/control scheduling remain synchronous, with the same GPU
 +executor, workspace and Graphs; this worker performs only Host preparation.
++RAM record preparation is capped at the request's admitted history pages. A speculative
++device mapping can extend beyond the output limit; those extra positions do not consume
++Host history capacity, including when active requests exactly fill H.
 +
 +Durable KVMem records use ordinary pageable RAM. Program owns one reusable pinned transfer
 +buffer, bounded by B+R native page payload bytes, rather than registering every history page
@@ -6959,10 +6962,10 @@ index 0000000000000000000000000000000000000000..17052b71a874111621aca5bc6eb1d868
 +} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/storage/kvmem_window.cpp b/src/models/qwen3_5/program/storage/kvmem_window.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..b3b7c60cda67496a3015092b13cc9bbf6b8c09de
+index 0000000000000000000000000000000000000000..d011342a0c8548dd63ad952487f67ec6c409ae27
 --- /dev/null
 +++ b/src/models/qwen3_5/program/storage/kvmem_window.cpp
-@@ -0,0 +1,1575 @@
+@@ -0,0 +1,1578 @@
 +#include "models/qwen3_5/program/program_impl.h"
 +#include "models/qwen3_5/program/context.h"
 +#include "models/qwen3_5/program/context_work.h"
@@ -7547,8 +7550,14 @@ index 0000000000000000000000000000000000000000..b3b7c60cda67496a3015092b13cc9bbf
 +    const auto count = kv_pages_for_tokens(end);
 +    if (window.archive.size() < count) window.archive.resize(count);
 +    if (window.host_versions.size() < count) window.host_versions.resize(count);
++    const auto stride = text_host_kv_page_stride + backend_host_kv_page_stride;
++    // Speculative device mappings can extend beyond the request's output limit.
++    // RAM lookahead may prepare only the history admitted for this request;
++    // those extra device positions never need durable Host records.
++    const auto prepare_count = kvmem_options.disk_bytes ? count :
++        std::min<std::uint64_t>(count, requests.at(sequence.lane).memory_payload_reservation / stride);
 +    std::shared_ptr<KvmemAppendPreparation::Work> work;
-+    for (auto id = begin / page_tokens; id < count; ++id) {
++    for (auto id = begin / page_tokens; id < prepare_count; ++id) {
 +        const auto& record = window.archive[id];
 +        // Preserve the existing RAM owner-borrow/write path, without speculative COW.
 +        if (!kvmem_options.disk_bytes && record) continue;
@@ -7558,9 +7567,6 @@ index 0000000000000000000000000000000000000000..b3b7c60cda67496a3015092b13cc9bbf
 +        work->sources.push_back(record ? record.source() : kvmem::HostKvSource{});
 +    }
 +    if (!work) return true;
-+    const auto layout = plan_host_kv_page_layout(text_kv_pages->physical_pool().geometry());
-+    const auto stride = layout.page_stride + (backend_kv_pages
-+        ? plan_host_kv_page_layout(backend_kv_pages->physical_pool().geometry()).page_stride : 0);
 +    work->records.resize(work->ids.size());
 +    auto preparation = std::make_unique<KvmemAppendPreparation>();
 +    preparation->work = work;
@@ -12370,7 +12376,7 @@ index b8d4e3dabc5fbb82bab450c135816c465c1f4167..8d8e528cf59fbc6416ce8acec4068748
      struct Impl;
      std::unique_ptr<Impl> impl_;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..59e2465771547a421c148960056a475790ba566d 100644
+index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..30f080226ef29114c91db90e7ba81bac2a54fb78 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
 @@ -9,10 +9,27 @@ include(cmake/BenchSupportTests.cmake)
@@ -12401,7 +12407,7 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..59e2465771547a421c148960056a4757
  # Exit code 77 is a skip for every test (tests/cuda_availability.h). Without a usable CUDA device --
  # no GPU, no driver, or only the toolkit's stub driver, as on a CI runner -- a test that has no check
  # of its own fails on its first CUDA call with one of these runtime messages; report that as skipped
-@@ -21,8 +38,111 @@ ninfer_finalize_bundle(ninfer_tests)
+@@ -21,8 +38,114 @@ ninfer_finalize_bundle(ninfer_tests)
  get_property(_ninfer_all_tests DIRECTORY PROPERTY TESTS)
  set_tests_properties(${_ninfer_all_tests} PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION
    "CUDA driver is a stub library;no CUDA-capable device is detected;CUDA driver version is insufficient for CUDA runtime version")
@@ -12454,6 +12460,9 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..59e2465771547a421c148960056a4757
 +ninfer_add_test(ninfer_memory_sessions STANDALONE
 +  SOURCES experimental/memory_sessions.cpp LIBRARIES ninfer::engine)
 +ninfer_stage_runtime_dlls(ninfer_memory_sessions)
++ninfer_add_test(ninfer_memory_ram_budget STANDALONE
++  SOURCES experimental/memory_ram_budget.cpp LIBRARIES ninfer::engine)
++ninfer_stage_runtime_dlls(ninfer_memory_ram_budget)
 +ninfer_add_test(ninfer_active_kv_ssd STANDALONE
 +  SOURCES experimental/active_kv_ssd.cpp LIBRARIES ninfer::engine)
 +ninfer_stage_runtime_dlls(ninfer_active_kv_ssd)
@@ -12514,7 +12523,7 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..59e2465771547a421c148960056a4757
 +ninfer_finalize_bundle(ninfer_kvmem_nvfp4_tests)
 +ninfer_stage_runtime_dlls(ninfer_kvmem_nvfp4_tests)
 diff --git a/tests/README.md b/tests/README.md
-index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..ac9654055f8054e6d1db3fd42b453e4108718223 100644
+index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..a909918d8bb25cba720e8276a79009c6223dfffb 100644
 --- a/tests/README.md
 +++ b/tests/README.md
 @@ -22,6 +22,12 @@ benchmark-report, and external protocol behavior. Repository verification princi
@@ -12530,7 +12539,7 @@ index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..ac9654055f8054e6d1db3fd42b453e41
  `CMakeLists.txt` includes explicit registrations from `cmake/`, `artifact/`, `models/qwen3_5/`
  and `ops/`. Registration helpers live in `cmake/NinferTests.cmake`; included manifests keep
  executables and CTest working directories under `build/tests/`.
-@@ -409,6 +415,134 @@ boundary preservation. `--concurrency 8 --draft-tokens 15 --modes dflash2` exerc
+@@ -409,6 +415,142 @@ boundary preservation. `--concurrency 8 --draft-tokens 15 --modes dflash2` exerc
  the largest draft and batch dimensions. A separate DFlash-capable artifact can use `--modes dflash`.
  The server is terminated on success or failure. An occupied test port causes the test to stop.
  
@@ -12638,6 +12647,8 @@ index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..ac9654055f8054e6d1db3fd42b453e41
 +# Optional final "wddm" uses the existing NINFER_D3D12_RESIDENCY build capability.
 +./build/tests/ninfer_p4_history.exe C:/models/model-mtp.ninfer nvfp4 eager C:/work/history.tokens 1 input-fallback 0 wddm
 +./build/tests/ninfer_memory_sessions.exe C:/models/model-mtp.ninfer 4 nvfp4 eager
++# RAM admission boundary: artifact drafts KV execution concurrency (1 or 2).
++./build/tests/ninfer_memory_ram_budget.exe C:/models/model-mtp.ninfer 4 int8 graph 2
 +./build/tests/ninfer_memory_concurrency.exe C:/models/model-mtp.ninfer 4 4 512 nvfp4 graph
 +./build/tests/ninfer_memory_concurrency.exe C:/models/model-mtp.ninfer 4 2 52 nvfp4 eager
 +# Eight mixed text/image requests: independent archives, colors, cancellation, reuse and image replacement.
@@ -12654,7 +12665,13 @@ index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..ac9654055f8054e6d1db3fd42b453e41
 +the INT8 requests, while NVFP4 needs 52 MiB to keep the same pressure: 96 MiB can
 +admit two NVFP4 requests. Check native Main/MTP payload and GDN
 +state equality with `verify_transfers`, committed mean-K/frontiers, no active page
-+leaks and bounded Host usage. The historical cold-snapshot qualification included
++leaks and bounded Host usage. `ninfer_memory_ram_budget` sizes H from the artifact's
++native page reservation and exactly fills it with one or two active requests. It
++checks output limits around a 64-token page boundary, compares greedy output with
++the same execution under a roomy budget, verifies native transfers, and reuses the
++Engine after each batch to detect failures or leaked reservations. In particular,
++MTP must not allocate Host pages for speculative positions beyond the output limit.
++The historical cold-snapshot qualification included
 +cancellation, explicit clear, corruption/truncation and format-mismatch restart.
 +Those persistence checks are superseded by the process-local SSD lifecycle above;
 +the historical reports remain evidence for their original versions. Capacity was
@@ -12665,7 +12682,7 @@ index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..ac9654055f8054e6d1db3fd42b453e41
  ## Container build cache
  
  Check the Dockerfile's incremental-build and configuration-invalidation behavior without compiling
-@@ -525,3 +659,147 @@ The physical selection disables device-profile calibration (`device_profile=off`
+@@ -525,3 +667,147 @@ The physical selection disables device-profile calibration (`device_profile=off`
  correctness gate. It does not qualify device-profile performance. The runner must record distinct
  GPU UUIDs for CUDA devices 0 and 1. A `0,0` result does not qualify two physical GPUs. On `sm_75`,
  use the pinned groupwise Qwen3.6 artifact; NVFP4 expert banks are not supported.
@@ -14317,6 +14334,164 @@ index 0000000000000000000000000000000000000000..dbbb34d9944497dde168c88345e275a7
 +        std::cout << "MEMORY_NGRAM PASS" << std::endl;
 +    } catch (const std::exception& error) {
 +        std::cerr << error.what() << std::endl; return 1;
++    }
++}
+diff --git a/tests/experimental/memory_ram_budget.cpp b/tests/experimental/memory_ram_budget.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..f7e4931168ad4fbd1c7af5fd9d8a14ba92bf095c
+--- /dev/null
++++ b/tests/experimental/memory_ram_budget.cpp
+@@ -0,0 +1,152 @@
++#include "ninfer/engine.h"
++#include "kvmem_test_options.h"
++#include <algorithm>
++#include <future>
++#include <iostream>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++namespace {
++void require(bool value, const char* message) {
++    if (!value) throw std::runtime_error(message);
++}
++struct Sink final : ninfer::OutputSink {
++    ninfer::Engine& engine;
++    std::uint64_t reservation = 0, payload = 0;
++    std::uint32_t running = 0;
++    explicit Sink(ninfer::Engine& value) : engine(value) {}
++    void observe() {
++        const auto stats = engine.runtime_stats();
++        reservation = std::max(reservation, stats.kvmem.active_payload_reservation_bytes);
++        payload = std::max(payload, stats.kvmem.host_payload_bytes);
++        running = std::max(running, stats.running_requests);
++        require(stats.kvmem.host_payload_bytes <= engine.options().kvmem.host_bytes,
++                "RAM payload exceeded H");
++        require(stats.kvmem.active_payload_reservation_bytes <= engine.options().kvmem.host_bytes,
++                "RAM admission exceeded H");
++    }
++    void start(ninfer::GenerationStart) override { observe(); }
++    void progress(ninfer::PromptProgress) override { observe(); }
++    void timing(ninfer::GenerationTimingObservation) override { observe(); }
++    void publish(ninfer::OutputDelta) override {}
++};
++struct Observed {
++    ninfer::GenerationResult result;
++    std::uint64_t reservation, payload;
++    std::uint32_t running;
++};
++std::vector<Observed> batch(ninfer::Engine& engine, const std::vector<ninfer::TokenId>& corpus,
++                           unsigned frontier, unsigned output, unsigned lanes) {
++    std::vector<std::future<Observed>> pending;
++    for (unsigned lane = 0; lane < lanes; ++lane) {
++        // The accepted KV frontier excludes the final emitted token.
++        std::vector<ninfer::TokenId> tokens(corpus.begin(), corpus.begin() + frontier - output + 1);
++        ninfer::RequestOptions request;
++        request.execution.allow_prefix_reuse = false;
++        request.execution.requested_output_tokens = output;
++        request.execution.sampling.temperature = 0;
++        request.stop.include_model_defaults = false;
++        auto handle = engine.submit(engine.prepare_tokens(std::move(tokens), false), request,
++            ninfer::OutputConsumerMode::Streaming, {.live_timings = true, .prompt_progress = true});
++        pending.push_back(std::async(std::launch::async, [handle = std::move(handle), &engine]() mutable {
++            Sink sink(engine);
++            auto result = handle.wait(&sink);
++            return Observed{std::move(result), sink.reservation, sink.payload, sink.running};
++        }));
++    }
++    std::vector<Observed> results;
++    for (auto& future : pending) {
++        auto value = future.get();
++        require(value.result.generated_token_ids.size() == output, "output limit was not reached");
++        require(value.result.finish_reason == ninfer::FinishReason::OutputLimit, "wrong termination");
++        require(value.result.reused_prompt_tokens == 0, "cold request reused history");
++        results.push_back(std::move(value));
++    }
++    require(engine.is_available() && !engine.has_failed(), "RAM boundary failed the Engine");
++    const auto memory = engine.memory_summary().kvmem;
++    require(memory.host_payload_bytes == 0 && memory.active_payload_reservation_bytes == 0 &&
++            memory.resident_pages == 0 && memory.mtp_resident_pages == 0,
++            "completed batch leaked KV or reservations");
++    if (lanes > 1)
++        require(std::any_of(results.begin(), results.end(), [lanes](const auto& r) {
++            return r.running == lanes;
++        }), "budget test did not overlap active requests");
++    return results;
++}
++}
++
++int main(int argc, char** argv) {
++    try {
++        require(argc == 6, "artifact drafts(0..15) kv-format eager|graph concurrency(1|2)");
++        ninfer::EngineOptions options;
++        ninfer::test::kvmem_test_devices(options);
++        options.artifact_path = argv[1];
++        options.device_profile = "off";
++        options.max_context = 4096;
++        options.prefill_chunk = 128;
++        options.max_concurrency = static_cast<unsigned>(std::stoul(argv[5]));
++        require(options.max_concurrency == 1 || options.max_concurrency == 2, "invalid concurrency");
++        options.kv_capacity = ninfer::KvCapacityPolicy::explicit_capacity(512 * options.max_concurrency);
++        options.kv_cache = ninfer::test::kvmem_test_storage(argv[3]);
++        options.use_cuda_graph = ninfer::test::kvmem_test_graph(argv[4]);
++        options.context_cache.enabled = false;
++        options.kvmem = {.selected_tokens = 384, .reserve_tokens = 128,
++            .host_bytes = 1ULL << 30, .retained_sessions = 1, .verify_transfers = true};
++        const auto drafts = static_cast<unsigned>(std::stoul(argv[2]));
++        require(drafts <= 15, "invalid draft count");
++        if (drafts) {
++            options.speculative.backend = ninfer::SpeculativeBackend::Mtp;
++            options.speculative.draft_tokens = drafts;
++        }
++        struct Case { unsigned frontier, output; };
++        // A one-token request finishes in prefill before another lane can be
++        // admitted; the concurrent cases exercise decode across the page boundary.
++        const std::vector<Case> cases = options.max_concurrency == 1
++            ? std::vector<Case>{{2047, 2}, {2048, 1}, {2048, 2}, {2048, 5}, {2049, 2}}
++            : std::vector<Case>{{2047, 8}, {2048, 8}, {2049, 8}};
++        std::vector<ninfer::TokenId> corpus;
++        std::vector<std::vector<Observed>> reference;
++        std::uint64_t page_bytes = 0;
++        {
++            ninfer::Engine roomy(options);
++            std::string text;
++            for (unsigned i = 0; i < 1024; ++i)
++                text += "The observatory archives pulsars, cosmic rays and distant galaxies. ";
++            corpus = roomy.tokenize_text(text);
++            require(corpus.size() >= 2049, "prompt corpus is too short");
++            // Observe one admitted request to size H for this artifact's native
++            // main+draft KV representation, independently of the allocation path.
++            const auto sizing = batch(roomy, corpus, 2048, 1, 1);
++            require(sizing[0].reservation && sizing[0].reservation % 32 == 0,
++                    "cannot size the native 64-token Host pages");
++            page_bytes = sizing[0].reservation / 32;
++            for (const auto& c : cases)
++                reference.push_back(batch(roomy, corpus, c.frontier, c.output, options.max_concurrency));
++        }
++        // Use the exact admitted capacity, then repeat requests on the same Engine
++        // so a boundary failure or leaked reservation cannot hide at destruction.
++        for (unsigned pages : {32U, 33U}) {
++            options.kvmem.host_bytes = page_bytes * pages * options.max_concurrency;
++            ninfer::Engine tight(options);
++            for (std::size_t i = 0; i < cases.size(); ++i) {
++                const auto& c = cases[i];
++                if ((c.frontier + 63U) / 64U != pages) continue;
++                const auto actual = batch(tight, corpus, c.frontier, c.output, options.max_concurrency);
++                for (std::size_t lane = 0; lane < actual.size(); ++lane)
++                    require(actual[lane].result.generated_token_ids == reference[i][lane].result.generated_token_ids,
++                            "tight Host budget changed greedy output");
++                require(std::any_of(actual.begin(), actual.end(), [&](const auto& r) {
++                    return r.reservation == options.kvmem.host_bytes;
++                }), "test did not consume the entire Host reservation budget");
++                std::cout << "RAM_BUDGET frontier=" << c.frontier << " output=" << c.output
++                          << " lanes=" << options.max_concurrency << " H=" << options.kvmem.host_bytes
++                          << " exact_output=1 resources_released=1" << std::endl;
++            }
++        }
++        std::cout << "MEMORY_RAM_BUDGET PASS" << std::endl;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        return 1;
 +    }
 +}
 diff --git a/tests/experimental/memory_sessions.cpp b/tests/experimental/memory_sessions.cpp
