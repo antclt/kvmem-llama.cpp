@@ -536,6 +536,33 @@ index ce79ebe92acfe76124a6dbff076f641837042799..c46fd0027a6bf43a08225bef9d6c30f0
  explicit error.
  
  String length bounds (`minLength`, `maxLength`) cost the most: a position inside a counted string
+diff --git a/docs/gguf.md b/docs/gguf.md
+index 13ad7082b185d7faafdbb3c7c1305fd92c7ff743..f9b2d949a571c480e434126d13e6a795d85c0be8 100644
+--- a/docs/gguf.md
++++ b/docs/gguf.md
+@@ -2,13 +2,20 @@
+ 
+ NInfer serves GGUF releases that give every tensor its own ggml quantization type, such as
+ ISTA-DASLab's [GSQ-RCO models](https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF),
+-without converting their weights to another format. The converter recipe `qwen3_8_27b_gguf` copies
+-each quantized tensor's blocks of a Qwen3.8-27B release into the artifact unchanged (see
++without converting their weights to another format. The converter recipe `qwen3_5_dense_gguf` copies
++each quantized tensor's blocks of a dense Qwen3.5-family release into the artifact unchanged (see
+ [weight conversion](weight-conversion.md#a-mixed-precision-qwen38-27b-gguf)), and the runtime
+ multiplies them in place. The Qwen3.8-Flash-Next releases convert the same way with
+ `qwen3_8_flash_next_gguf`, their routed experts kept as expert-major banks
+ ([Qwen3.8-Flash-Next](qwen3-8-flash-next.md)).
+ 
++The dense recipe derives dimensions from the text configuration and checks them against the
++GGUF header and every tensor. It covers the 0.8B, 2B, 4B, 9B and 27B geometries, including
++shared embedding/output weights and a matching embedded MTP head. Shape coverage is separate
++from full-model qualification; see the parent KVMem repository's validation record for the
++models actually run. The smaller dense towers use GQA=4 prompt kernels for all token widths;
++their narrow decode routes have not been performance tuned.
++
+ ## Formats
+ 
+ Eighteen block types: the fifteen llama.cpp writes for dense models, `Q8_0`, `Q2_K`, `Q3_K`,
 diff --git a/docs/maintainer/dflash.md b/docs/maintainer/dflash.md
 index 6dec72ce69e53b86d217e286a3f714915165f010..624a387a47ca6d6f30f9042d655fd5a8a488a647 100644
 --- a/docs/maintainer/dflash.md
@@ -819,6 +846,19 @@ index 6f63bd3ef323a3dc8a9c0a692e343a763e93ffdf..3f1f6a5ddf0e8d4e19c53c023e08a842
 +page-boundary outputs to the maintained independent oracle. Real-model image,
 +MTP/ngram, restoration and cancellation evidence is in the
 +[fast-prefill report](../../../../docs/fast-prefill-admission-validation-20261006.md).
+diff --git a/docs/maintainer/qwen3_5-model.md b/docs/maintainer/qwen3_5-model.md
+index b1ebbc28c6d88c67f9963067f0f0a9e3d52f8899..2ce56534b2692910565c220728ae0403fc747d48 100644
+--- a/docs/maintainer/qwen3_5-model.md
++++ b/docs/maintainer/qwen3_5-model.md
+@@ -305,7 +305,7 @@ stored rotated is converted back to the primal basis by the converter.
+ 
+ ## GGUF block checkpoints
+ 
+-An artifact converted with `qwen3_8_27b_gguf` stores its text projections, token table, output head
++An artifact converted with `qwen3_5_dense_gguf` stores its text projections, token table, output head
+ and MTP head in `gguf_*` formats, one ggml type per tensor, so the parts of a fused projection can
+ differ in type. The execution layer keeps each GGUF part as its own weight
+ (`ops::GgufProjectionWeights`): the GDN input projection lands q/k/v (output 0) and z (output 1)
 diff --git a/docs/ngram.md b/docs/ngram.md
 index a401ba13e9af78c5545f79e6264eb8d5b89247c9..ad854fe1bdb2e18d6073d458a6cde94073ae3f50 100644
 --- a/docs/ngram.md
@@ -1122,20 +1162,22 @@ index 66ec3957ad7b286e8b309f1e2c15699d324efc07..d4a9fa17ca2883258d67e176826c9c16
 +by proposed draft tokens; the bonus token is excluded. Native MTP, ngram and DFlash
 +counters keep their existing meanings.
 diff --git a/docs/weight-conversion.md b/docs/weight-conversion.md
-index 7e3c99008808a9400a354837ab5ae6a354bcb8df..e9066cf76d5d22af6341de4664e8c90e49da0688 100644
+index 7e3c99008808a9400a354837ab5ae6a354bcb8df..93534864000b447d60ddd8fd1fb65911222ce3f7 100644
 --- a/docs/weight-conversion.md
 +++ b/docs/weight-conversion.md
-@@ -72,7 +72,8 @@ The built-in recipes are ordinary Python functions in
+@@ -72,8 +72,9 @@ The built-in recipes are ordinary Python functions in
  | `qwen3_8_27b_nvfp4` | Imported NVFP4/FP8, FP8 embedding generated from BF16 | `quantized` |
  | `qwen3_8_27b_nvfp4_nvidia` | nvidia/Qwen3.8-27B-NVFP4 (ModelOpt AutoQuant): imported NVFP4 MLP projections and per-row FP8 attention and GDN projections; FP8 embedding, and the NVFP4 output head re-quantized to FP8 | `quantized` |
  | `qwen3_8_27b_nvfp4_orcarouter` | orcarouter/Qwen3.8-27B-Uncensored-NVFP4 (GPTQ compressed-tensors): imported NVFP4 MLP projections in layers 0-55, per-row FP8 everywhere else; FP8 embedding and output head from BF16 | `quantized` |
 -| `bonsai2_27b_ternary` | Imported ternary T2 text tower with Hadamard-rotated Uses, Q8 primal embedding | `ternary` (GGUF) |
+-| `qwen3_8_27b_gguf` | Every text, embedding, head and MTP tensor in its GGUF block format, byte for byte | `gguf` (GGUF), `vision` (mmproj GGUF) |
 +| `bonsai2_27b_ternary` | Imported ternary T2 text tower, head and token table with explicit Hadamard signs | `ternary` (PQ2_0 or PTQ1_0 GGUF) |
 +| `bonsai2_27b_ternary_gguf_mtp` | T2 text and byte-preserving dense GGUF MTP blocks | `ternary`, `gguf` (MTP GGUF), `mtp` (geometry companion) |
- | `qwen3_8_27b_gguf` | Every text, embedding, head and MTP tensor in its GGUF block format, byte for byte | `gguf` (GGUF), `vision` (mmproj GGUF) |
++| `qwen3_5_dense_gguf` | Every text, embedding, head and MTP tensor in its GGUF block format, byte for byte | `gguf` (GGUF), `vision` (mmproj GGUF) |
  | `qwen3_8_flash_next_gguf` | Qwen3.8-Flash-Next: every text tensor in its GGUF block format, byte for byte, expert banks expert-major, and the n-gram table's IQ4_NL rows in the same artifact or in a table artifact of their own; every hyper-connection matrix as ggml Q8_0 rows (the release's BF16 ones re-quantised); the MTP block from an MTP GGUF, its matrices in their blocks | `gguf` (the release's first shard), `ngram` (its second shard), `vision` (mmproj GGUF), `mtp` (an MTP GGUF) |
  | `gemma4_gguf` | Gemma 4 26B-A4B from Google's QAT GGUF (or a mixed-format GGUF of it): every matrix in its block format (Q4_0, the tied token table Q6_K), byte for byte, a block's Q, K and V grouped into one parent when they share a format and the [gate; up] MLP projections always, the vectors and expert scales as FP32; with `--components text,mtp` the assistant from its own GGUF the same way | `gguf`, `mtp` |
-@@ -204,6 +205,31 @@ with `--lm-head-draft`.
+ 
+@@ -204,16 +205,41 @@ with `--lm-head-draft`.
  A named source whose path ends in `.gguf` opens as a GGUF file; the recipe validates its header,
  tensor set and Hadamard metadata before reading anything.
  
@@ -1166,8 +1208,21 @@ index 7e3c99008808a9400a354837ab5ae6a354bcb8df..e9066cf76d5d22af6341de4664e8c90e
 +
  ### A mixed-precision Qwen3.8-27B GGUF
  
- `qwen3_8_27b_gguf` ([`gguf_blocks.py`](../tools/convert/gguf_blocks.py)) imports a Qwen3.8-27B GGUF
-@@ -221,7 +247,8 @@ conventions the same way `bonsai2_27b_ternary` does, by row gathers and exact sm
+-`qwen3_8_27b_gguf` ([`gguf_blocks.py`](../tools/convert/gguf_blocks.py)) imports a Qwen3.8-27B GGUF
++`qwen3_5_dense_gguf` ([`gguf_blocks.py`](../tools/convert/gguf_blocks.py)) imports a dense Qwen3.5-family GGUF
+ that assigns its own ggml block type to every tensor, such as ISTA-DASLab's [GSQ-RCO
+ releases](https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF). The text projections, token
+ table, output head and, in an `-mtp` file, the MTP head keep their blocks: each is stored as the
+ matching `gguf_*` format in the `gguf_blocks_v1` layout, so a row of the artifact is a row of the
+ GGUF, byte for byte, and nothing is requantized. The one exception is the GDN controls
+-(`ssm_alpha`, `ssm_beta`), which the Engine takes in BF16: an export that stores them as Q8_0
+-blocks, as Underdog-Saluki's releases do, has their values rounded to BF16. All eighteen `gguf_*`
++(`ssm_alpha`, `ssm_beta`), which the Engine takes in BF16: an export that stores them as F32,
++F16 or quantized blocks has their values rounded to BF16. All eighteen `gguf_*`
+ block types are supported:
+ Q8_0, Q2_0, Q4_0, Q5_0, Q2_K to Q6_K, IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S, IQ4_NL
+ and IQ4_XS ([GGUF block formats](gguf.md)). The recipe undoes llama.cpp's Qwen3.5 exporter
+@@ -221,13 +247,14 @@ conventions the same way `bonsai2_27b_ternary` does, by row gathers and exact sm
  transforms. The one convention a row copy cannot undo is the tiled value-head order of the GDN
  output projection's input columns: its Use carries an `input_columns` auxiliary, and the runtime
  reads the activation through that permutation when it quantizes it. Vision comes from the release's
@@ -1177,7 +1232,43 @@ index 7e3c99008808a9400a354837ab5ae6a354bcb8df..e9066cf76d5d22af6341de4664e8c90e
  gathers the proposal head's rows from the output head in its own block format.
  
  ```bash
-@@ -570,13 +597,15 @@ normal multi-component conversion, though each component needs its own wiring:
+ python3 -m tools.convert \
+   --model /path/to/Qwen3.8-27B \
+-  --recipe qwen3_8_27b_gguf \
++  --recipe qwen3_5_dense_gguf \
+   --source gguf=/path/to/Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf \
+   --source vision=/path/to/mmproj-Qwen3.8-27B-BF16.gguf \
+   --source dflash2=/path/to/Qwen3.8-27B-DFlash2 \
+@@ -241,6 +268,28 @@ python3 -m tools.convert \
+ `--model` needs only the base checkpoint's configuration and tokenizer files. The products that
+ serve these formats are described in [GGUF block formats](gguf.md).
+ 
++The same recipe accepts dense 0.8B, 2B, 4B, 9B and 27B text configurations. It validates layer
++count, attention and GDN head dimensions, MLP dimensions, vocabulary and the complete tensor
++inventory. A tied output head shares the embedding object; it is not duplicated on disk. An
++embedded MTP head must occupy the block immediately following the text layers and match the
++text dimensions. MoE, a different layer layout, or a mismatching head is rejected.
++
++For example, reuse one quantized 4B file in both backends:
++
++```bash
++python3 -m tools.convert \
++  --model /path/to/Qwen3.5-4B-config-and-tokenizer \
++  --recipe qwen3_5_dense_gguf --components text,mtp \
++  --source gguf=/path/to/Qwen3.5-4B-Q4_K_M.gguf \
++  --device cpu --out models/qwen3_5_4b_mtp.ninfer
++```
++
++The source must contain the native MTP tensors; a text-only GGUF is insufficient for
++`--components text,mtp`. Supply `generation_config.json` with the tokenizer resources. If the
++publisher only supplies `eos_token_id` in the official text configuration, an explicit resource
++containing that value is sufficient; record its provenance rather than borrowing another
++model's generation settings. No full-precision checkpoint or vision projector is needed.
++
+ ### Qwen3.8-Flash-Next GGUF releases
+ 
+ `qwen3_8_flash_next_gguf` ([`qwen4_exp_gguf.py`](../tools/convert/qwen4_exp_gguf.py)) imports the
+@@ -570,13 +619,15 @@ normal multi-component conversion, though each component needs its own wiring:
    argument reassembles by reading both from the underlying `GGUFSource` and
    stacking them -- see its docstring if you need the same pattern elsewhere.
  
@@ -1191,7 +1282,7 @@ index 7e3c99008808a9400a354837ab5ae6a354bcb8df..e9066cf76d5d22af6341de4664e8c90e
 +- **DFlash2** accepts either a Safetensors directory or the separate `dflash`
 +  architecture GGUF, such as `Qwen3.8-27B-DFlash2-Q4_K_M.gguf`, through
 +  `--source dflash2=PATH` and `--components ...,dflash2`. With
-+  `qwen3_8_27b_gguf`, its `dflash.*` metadata supplies geometry and conditioning
++  `qwen3_5_dense_gguf`, its `dflash.*` metadata supplies geometry and conditioning
 +  taps. Feature projection, compatible gate/up pairs and selector hidden
 +  projection retain their ggml blocks. Attention input, attention output and
 +  MLP down projections use Q8; convolution kernels, kernel projections and
@@ -1200,6 +1291,96 @@ index 7e3c99008808a9400a354837ab5ae6a354bcb8df..e9066cf76d5d22af6341de4664e8c90e
  
  All three name maps above were checked against a real checkpoint/GGUF pair on
  this machine the same way `qwen35_linear_attention_name_map` was (see its
+diff --git a/include/ninfer/ops/gated_delta_net.h b/include/ninfer/ops/gated_delta_net.h
+index 8d1727e43116f6d57605187456e69afffbe3f195..2ac892b788391e756bddb21a4fc74fbd76c3cf07 100644
+--- a/include/ninfer/ops/gated_delta_net.h
++++ b/include/ninfer/ops/gated_delta_net.h
+@@ -88,7 +88,7 @@ void gated_delta_net_batch_update(const Tensor& q, const Tensor& k, const Tensor
+  * Evaluates B independent normalized Gated DeltaNet recurrences from absolute state-pool slots
+  * without modifying any state. q/k are BF16 [128,Hq,T,B], v/out are BF16 [128,Hv,T,B], g/beta
+  * are FP32 [Hv,T,B], and ssm_states is FP32 [128,128,Hv,S]. The ReplaySSM execution domain is
+- * B=1..8 and T=2..16, plus B=1 and T=17..64, with Hq=16 and Hv in {32,48}.
++ * B=1..8 and T=2..16, plus B=1 and T=17..64, with Hq=16 and Hv in {16,32,48}.
+  * scale is 1/sqrt(128).
+  *
+  * valid_columns is empty for dense rows or device I32 [B], with every caller-supplied extent in
+diff --git a/include/ninfer/ops/gdn_gating_proj.h b/include/ninfer/ops/gdn_gating_proj.h
+index b8279dfa673d96e2325eba2112cd005208b6530f..bdec36bc4f7dd32866e20e6f7ceb02c933df7e65 100644
+--- a/include/ninfer/ops/gdn_gating_proj.h
++++ b/include/ninfer/ops/gdn_gating_proj.h
+@@ -12,7 +12,8 @@
+ 
+ namespace ninfer::ops {
+ 
+-// The geometry is the fixed implementation profile. Each query covers every T in the inclusive
++// Positive hidden widths are multiples of 128 and head counts multiples of 16.
++// Each query covers every T in the inclusive
+ // interval; invalid profiles or intervals throw.
+ [[nodiscard]] std::size_t gdn_gating_proj_workspace_capacity_bytes(std::int32_t heads,
+                                                                    std::int32_t input_rows,
+@@ -34,8 +35,9 @@ namespace ninfer::ops {
+  *   g[h,t]    = -exp(A_log[h]) * softplus(a[h,t] + dt_bias[h])
+  *   beta[h,t] = sigmoid(b[h,t]).
+  *
+- * `x` is contiguous BF16 [5120,T]; both weights are contiguous BF16 [48,5120]; A_log and
+- * dt_bias are contiguous FP32 [48]; g and beta are distinct contiguous FP32 [48,T]. The numerical
++ * `x` is contiguous BF16 [hidden,T]; both weights are contiguous BF16 [heads,hidden]; A_log and
++ * dt_bias are contiguous FP32 [heads]; g and beta are distinct contiguous FP32 [heads,T].
++ * Positive hidden widths are multiples of 128 and head counts multiples of 16. The numerical
+  * contract accepts every positive T. The oracle evaluates the logical formula naively in FP64
+  * from the represented inputs. Projection staging, accumulator precision, and any private
+  * materialization are implementation choices. The FP32 outputs are promoted and compared directly
+@@ -50,10 +52,8 @@ void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_we
+                      Tensor& beta, DeviceExecutionView execution);
+ 
+ /**
+- * Registered contiguous-parent storage forms of gdn_gating_proj:
+- *
+- * - Qwen3.8-27B: BF16 `ab_weight [96,5120]`, with A in rows [0,48) and B in [48,96);
+- * - Qwen3.6-35B-A3B: BF16 `ab_weight [64,2048]`, with A in rows [0,32) and B in [32,64).
++ * Contiguous-parent storage form: BF16 ab_weight [2*heads,hidden], with A in rows
++ * [0,heads) and B in [heads,2*heads), for the same geometry as the two-weight form.
+  *
+  * The complete immutable parent is the public weight. Its halves are consumed as zero-copy views
+  * and produce FP32 g/beta `[heads,T]` under the same logical formula and oracle. All other effects
+@@ -88,7 +88,7 @@ void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
+                           const Tensor& dt_bias, WorkspaceArena& ws, Tensor& h, Tensor& g,
+                           Tensor& beta, DeviceExecutionView execution);
+ 
+-/** The Qwen3.8-27B and Qwen3.6-35B-A3B contiguous-parent storage forms described above. */
++/** The contiguous-parent storage form described above. */
+ void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
+                           const Weight& ab_weight, const Tensor& A_log, const Tensor& dt_bias,
+                           WorkspaceArena& ws, Tensor& h, Tensor& g, Tensor& beta,
+diff --git a/include/ninfer/ops/gdn_input_proj.h b/include/ninfer/ops/gdn_input_proj.h
+index 8eafb50a51da17f0e459c935dfda9f4d1cdab2b0..4cca794657f85a1d72e5813a35f6fbab39260766 100644
+--- a/include/ninfer/ops/gdn_input_proj.h
++++ b/include/ninfer/ops/gdn_input_proj.h
+@@ -319,6 +319,10 @@ void gdn_input_proj_conv_record(const Tensor& x, const Weight& query_key_value_z
+  * GgufProjectionWeights), each block type its own; every part projects through the GGUF linear
+  * routes, which quantize the activation to q8_1 as llama.cpp does, and the snapshot and record forms
+  * run the materialized convolution over the projected q/k/value plane at every batch size.
++ * Geometry comes from complete output partitions: q/k each have K rows (a positive multiple
++ * of 128), value/z each have V rows (a positive multiple of K), and x has the common parent
++ * input width H. The qkv output has 2*K+V rows; conv_weight is [2*K+V,4] and the history
++ * has [2*K+V,3,Slots]. The snapshot/record contracts above apply with these dimensions.
+  */
+ [[nodiscard]] std::size_t gdn_input_proj_workspace_capacity_bytes(
+     const GgufProjectionWeights& weights, std::int32_t min_tokens, std::int32_t max_tokens);
+diff --git a/include/ninfer/ops/gdn_replay.h b/include/ninfer/ops/gdn_replay.h
+index 04fd6f91228536646cb58dcf784382e3c8a74960..6bddc8ff2fbd4b2920b611b0a24c683a7e3d0d6c 100644
+--- a/include/ninfer/ops/gdn_replay.h
++++ b/include/ninfer/ops/gdn_replay.h
+@@ -42,7 +42,8 @@ struct GdnReplayFoldRow {
+  * copies row descriptors by value; replay consumes record/state contents at the bound addresses,
+  * while changing host row descriptors requires a new capture.
+  *
+- * The Op admits the two registered all-layer geometries only, owns no workspace or device
++ * The Op admits Hqk=16, Hv in {16,32,48}, conv_channels=128*(2*Hqk+Hv), with any positive
++ * layer count. It owns no workspace or device
+  * allocation, and does not read query or generate token output. The four record planes are
+  * read-only, disjoint, and do not overlap either state region.
+  */
 diff --git a/include/ninfer/ops/sliding_window_attention.h b/include/ninfer/ops/sliding_window_attention.h
 index 970484a9f364f2df4f864356c7120238ba7159d6..d1b4aef49a7a9355d2ca0e667011694116284edc 100644
 --- a/include/ninfer/ops/sliding_window_attention.h
@@ -1226,6 +1407,20 @@ index 970484a9f364f2df4f864356c7120238ba7159d6..d1b4aef49a7a9355d2ca0e6670116941
                                std::uint32_t window, float scale,
                                const CyclicKVCacheLayerView& context,
                                SlidingWindowAttentionExecutionEnvelope envelope,
+diff --git a/include/ninfer/ops/softmax_attention.h b/include/ninfer/ops/softmax_attention.h
+index 7963ec61e7d905fe887dd9402f9d14a902faaefc..520da7ccff85fbff1324dc6ee55faf488a0e7ca0 100644
+--- a/include/ninfer/ops/softmax_attention.h
++++ b/include/ninfer/ops/softmax_attention.h
+@@ -139,7 +139,8 @@ void packed_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
+ /**
+  * Append K/V for B independent rows and compute causal grouped-query attention.
+  *
+- * The registered profiles are [D,Hq,Hkv]=[256,24,4] (group 6) and [256,16,2] (group 8), with
++ * The registered profiles are [D,Hq,Hkv]=[256,24,4] (group 6), [256,16,2] (group 8),
++ * [256,8,2] and [256,16,4] (group 4), with
+  * scale=1/sqrt(256). q/out are contiguous BF16 [D,Hq,W,B], k/v are contiguous BF16
+  * [D,Hkv,W,B], positions are contiguous device I32 [W,B], kv_table_rows is contiguous device I32
+  * [B], and the cache is BF16, INT8-G64, row-scaled FP8-E4M3FN, NVFP4-G16, or K8V4. valid_columns is
 diff --git a/include/ninfer/ops/token_sums.h b/include/ninfer/ops/token_sums.h
 new file mode 100644
 index 0000000000000000000000000000000000000000..9c7ede518ca14fd2f735f9cfe5336c5fe09f40a4
@@ -9141,6 +9336,407 @@ index 0a3dc7967cd900c2744ebf48914438e68815f1c4..5b1e8e9fff32e092e6e51b743d27c840
  include("${CMAKE_CURRENT_LIST_DIR}/attn_input_proj/sources.cmake")
  include("${CMAKE_CURRENT_LIST_DIR}/candidate_selector/sources.cmake")
  include("${CMAKE_CURRENT_LIST_DIR}/context_kv_materialize/sources.cmake")
+diff --git a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.cu b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.cu
+index 80ee5321d2b1b221c3ada74a7471b38751cbed6b..80b0242580da3f3a35eae487698ae7d718927b2d 100644
+--- a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.cu
++++ b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.cu
+@@ -685,4 +685,46 @@ std::int32_t bf16_gdn_gating_proj_mma_resident_ctas_per_sm(bool geometry35,
+     }
+ }
+ 
++
++namespace {
++// One warp computes both FP32 control reductions for a (token, value-head) pair.
++__global__ void gdn_control_general(const __nv_bfloat16* x, const __nv_bfloat16* a,
++    const __nv_bfloat16* b, const float* alog, const float* bias, float* g, float* beta,
++    int hidden, int heads, int tokens) {
++    const auto row = static_cast<std::int64_t>(blockIdx.x) * 8 + threadIdx.x / 32;
++    if (row >= static_cast<std::int64_t>(heads) * tokens) return;
++    const int lane = threadIdx.x % 32, head = row % heads;
++    const auto input = x + (row / heads) * hidden;
++    const auto wa = a + static_cast<std::int64_t>(head) * hidden;
++    const auto wb = b + static_cast<std::int64_t>(head) * hidden;
++    float sum_a = 0, sum_b = 0;
++    for (int k = lane; k < hidden; k += 32) {
++        const float value = __bfloat162float(input[k]);
++        sum_a = fmaf(value, __bfloat162float(wa[k]), sum_a);
++        sum_b = fmaf(value, __bfloat162float(wb[k]), sum_b);
++    }
++    for (int delta = 16; delta; delta /= 2) {
++        sum_a += __shfl_down_sync(0xffffffff, sum_a, delta);
++        sum_b += __shfl_down_sync(0xffffffff, sum_b, delta);
++    }
++    if (lane == 0) {
++        g[row] = -expf(alog[head]) * softplus(sum_a + bias[head]);
++        beta[row] = sigmoid(sum_b);
++    }
++}
++} // namespace
++
++void bf16_gdn_gating_proj_general_launch(const Tensor& x, const Weight& a_weight,
++    const Weight& b_weight, const Tensor& alog, const Tensor& bias,
++    Tensor& g, Tensor& beta, cudaStream_t stream) {
++    const auto blocks = (static_cast<std::int64_t>(g.ne[0]) * x.ne[1] + 7) / 8;
++    if (blocks > 2147483647) throw std::invalid_argument("GDN control grid exceeds CUDA limit");
++    gdn_control_general<<<static_cast<unsigned>(blocks), 256, 0, stream>>>(
++        static_cast<const __nv_bfloat16*>(x.data), static_cast<const __nv_bfloat16*>(a_weight.qdata),
++        static_cast<const __nv_bfloat16*>(b_weight.qdata), static_cast<const float*>(alog.data),
++        static_cast<const float*>(bias.data), static_cast<float*>(g.data), static_cast<float*>(beta.data),
++        x.ne[0], g.ne[0], x.ne[1]);
++    CUDA_CHECK(cudaGetLastError());
++}
++
+ } // namespace ninfer::ops::detail
+diff --git a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.h b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.h
+index 73d57fdac2f9ce09ef65603840c3be55f50a17f7..85f0fcbe1ddaa99dcd6240ad09dddbd9a0b0d1ba 100644
+--- a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.h
++++ b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.h
+@@ -15,6 +15,10 @@ void bf16_gdn_norm_gating_proj_27_launch(const Tensor& x, const Tensor& norm_wei
+                                          const Tensor& alog, const Tensor& bias, Tensor& g,
+                                          Tensor& beta, const Tensor* signs, cudaStream_t stream);
+ 
++void bf16_gdn_gating_proj_general_launch(const Tensor& x, const Weight& a_weight,
++    const Weight& b_weight, const Tensor& alog, const Tensor& bias,
++    Tensor& g, Tensor& beta, cudaStream_t stream);
++
+ enum class Bf16GdnGatingTokenVariant {
+     None,
+     Full,
+diff --git a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.cpp b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.cpp
+index da182554febd8536857c80387d544a87cb86e27e..4be07ecf386fc13cef84e80a9d0750652f2f679e 100644
+--- a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.cpp
++++ b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.cpp
+@@ -224,6 +224,7 @@ std::int32_t schedule_split_k(Bf16GdnGatingScheduleId schedule) {
+         return 4;
+     case Bf16GdnGatingScheduleId::MmaCooperativeSplit2:
+         return 2;
++    case Bf16GdnGatingScheduleId::SimtGeneral:
+     case Bf16GdnGatingScheduleId::GemvPairedRows:
+     case Bf16GdnGatingScheduleId::SimtWarpRowC4:
+     case Bf16GdnGatingScheduleId::SimtWarpRowC8:
+@@ -265,6 +266,9 @@ bool cooperative_35_grid_is_resident(Bf16GdnGatingScheduleId schedule, std::int3
+ bool candidate_is_legal(Bf16GdnGatingScheduleId schedule, const Bf16GdnGatingProblem& problem,
+                         std::int32_t sm_count) noexcept {
+     if (!bf16_gdn_gating_admits(problem)) { return false; }
++    if (schedule == Bf16GdnGatingScheduleId::SimtGeneral)
++        return !is_27(problem) && !is_35(problem);
++    if (!is_27(problem) && !is_35(problem)) return false;
+     if (is_27(problem)) {
+         switch (schedule) {
+         case Bf16GdnGatingScheduleId::GemvPairedRows:
+@@ -345,6 +349,9 @@ void execute_resolved(const Bf16GdnGatingPlan& plan, const Bf16GdnGatingProblem&
+     };
+ 
+     switch (plan.schedule) {
++    case Bf16GdnGatingScheduleId::SimtGeneral:
++        bf16_gdn_gating_proj_general_launch(x, a_weight, b_weight, A_log, dt_bias, g, beta, execution.stream);
++        return;
+     case Bf16GdnGatingScheduleId::GemvPairedRows:
+         bf16_gdn_gating_proj_gemv_launch(x, a_weight, b_weight, A_log, dt_bias, g, beta,
+                                          execution.stream);
+@@ -430,6 +437,8 @@ std::size_t plan_capacity(const Bf16GdnGatingProblem& base, std::int32_t min_col
+ 
+ const char* bf16_gdn_gating_schedule_name(Bf16GdnGatingScheduleId schedule) noexcept {
+     switch (schedule) {
++    case Bf16GdnGatingScheduleId::SimtGeneral:
++        return "gdn_gating_proj.bf16.simt.general";
+     case Bf16GdnGatingScheduleId::GemvPairedRows:
+         return "gdn_gating_proj.bf16.gemv.paired_rows";
+     case Bf16GdnGatingScheduleId::SmallTSplit10:
+@@ -468,7 +477,8 @@ const char* bf16_gdn_norm_gating_schedule_name(Bf16GdnNormGatingScheduleId sched
+ 
+ bool bf16_gdn_gating_admits(const Bf16GdnGatingProblem& problem) noexcept {
+     if (problem.cols < 1) { return false; }
+-    return is_27(problem) || is_35(problem);
++    return problem.heads > 0 && problem.heads % 16 == 0 &&
++           problem.input_rows > 0 && problem.input_rows % 128 == 0;
+ }
+ 
+ Bf16GdnGatingPlan bf16_gdn_gating_resolve_candidate(Bf16GdnGatingScheduleId schedule,
+@@ -525,6 +535,8 @@ Bf16GdnGatingPlan bf16_gdn_gating_resolve_plan(const Bf16GdnGatingProblem& probl
+         throw std::invalid_argument(
+             "BF16 GDN gating: exact problem or column count is not admitted");
+     }
++    if (!is_27(problem) && !is_35(problem))
++        return bf16_gdn_gating_resolve_candidate(Bf16GdnGatingScheduleId::SimtGeneral, problem, sm_count);
+     return is_27(problem) ? resolve_from_routes(k27Routes, problem, sm_count)
+                           : resolve_from_routes(k35Routes, problem, sm_count);
+ }
+diff --git a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.h b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.h
+index 1f4c5282c0e4e506354879bd9e9cf579ff200e94..299df37364821d788e4d1213ec26d15f23c97bc4 100644
+--- a/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.h
++++ b/src/ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.h
+@@ -14,6 +14,7 @@
+ namespace ninfer::ops::detail {
+ 
+ enum class Bf16GdnGatingScheduleId {
++    SimtGeneral,
+     GemvPairedRows,
+     SmallTSplit10,
+     SimtWarpRowC4,
+diff --git a/src/ops/linear_attention/gated_delta_net/recurrent.cu b/src/ops/linear_attention/gated_delta_net/recurrent.cu
+index 888492ceaa2e0d61678b86b01365df863ffe8395..e5be4992aae53ba892eaea9054343bbb6cdcee82 100644
+--- a/src/ops/linear_attention/gated_delta_net/recurrent.cu
++++ b/src/ops/linear_attention/gated_delta_net/recurrent.cu
+@@ -275,6 +275,13 @@ void launch_replay_fold(const GdnReplayRecords& records, LinearAttentionStateAll
+                                                     active_width, stream);
+         return;
+     }
++    if (records.spec.qk_heads == FoldGeometry16x16::kQkHeads &&
++        records.spec.value_heads == FoldGeometry16x16::kValueHeads &&
++        records.spec.conv_channels == FoldGeometry16x16::kConvChannels) {
++        launch_replay_fold_fixed<FoldGeometry16x16>(records, states, rows, active_rows,
++                                                    active_width, stream);
++        return;
++    }
+     throw std::invalid_argument("GDN replay fold launcher received an unregistered geometry");
+ }
+ 
+diff --git a/src/ops/linear_attention/gated_delta_net/recurrent.cuh b/src/ops/linear_attention/gated_delta_net/recurrent.cuh
+index 5de482af35cdcdd4cd2d15933918aa15e7915c7c..7f2c63b7b60c913bc830a76dcb756e888b94aea4 100644
+--- a/src/ops/linear_attention/gated_delta_net/recurrent.cuh
++++ b/src/ops/linear_attention/gated_delta_net/recurrent.cuh
+@@ -480,6 +480,7 @@ struct FoldGeometry {
+ 
+ using FoldGeometry16x48 = FoldGeometry<16, 48, 10240>;
+ using FoldGeometry16x32 = FoldGeometry<16, 32, 8192>;
++using FoldGeometry16x16 = FoldGeometry<16, 16, 6144>;
+ 
+ template <class Geometry, class StateT = float>
+ struct FoldAccess {
+diff --git a/src/ops/linear_attention/gated_delta_net/replay.cpp b/src/ops/linear_attention/gated_delta_net/replay.cpp
+index 7757b4e0223d81b5bb7f027f8b750b31ea96698c..9f9ac70ad64fd308b5fa11c464f67fed12254dda 100644
+--- a/src/ops/linear_attention/gated_delta_net/replay.cpp
++++ b/src/ops/linear_attention/gated_delta_net/replay.cpp
+@@ -104,7 +104,8 @@ void validate_replay_record(const Tensor& q, const Tensor& k, const Tensor& v, c
+     const std::int32_t value_heads = v.ne[1];
+     const std::int32_t width       = q.ne[2];
+     const std::int32_t rows        = q.ne[3];
+-    const bool registered_heads    = qk_heads == 16 && (value_heads == 48 || value_heads == 32);
++    const bool registered_heads    = qk_heads == 16 &&
++        (value_heads == 48 || value_heads == 32 || value_heads == 16);
+     if (!registered_heads || width < 2 || width > 64 || rows <= 0 || rows > kMaximumRows ||
+         (width > 16 && rows != 1)) {
+         throw std::invalid_argument(std::string(kOp) + ": unsupported geometry");
+@@ -158,7 +159,9 @@ bool is_registered_fold_geometry(const GdnReplayRecordSpec& spec) {
+         spec.qk_heads == 16 && spec.value_heads == 48 && spec.conv_channels == 10240;
+     const bool geometry_32 =
+         spec.qk_heads == 16 && spec.value_heads == 32 && spec.conv_channels == 8192;
+-    return spec.layers > 0 && (geometry_48 || geometry_32);
++    const bool geometry_16 =
++        spec.qk_heads == 16 && spec.value_heads == 16 && spec.conv_channels == 6144;
++    return spec.layers > 0 && (geometry_48 || geometry_32 || geometry_16);
+ }
+ 
+ void validate_fold_records(const GdnReplayRecords& records) {
+diff --git a/src/ops/softmax_attention/dense/causal_cache/causal_softmax_attention.cpp b/src/ops/softmax_attention/dense/causal_cache/causal_softmax_attention.cpp
+index 9ff92d70f3122e77ed4f84655dd7d5c52b58a85c..e019e2d86a2c75c5f8f6bf0614c9968f0b2448be 100644
+--- a/src/ops/softmax_attention/dense/causal_cache/causal_softmax_attention.cpp
++++ b/src/ops/softmax_attention/dense/causal_cache/causal_softmax_attention.cpp
+@@ -49,10 +49,17 @@ std::int32_t causal_attention_chunk_tokens(std::int32_t q_heads, std::int32_t wi
+     return 8;
+ }
+ 
++// GQA=4 dense towers use the registered prompt kernels for every width. Each
++// batch lane has its own device-side table/valid-prefix metadata.
++bool dense_gqa4(AttentionHeadGeometry geometry) {
++    return (geometry.query_heads == 8 && geometry.kv_heads == 2) ||
++           (geometry.query_heads == 16 && geometry.kv_heads == 4);
++}
++
+ void require_causal_geometry(AttentionHeadGeometry geometry, const char* op) {
+     if (!valid_attention_head_geometry(geometry) || geometry.head_dim != kHeadDim ||
+         !((geometry.query_heads == 24 && geometry.kv_heads == 4) ||
+-          (geometry.query_heads == 16 && geometry.kv_heads == 2))) {
++          (geometry.query_heads == 16 && geometry.kv_heads == 2) || dense_gqa4(geometry))) {
+         throw std::invalid_argument(std::string(op) + ": unsupported head geometry");
+     }
+ }
+@@ -491,6 +498,7 @@ int causal_softmax_attention_route_family(AttentionHeadGeometry geometry,
+                                           CausalAttentionExecutionEnvelope envelope,
+                                           std::int32_t batch_size, std::int32_t width) {
+     require_causal_geometry(geometry, "causal_softmax_attention route family");
++    if (dense_gqa4(geometry)) return 2;
+     switch (detail::causal_attention_resolve_route(geometry.query_heads, width, batch_size,
+                                                    cache_storage, envelope)) {
+     case detail::CausalAttentionRoute::SmallT:
+@@ -508,6 +516,7 @@ int causal_softmax_attention_small_t_launches(AttentionHeadGeometry geometry,
+                                               CausalAttentionExecutionEnvelope envelope,
+                                               std::int32_t batch_size, std::int32_t width) {
+     require_causal_geometry(geometry, "causal_softmax_attention small-T launches");
++    if (dense_gqa4(geometry)) return 0;
+     switch (detail::causal_attention_resolve_route(geometry.query_heads, width, batch_size,
+                                                    cache_storage, envelope)) {
+     case detail::CausalAttentionRoute::SmallT:
+@@ -593,6 +602,8 @@ std::size_t causal_softmax_attention_workspace_capacity_bytes(
+             "causal_softmax_attention workspace: invalid profile or interval");
+     }
+ 
++    if (dense_gqa4(geometry)) return 0;
++
+     const auto chunk_capacity = [&](std::int32_t width) {
+         const std::int32_t splits = detail::causal_attention_split_capacity(
+             q_heads, width, cache_storage, envelope, batch_size);
+@@ -707,6 +718,28 @@ void causal_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
+         }
+     }
+ 
++    if (dense_gqa4(geometry)) {
++        for (int lane = 0; lane < batch; ++lane) {
++            auto q_row = q.slice(3, lane, 1);
++            auto k_row = k.slice(3, lane, 1);
++            auto v_row = v.slice(3, lane, 1);
++            auto pos_row = positions.slice(1, lane, 1);
++            auto valid_row = valid_columns.data ? valid_columns.slice(0, lane, 1) : Tensor{};
++            auto table_row = kv_table_rows.slice(0, lane, 1);
++            auto out_row = out.slice(3, lane, 1);
++            if (detail::causal_attention_prompt_sm70_applies(cache.storage, 1)) {
++                detail::kv_cache_append_batch_launch(k_row, v_row, pos_row, valid_row, table_row, cache, stream);
++                detail::causal_attention_prompt_sm70_launch(q_row, pos_row, valid_row, table_row,
++                                                           scale, cache, out_row, stream);
++            } else {
++                detail::causal_attention_prompt_launch(q_row, k_row, v_row, pos_row, valid_row,
++                    table_row, scale, cache, out_row, envelope.fast_prompt_kernel, stream);
++            }
++        }
++        if (gate != nullptr) sigmoid_mul(*gate, out, stream);
++        return;
++    }
++
+     auto scope = workspace.scope();
+     const detail::CausalAttentionRoute route =
+         detail::causal_attention_resolve_route(q.ne[1], width, batch, cache.storage, envelope);
+@@ -769,6 +802,15 @@ void causal_softmax_attention_cached(const Tensor& q, const Tensor& positions,
+     constexpr const char* op = "causal_softmax_attention_cached";
+     validate_attention_tensors(q, positions, out, geometry, cache, envelope, scale, op);
+ 
++    if (dense_gqa4(geometry)) {
++        if (detail::causal_attention_prompt_sm70_applies(cache.storage, 1))
++            detail::causal_attention_prompt_sm70_launch(q, positions, scale, cache, out, stream);
++        else
++            detail::causal_attention_prompt_attention_launch(q, positions, scale, cache, out,
++                                                             envelope.fast_prompt_kernel, stream);
++        return;
++    }
++
+     auto scope = workspace.scope();
+     const detail::CausalAttentionRoute route =
+         detail::causal_attention_resolve_route(q.ne[1], q.ne[2], 1, cache.storage, envelope);
+diff --git a/src/ops/softmax_attention/dense/causal_cache/geometry.cuh b/src/ops/softmax_attention/dense/causal_cache/geometry.cuh
+index ebf44eeb8ad687f4ed22eb0431341b485c641a78..ce7ff494d0e96ea886597fa96381be5d687c13fc 100644
+--- a/src/ops/softmax_attention/dense/causal_cache/geometry.cuh
++++ b/src/ops/softmax_attention/dense/causal_cache/geometry.cuh
+@@ -12,6 +12,9 @@ struct CausalAttentionGeometry : AttentionHeadMapping<QHeadsValue, KVHeadsValue>
+     static constexpr int SmallTMaximumSplits = 85 * SmallTSplitScale;
+ };
+ 
++using CausalD256H8Kv2 = CausalAttentionGeometry<8, 2, 2>;
++using CausalD256H16Kv4 = CausalAttentionGeometry<16, 4, 1>;
++
+ using CausalD256H24Kv4 = CausalAttentionGeometry<24, 4, 1>;
+ using CausalD256H16Kv2 = CausalAttentionGeometry<16, 2, 2>;
+ 
+diff --git a/src/ops/softmax_attention/dense/causal_cache/prompt.cu b/src/ops/softmax_attention/dense/causal_cache/prompt.cu
+index f10317d6bb43795ea7600b3e7f621ed882fc20a8..043c6790094386df147eb4858f4829f4e9ef1b09 100644
+--- a/src/ops/softmax_attention/dense/causal_cache/prompt.cu
++++ b/src/ops/softmax_attention/dense/causal_cache/prompt.cu
+@@ -307,6 +307,16 @@ void causal_attention_prompt_attention_launch(const Tensor& q, const Tensor& pos
+                                                                        metadata, out, fast, stream);
+         return;
+     }
++    if (q.ne[1] == 8) {
++        causal_attention_prompt_attention_launch_for<CausalD256H8Kv2>(q, positions, scale, cache,
++                                                                   metadata, out, fast, stream);
++        return;
++    }
++    if (cache.num_kv_heads == 4) {
++        causal_attention_prompt_attention_launch_for<CausalD256H16Kv4>(q, positions, scale, cache,
++                                                                   metadata, out, fast, stream);
++        return;
++    }
+     causal_attention_prompt_attention_launch_for<CausalD256H16Kv2>(q, positions, scale, cache,
+                                                                    metadata, out, fast, stream);
+ }
+@@ -345,6 +355,16 @@ void causal_attention_prompt_launch(const Tensor& q, const Tensor& k, const Tens
+                 q, positions, scale, cache, metadata, out, fast, stream);
+             return;
+         }
++        if (q.ne[1] == 8) {
++            causal_attention_prompt_attention_launch_for<CausalD256H8Kv2>(q, positions, scale, cache,
++                                                                       metadata, out, fast, stream);
++            return;
++        }
++        if (cache.num_kv_heads == 4) {
++            causal_attention_prompt_attention_launch_for<CausalD256H16Kv4>(q, positions, scale, cache,
++                                                                       metadata, out, fast, stream);
++            return;
++        }
+         causal_attention_prompt_attention_launch_for<CausalD256H16Kv2>(q, positions, scale, cache,
+                                                                        metadata, out, fast, stream);
+     };
+diff --git a/src/ops/softmax_attention/dense/causal_cache/prompt_fp8.cu b/src/ops/softmax_attention/dense/causal_cache/prompt_fp8.cu
+index 97c31f8f6b86b2700f5b7a75d5726ff538d08cce..63d62cea0aa0af7938f1eae7adc5cb3547ed8913 100644
+--- a/src/ops/softmax_attention/dense/causal_cache/prompt_fp8.cu
++++ b/src/ops/softmax_attention/dense/causal_cache/prompt_fp8.cu
+@@ -51,6 +51,16 @@ void causal_attention_prompt_fp8_attention_dispatch(const Tensor& q, const Tenso
+             q, positions, scale, cache, metadata, out, stream);
+         return;
+     }
++    if (q.ne[1] == 8) {
++        causal_attention_prompt_fp8_attention_launch_for<CausalD256H8Kv2>(q, positions, scale, cache,
++                                                                       metadata, out, stream);
++        return;
++    }
++    if (cache.num_kv_heads == 4) {
++        causal_attention_prompt_fp8_attention_launch_for<CausalD256H16Kv4>(q, positions, scale, cache,
++                                                                       metadata, out, stream);
++        return;
++    }
+     causal_attention_prompt_fp8_attention_launch_for<CausalD256H16Kv2>(q, positions, scale, cache,
+                                                                        metadata, out, stream);
+ }
+diff --git a/src/ops/softmax_attention/dense/causal_cache/prompt_k8v4.cu b/src/ops/softmax_attention/dense/causal_cache/prompt_k8v4.cu
+index 8ecb6208c8a6d9ae21244a123bea2bf65fbb1dc7..f4950a8efef9d91da5acf3f05c1dd3146a13431a 100644
+--- a/src/ops/softmax_attention/dense/causal_cache/prompt_k8v4.cu
++++ b/src/ops/softmax_attention/dense/causal_cache/prompt_k8v4.cu
+@@ -51,6 +51,16 @@ void causal_attention_prompt_k8v4_attention_dispatch(const Tensor& q, const Tens
+             q, positions, scale, cache, metadata, out, stream);
+         return;
+     }
++    if (q.ne[1] == 8) {
++        causal_attention_prompt_k8v4_attention_launch_for<CausalD256H8Kv2>(q, positions, scale, cache,
++                                                                        metadata, out, stream);
++        return;
++    }
++    if (cache.num_kv_heads == 4) {
++        causal_attention_prompt_k8v4_attention_launch_for<CausalD256H16Kv4>(q, positions, scale, cache,
++                                                                        metadata, out, stream);
++        return;
++    }
+     causal_attention_prompt_k8v4_attention_launch_for<CausalD256H16Kv2>(q, positions, scale, cache,
+                                                                         metadata, out, stream);
+ }
+diff --git a/src/ops/softmax_attention/dense/causal_cache/prompt_nvfp4.cu b/src/ops/softmax_attention/dense/causal_cache/prompt_nvfp4.cu
+index 86c617483efeb4714d4117a1d99b6bcd6e3e930e..aa4e5e622dd32927dfb819f444bc31d271de2f8e 100644
+--- a/src/ops/softmax_attention/dense/causal_cache/prompt_nvfp4.cu
++++ b/src/ops/softmax_attention/dense/causal_cache/prompt_nvfp4.cu
+@@ -51,6 +51,16 @@ void causal_attention_prompt_nvfp4_attention_dispatch(const Tensor& q, const Ten
+             q, positions, scale, cache, metadata, out, stream);
+         return;
+     }
++    if (q.ne[1] == 8) {
++        causal_attention_prompt_nvfp4_attention_launch_for<CausalD256H8Kv2>(q, positions, scale, cache,
++                                                                         metadata, out, stream);
++        return;
++    }
++    if (cache.num_kv_heads == 4) {
++        causal_attention_prompt_nvfp4_attention_launch_for<CausalD256H16Kv4>(q, positions, scale, cache,
++                                                                         metadata, out, stream);
++        return;
++    }
+     causal_attention_prompt_nvfp4_attention_launch_for<CausalD256H16Kv2>(q, positions, scale, cache,
+                                                                          metadata, out, stream);
+ }
 diff --git a/src/ops/softmax_attention/dense/causal_cache/prompt_nvfp4_fast.cu b/src/ops/softmax_attention/dense/causal_cache/prompt_nvfp4_fast.cu
 index 1b4bef3d37598a5a9174cbbf3fe5a14297e4c4b5..09283671d1d0d0e1bb100c72a5b9ebe6f23b4384 100644
 --- a/src/ops/softmax_attention/dense/causal_cache/prompt_nvfp4_fast.cu
@@ -9403,6 +9999,294 @@ index 0000000000000000000000000000000000000000..2babaf6c913138a59714e56977f2d210
 +    }
 +}
 +} // namespace ninfer::ops
+diff --git a/src/ops/weight_input.cpp b/src/ops/weight_input.cpp
+index 2c3fe5317ec465586dc37f86afedbaccafce6a4e..f532888947b91e726eec6ab6df0631998e8964d4 100644
+--- a/src/ops/weight_input.cpp
++++ b/src/ops/weight_input.cpp
+@@ -181,9 +181,11 @@ ProjectionWeights input_projection(std::span<const WeightInput, 4> inputs, bool
+                         k == std::vector<std::uint64_t>{512, 2048} && third == q && fourth == k
+                   : q == std::vector<std::uint64_t>{2048, 2048} && k == q &&
+                         third == std::vector<std::uint64_t>{4096, 2048} && fourth == third;
+-    require(dense || moe, "input projection: unsupported logical projection geometry");
+     if (std::any_of(inputs.begin(), inputs.end(), gguf_parent)) {
+-        require(dense, "input projection: GGUF parts need the dense geometry");
++        require(q[1] == k[1] && q[1] == third[1] && q[1] == fourth[1] &&
++                    (attention ? third == q && fourth == k && q[0] % k[0] == 0
++                               : k == q && fourth == third && third[0] % q[0] == 0),
++                "input projection: inconsistent GGUF logical geometry");
+         const auto q = static_cast<std::int32_t>(matrix(inputs[0])[0]);
+         const auto k = static_cast<std::int32_t>(matrix(inputs[1])[0]);
+         if (attention) {
+@@ -195,6 +197,7 @@ ProjectionWeights input_projection(std::span<const WeightInput, 4> inputs, bool
+         const std::array<std::int32_t, 4> rows{0, q, q + k, 0};
+         return gguf_projection(inputs, outputs, rows);
+     }
++    require(dense || moe, "input projection: unsupported native logical projection geometry");
+     const auto joined = concatenate_rows(inputs);
+     if (contiguous(joined)) {
+         auto result       = single(inputs);
+@@ -261,8 +264,8 @@ ProjectionWeights prepare_gdn_input_proj_weights(const WeightInput& query, const
+ 
+ ProjectionWeights prepare_gdn_gating_proj_weights(const WeightInput& a, const WeightInput& b) {
+     const auto& shape = matrix(a);
+-    require(shape == matrix(b) && (shape == std::vector<std::uint64_t>{48, 5120} ||
+-                                   shape == std::vector<std::uint64_t>{32, 2048}),
++    require(shape == matrix(b) && shape[0] > 0 && shape[0] % 16 == 0 &&
++                shape[1] > 0 && shape[1] % 128 == 0,
+             "GDN control: unsupported A/B geometry");
+     const std::array inputs{a, b};
+     if (contiguous(concatenate_rows(inputs))) {
+@@ -270,7 +273,6 @@ ProjectionWeights prepare_gdn_gating_proj_weights(const WeightInput& a, const We
+         require(result.weight.qtype == QType::BF16, "GDN control requires BF16 weights");
+         return result;
+     }
+-    require(shape[0] == 48, "GDN control: this geometry requires a combined parent");
+     const auto first  = prepare_linear_weight(a);
+     const auto second = prepare_linear_weight(b);
+     require(first.weight.qtype == QType::BF16 && second.weight.qtype == QType::BF16,
+diff --git a/src/ops/wrapper/gdn_gating_proj.cpp b/src/ops/wrapper/gdn_gating_proj.cpp
+index 4b8900d75837478fe37f66e70faa6e69687abfcf..d1114e1caec40a8d168c5b9aa1c86672f51eb281 100644
+--- a/src/ops/wrapper/gdn_gating_proj.cpp
++++ b/src/ops/wrapper/gdn_gating_proj.cpp
+@@ -49,15 +49,10 @@ struct GdnControlParentGeometry {
+ };
+ 
+ GdnControlParentGeometry require_bf16_parent(const Weight& parent) {
+-    if (parent.n == 96 && parent.k == 5120) {
+-        require_bf16_weight(parent, 96, 5120, "ab_weight");
+-        return {.input_rows = 5120, .heads = 48};
+-    }
+-    if (parent.n == 64 && parent.k == 2048) {
+-        require_bf16_weight(parent, 64, 2048, "ab_weight");
+-        return {.input_rows = 2048, .heads = 32};
+-    }
+-    throw std::invalid_argument("gdn_gating_proj: unsupported ab_weight geometry");
++    if (parent.n <= 0 || parent.n % 32 || parent.k <= 0 || parent.k % 128)
++        throw std::invalid_argument("gdn_gating_proj: unsupported ab_weight geometry");
++    require_bf16_weight(parent, parent.n, parent.k, "ab_weight");
++    return {.input_rows = parent.k, .heads = parent.n / 2};
+ }
+ 
+ void require_vector_tensor(const Tensor& t, DType dtype, std::int32_t n0, const char* op,
+@@ -105,13 +100,16 @@ void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_we
+                      Tensor& beta, DeviceExecutionView execution) {
+     constexpr const char* op  = "gdn_gating_proj";
+     const std::int32_t tokens = x.ne[1];
+-    require_sequence_tensor(x, DType::BF16, 5120, tokens, op, "x");
+-    require_vector_tensor(A_log, DType::FP32, 48, op, "A_log");
+-    require_vector_tensor(dt_bias, DType::FP32, 48, op, "dt_bias");
+-    require_sequence_tensor(g, DType::FP32, 48, tokens, op, "g");
+-    require_sequence_tensor(beta, DType::FP32, 48, tokens, op, "beta");
+-    require_bf16_weight(a_weight, 48, 5120, "a_weight");
+-    require_bf16_weight(b_weight, 48, 5120, "b_weight");
++    const auto hidden = a_weight.k, heads = a_weight.n;
++    if (heads <= 0 || heads % 16 || hidden <= 0 || hidden % 128)
++        throw std::invalid_argument("GDN control: unsupported geometry");
++    require_sequence_tensor(x, DType::BF16, hidden, tokens, op, "x");
++    require_vector_tensor(A_log, DType::FP32, heads, op, "A_log");
++    require_vector_tensor(dt_bias, DType::FP32, heads, op, "dt_bias");
++    require_sequence_tensor(g, DType::FP32, heads, tokens, op, "g");
++    require_sequence_tensor(beta, DType::FP32, heads, tokens, op, "beta");
++    require_bf16_weight(a_weight, heads, hidden, "a_weight");
++    require_bf16_weight(b_weight, heads, hidden, "b_weight");
+     require_execution(execution, op);
+ 
+     detail::bf16_gdn_gating_dispatch(x, a_weight, b_weight, A_log, dt_bias, ws, g, beta, execution);
+@@ -141,18 +139,21 @@ void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
+                           Tensor& beta, DeviceExecutionView execution) {
+     constexpr const char* op  = "gdn_norm_gating_proj";
+     const std::int32_t tokens = x.ne[1];
++    const auto hidden = a_weight.k, heads = a_weight.n;
++    if (heads <= 0 || heads % 16 || hidden <= 0 || hidden % 128)
++        throw std::invalid_argument("GDN control: unsupported geometry");
+     if (!(eps > 0.0F) || !std::isfinite(eps)) {
+         throw std::invalid_argument("gdn_norm_gating_proj: eps must be positive and finite");
+     }
+-    require_sequence_tensor(x, DType::BF16, 5120, tokens, op, "x");
+-    require_vector_tensor(norm_weight, DType::BF16, 5120, op, "norm_weight");
+-    require_sequence_tensor(h, DType::BF16, 5120, tokens, op, "h");
+-    require_vector_tensor(A_log, DType::FP32, 48, op, "A_log");
+-    require_vector_tensor(dt_bias, DType::FP32, 48, op, "dt_bias");
+-    require_sequence_tensor(g, DType::FP32, 48, tokens, op, "g");
+-    require_sequence_tensor(beta, DType::FP32, 48, tokens, op, "beta");
+-    require_bf16_weight(a_weight, 48, 5120, "a_weight");
+-    require_bf16_weight(b_weight, 48, 5120, "b_weight");
++    require_sequence_tensor(x, DType::BF16, hidden, tokens, op, "x");
++    require_vector_tensor(norm_weight, DType::BF16, hidden, op, "norm_weight");
++    require_sequence_tensor(h, DType::BF16, hidden, tokens, op, "h");
++    require_vector_tensor(A_log, DType::FP32, heads, op, "A_log");
++    require_vector_tensor(dt_bias, DType::FP32, heads, op, "dt_bias");
++    require_sequence_tensor(g, DType::FP32, heads, tokens, op, "g");
++    require_sequence_tensor(beta, DType::FP32, heads, tokens, op, "beta");
++    require_bf16_weight(a_weight, heads, hidden, "a_weight");
++    require_bf16_weight(b_weight, heads, hidden, "b_weight");
+     require_execution(execution, op);
+ 
+     detail::bf16_gdn_norm_gating_dispatch(x, norm_weight, eps, h, a_weight, b_weight, A_log,
+diff --git a/src/ops/wrapper/gdn_input_proj.cpp b/src/ops/wrapper/gdn_input_proj.cpp
+index ea13ecb385f1edc9d75587d6fe03668b5164c2d4..2ef5a7628fdae2977434c6622f7ae6f8c2ddfea2 100644
+--- a/src/ops/wrapper/gdn_input_proj.cpp
++++ b/src/ops/wrapper/gdn_input_proj.cpp
+@@ -1445,11 +1445,9 @@ void gdn_input_proj_conv_record(const Tensor& x, const Weight& query_key_value_z
+ 
+ namespace {
+ 
+-constexpr std::int32_t kGgufHidden   = 5120;
+-constexpr std::int32_t kGgufQkvRows  = 10240;
+-constexpr std::int32_t kGgufZRows    = 6144;
+-constexpr std::int32_t kGgufQueryKey = 2048;
+-constexpr std::int32_t kGgufValue    = 6144;
++struct GgufGdnGeometry {
++    std::int32_t hidden, qkv, value, key;
++};
+ 
+ std::vector<detail::GgufShape> gguf_shapes(const GgufProjectionWeights& weights) {
+     std::vector<detail::GgufShape> shapes;
+@@ -1459,21 +1457,26 @@ std::vector<detail::GgufShape> gguf_shapes(const GgufProjectionWeights& weights)
+     return shapes;
+ }
+ 
+-// The z rows and the q/k/value channels the parts write, checked once against the fixed profile.
+-void require_gguf_gdn(const GgufProjectionWeights& weights) {
+-    std::int64_t qkv = 0;
+-    std::int64_t z   = 0;
++// Require complete, nonoverlapping row partitions before deriving the convolution geometry.
++GgufGdnGeometry require_gguf_gdn(const GgufProjectionWeights& weights) {
++    if (weights.parts.empty()) throw std::invalid_argument("GDN GGUF projection is empty");
++    const auto hidden = weights.parts.front().weight.k;
++    std::array<std::int64_t, 2> covered{};
+     for (const auto& part : weights.parts) {
+         detail::require_gguf(part.weight, "gdn_input_proj GGUF part");
+-        if (part.weight.k != kGgufHidden || part.output < 0 || part.output > 1 || part.row < 0 ||
+-            part.row + part.weight.n > (part.output == 0 ? kGgufQkvRows : kGgufZRows)) {
+-            throw std::invalid_argument("gdn_input_proj: GGUF part outside the q/k/v/z profile");
++        if (part.weight.k != hidden || part.output < 0 || part.output > 1 ||
++            part.row != covered[part.output] || part.weight.n <= 0) {
++            throw std::invalid_argument("gdn_input_proj: invalid GGUF row partition");
+         }
+-        (part.output == 0 ? qkv : z) += part.weight.n;
++        covered[part.output] += part.weight.n;
+     }
+-    if (qkv != kGgufQkvRows || z != kGgufZRows) {
+-        throw std::invalid_argument("gdn_input_proj: GGUF parts do not cover q/k/v and z");
++    const auto key = (covered[0] - covered[1]) / 2;
++    if (hidden <= 0 || key <= 0 || key % 128 || covered[1] <= 0 || covered[1] % key ||
++        2 * key + covered[1] != covered[0] || covered[0] > INT32_MAX) {
++        throw std::invalid_argument("gdn_input_proj: invalid GGUF q/k/v/z geometry");
+     }
++    return {hidden, static_cast<std::int32_t>(covered[0]),
++            static_cast<std::int32_t>(covered[1]), static_cast<std::int32_t>(key)};
+ }
+ 
+ void gguf_gdn_project(const Tensor& x, const GgufProjectionWeights& weights, Tensor& qkv,
+@@ -1495,32 +1498,32 @@ void gguf_gdn_project(const Tensor& x, const GgufProjectionWeights& weights, Ten
+ std::size_t gdn_input_proj_workspace_capacity_bytes(const GgufProjectionWeights& weights,
+                                                     std::int32_t min_tokens,
+                                                     std::int32_t max_tokens) {
+-    require_gguf_gdn(weights);
++    (void)require_gguf_gdn(weights);
+     const auto shapes = gguf_shapes(weights);
+     return detail::gguf_project_workspace_bytes(shapes, min_tokens, max_tokens);
+ }
+ 
+ void gdn_input_proj(const Tensor& x, const GgufProjectionWeights& weights, Tensor& qkv, Tensor& z,
+                     WorkspaceArena& workspace, cudaStream_t stream) {
+-    require_gguf_gdn(weights);
++    const auto profile = require_gguf_gdn(weights);
+     const std::int32_t cols = x.ne[1];
+     if (cols <= 0) { throw std::invalid_argument("gdn_input_proj: T must be positive"); }
+-    require_matrix(x, kGgufHidden, cols, "x");
+-    require_matrix(qkv, kGgufQkvRows, cols, "qkv");
+-    require_matrix(z, kGgufZRows, cols, "z");
++    require_matrix(x, profile.hidden, cols, "x");
++    require_matrix(qkv, profile.qkv, cols, "qkv");
++    require_matrix(z, profile.value, cols, "z");
+     gguf_gdn_project(x, weights, qkv, z, workspace, stream);
+ }
+ 
+ std::size_t gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
+     const GgufProjectionWeights& weights, std::int32_t batch_size, std::int32_t min_width,
+     std::int32_t max_width) {
+-    require_gguf_gdn(weights);
++    const auto profile = require_gguf_gdn(weights);
+     require_snapshot_capacity_domain(batch_size, min_width, max_width);
+     const auto shapes          = gguf_shapes(weights);
+     const std::int32_t batch   = std::max(batch_size, 1);
+     const std::size_t project  = detail::gguf_project_workspace_bytes(
+         shapes, batch * min_width, batch * max_width);
+-    return composed_snapshot_capacity(kGgufQkvRows, batch * max_width, project);
++    return composed_snapshot_capacity(profile.qkv, batch * max_width, project);
+ }
+ 
+ void gdn_input_proj_conv_snapshot(const Tensor& x, const GgufProjectionWeights& weights,
+@@ -1529,21 +1532,21 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const GgufProjectionWeights&
+                                   const Tensor& snapshot_base_slots, Tensor& query, Tensor& key,
+                                   Tensor& value, Tensor& z, WorkspaceArena& ws,
+                                   cudaStream_t stream) {
+-    require_gguf_gdn(weights);
+-    const ConvGeometry geometry = require_snapshot_input(x, kGgufHidden);
++    const auto profile = require_gguf_gdn(weights);
++    const ConvGeometry geometry = require_snapshot_input(x, profile.hidden);
+     require_snapshot_operands(conv_weight, conv_states, valid_columns, initial_state_slots,
+-                              snapshot_base_slots, kGgufQkvRows, geometry);
+-    require_conv_tensor(query, kGgufQueryKey, geometry.width, geometry.batch,
++                              snapshot_base_slots, profile.qkv, geometry);
++    require_conv_tensor(query, profile.key, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_snapshot", "query");
+-    require_conv_tensor(key, kGgufQueryKey, geometry.width, geometry.batch,
++    require_conv_tensor(key, profile.key, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_snapshot", "key");
+-    require_conv_tensor(value, kGgufValue, geometry.width, geometry.batch,
++    require_conv_tensor(value, profile.value, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_snapshot", "value");
+-    require_conv_tensor(z, kGgufZRows, geometry.width, geometry.batch,
++    require_conv_tensor(z, profile.value, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_snapshot", "z");
+     compose_batched_snapshot(x, conv_weight, conv_states, valid_columns, initial_state_slots,
+-                             snapshot_base_slots, query, key, value, z, kGgufQueryKey,
+-                             kGgufQueryKey, kGgufValue, geometry, ws, stream,
++                             snapshot_base_slots, query, key, value, z, profile.key,
++                             profile.key, profile.value, geometry, ws, stream,
+                              [&](const Tensor& x_flat, Tensor& projected, Tensor& z_flat) {
+                                  gguf_gdn_project(x_flat, weights, projected, z_flat, ws, stream);
+                              });
+@@ -1552,7 +1555,7 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const GgufProjectionWeights&
+ std::size_t gdn_input_proj_conv_record_workspace_capacity_bytes(
+     const GgufProjectionWeights& weights, std::int32_t batch_size, std::int32_t min_width,
+     std::int32_t max_width) {
+-    require_gguf_gdn(weights);
++    (void)require_gguf_gdn(weights);
+     require_snapshot_capacity_domain(batch_size, min_width, max_width);
+     const auto shapes        = gguf_shapes(weights);
+     const std::int32_t batch = std::max(batch_size, 1);
+@@ -1564,19 +1567,19 @@ void gdn_input_proj_conv_record(const Tensor& x, const GgufProjectionWeights& we
+                                 const Tensor& valid_columns, const Tensor& initial_state_slots,
+                                 Tensor& conv_record, Tensor& query, Tensor& key, Tensor& value,
+                                 Tensor& z, WorkspaceArena& workspace, cudaStream_t stream) {
+-    require_gguf_gdn(weights);
+-    const ConvGeometry geometry = require_record_input(x, kGgufHidden);
++    const auto profile = require_gguf_gdn(weights);
++    const ConvGeometry geometry = require_record_input(x, profile.hidden);
+     require_record_operands(conv_weight, conv_states, valid_columns, initial_state_slots,
+-                            kGgufQkvRows, geometry);
+-    require_conv_tensor(conv_record, kGgufQkvRows, geometry.width, geometry.batch,
++                            profile.qkv, geometry);
++    require_conv_tensor(conv_record, profile.qkv, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_record", "conv record");
+-    require_conv_tensor(query, kGgufQueryKey, geometry.width, geometry.batch,
++    require_conv_tensor(query, profile.key, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_record", "query");
+-    require_conv_tensor(key, kGgufQueryKey, geometry.width, geometry.batch,
++    require_conv_tensor(key, profile.key, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_record", "key");
+-    require_conv_tensor(value, kGgufValue, geometry.width, geometry.batch,
++    require_conv_tensor(value, profile.value, geometry.width, geometry.batch,
+                         "gdn_input_proj_conv_record", "value");
+-    require_conv_tensor(z, kGgufZRows, geometry.width, geometry.batch, "gdn_input_proj_conv_record",
++    require_conv_tensor(z, profile.value, geometry.width, geometry.batch, "gdn_input_proj_conv_record",
+                         "z");
+     require_record_nonoverlap(x, conv_weight, conv_states, valid_columns, initial_state_slots,
+                               conv_record, query, key, value, z, workspace);
 diff --git a/src/product/cuda_memory_options.h b/src/product/cuda_memory_options.h
 new file mode 100644
 index 0000000000000000000000000000000000000000..6aec9a7edb679d64ccf32c70ff4bd68afdc7edb0
@@ -12556,10 +13440,10 @@ index b8d4e3dabc5fbb82bab450c135816c465c1f4167..8d8e528cf59fbc6416ce8acec4068748
      struct Impl;
      std::unique_ptr<Impl> impl_;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..30f080226ef29114c91db90e7ba81bac2a54fb78 100644
+index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..fbf08d09c621270fc88846b6b8d6f20c251c2952 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -9,10 +9,27 @@ include(cmake/BenchSupportTests.cmake)
+@@ -9,10 +9,38 @@ include(cmake/BenchSupportTests.cmake)
  include(models/qwen3_5/tests.cmake)
  include(models/qwen4_exp/tests.cmake)
  include(models/gemma4/tests.cmake)
@@ -12584,10 +13468,21 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..30f080226ef29114c91db90e7ba81bac
 +ninfer_finalize_bundle(ninfer_memory_policy_tests)
 +ninfer_stage_runtime_dlls(ninfer_memory_policy_tests)
 +
++# Shape-generalization regressions without linking unrelated model test families.
++set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_dense_family_tests_PROGRAMS
++  ninfer_gdn_gating_proj_test ninfer_linear_gguf_test ninfer_gdn_replay_fold_test
++  ninfer_softmax_attention_test)
++ninfer_finalize_bundle(ninfer_dense_family_tests)
++ninfer_stage_runtime_dlls(ninfer_dense_family_tests)
++add_test(NAME ninfer_dense_family_attention_test
++  COMMAND ninfer_dense_family_tests ninfer_softmax_attention_test --dense-family-only)
++add_test(NAME ninfer_dense_family_replay_test
++  COMMAND ninfer_dense_family_tests ninfer_gdn_replay_fold_test --dense-family-only)
++
  # Exit code 77 is a skip for every test (tests/cuda_availability.h). Without a usable CUDA device --
  # no GPU, no driver, or only the toolkit's stub driver, as on a CI runner -- a test that has no check
  # of its own fails on its first CUDA call with one of these runtime messages; report that as skipped
-@@ -21,8 +38,114 @@ ninfer_finalize_bundle(ninfer_tests)
+@@ -21,8 +49,114 @@ ninfer_finalize_bundle(ninfer_tests)
  get_property(_ninfer_all_tests DIRECTORY PROPERTY TESTS)
  set_tests_properties(${_ninfer_all_tests} PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION
    "CUDA driver is a stub library;no CUDA-capable device is detected;CUDA driver version is insufficient for CUDA runtime version")
@@ -13193,6 +14088,114 @@ index d0c447f4dc227e989d530b8c4a499711041107c5..3d1ec5052b89022dd73c774abdbc991d
  ninfer_add_test(ninfer_host_memory_test SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_host_memory.cpp"
    LIBRARIES ninfer_runtime_support)
  
+diff --git a/tests/convert/test_dense_geometry.py b/tests/convert/test_dense_geometry.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b71be6573302f5a338a813c5b2f3ddcf1358eb56
+--- /dev/null
++++ b/tests/convert/test_dense_geometry.py
+@@ -0,0 +1,102 @@
++"""Dense Qwen3.5 shape contracts; no model-weight downloads are needed."""
++from types import SimpleNamespace
++
++import numpy as np
++import pytest
++import torch
++
++from tools.convert.dense_geometry import DenseGeometry
++from tools.convert.gguf_blocks import expected_tensors, gdn_control_source, tiled_input_columns, validate
++from tools.convert.sources.gguf import GGUFFile, write_gguf
++
++# Published Qwen/Qwen3.5-{size}/config.json text tower dimensions.
++SIZES = [
++    ("0.8B", 1024, 3584, 24, 8, 2, 16, True),
++    ("2B", 2048, 6144, 24, 8, 2, 16, True),
++    ("4B", 2560, 9216, 32, 16, 4, 32, True),
++    ("9B", 4096, 12288, 32, 16, 4, 32, False),
++    ("27B", 5120, 17408, 64, 24, 4, 48, False),
++]
++
++
++def dense_config(size):
++    _, hidden, intermediate, layers, heads, kv, values, tied = size
++    config = dict(hidden_size=hidden, intermediate_size=intermediate, vocab_size=248320,
++                  num_hidden_layers=layers, num_attention_heads=heads, num_key_value_heads=kv,
++                  head_dim=256, linear_num_key_heads=16, linear_num_value_heads=values,
++                  linear_key_head_dim=128, linear_value_head_dim=128,
++                  linear_conv_kernel_dim=4, tie_word_embeddings=tied,
++                  layer_types=["linear_attention"] * 3 + ["full_attention"])
++    config["layer_types"] *= layers // 4
++    return config
++
++
++@pytest.fixture(params=SIZES, ids=[x[0] for x in SIZES])
++def geometry(request):
++    return DenseGeometry.from_config(dense_config(request.param))
++
++
++@pytest.mark.parametrize("change", [
++    {"linear_num_key_heads": 8}, {"linear_num_value_heads": 64},
++    {"head_dim": 128}, {"linear_conv_kernel_dim": 3}, {"num_experts": 8},
++])
++def test_reject_unimplemented_runtime_geometry(change):
++    config = dense_config(SIZES[2]) | change
++    with pytest.raises(ValueError):
++        DenseGeometry.from_config(config)
++
++
++def test_exporter_order_round_trip(geometry):
++    g = geometry
++    # GGUF repeats all key heads before the next value-head repeat. Runtime
++    # groups all repeats of a key head; construct the expected order explicitly.
++    repeats = g.value_heads // g.key_heads
++    grouped = [repeat * g.key_heads + key for key in range(g.key_heads)
++               for repeat in range(repeats)]
++    tiled = np.arange(g.value_dim).reshape(g.value_heads, 128)
++    expected = tiled[grouped].reshape(-1)
++    np.testing.assert_array_equal(g.untile(tiled.reshape(-1), 128), expected)
++    np.testing.assert_array_equal(g.untiled_rows(4096)(0, g.value_dim), expected + 4096)
++    np.testing.assert_array_equal(expected[tiled_input_columns(g)], np.arange(g.value_dim))
++    for gate in (False, True):
++        expected_attention = [head * 512 + int(gate) * 256 + lane
++                              for head in range(g.attention_heads) for lane in range(256)]
++        np.testing.assert_array_equal(g.attention_rows(gate)(0, g.query_rows), expected_attention)
++
++
++@pytest.mark.parametrize("mtp", [False, True])
++def test_dense_tensor_contract_and_rejection(geometry, mtp):
++    g = geometry
++    shapes = expected_tensors(mtp, g)
++    assert shapes["token_embd.weight"][0] == (248320, g.hidden)
++    assert ("output.weight" in shapes) == (not g.tied)
++    assert shapes["blk.0.attn_qkv.weight"][0] == (4096 + g.value_dim, g.hidden)
++    assert shapes["blk.3.attn_q.weight"][0] == (g.attention_heads * 512, g.hidden)
++    if mtp:
++        assert shapes[f"blk.{g.layers}.nextn.eh_proj.weight"][0] == (g.hidden, 2 * g.hidden)
++    tensors = {}
++    for name, (shape, kind) in shapes.items():
++        tensors[name] = SimpleNamespace(shape=shape, type_id=12 if kind == "blocks" else 0,
++                                       type_name="Q4_K" if kind == "blocks" else "F32", offset=0, nbytes=1)
++    source = SimpleNamespace(path="synthetic.gguf", tensors=tensors, data_bytes_available=1,
++                             kv={**g.expected_header(), "qwen35.block_count": g.layers + int(mtp)})
++    validate(source, g)
++    source.kv["qwen35.ssm.time_step_rank"] += 1
++    with pytest.raises(ValueError, match="time_step_rank"):
++        validate(source, g)
++    source.kv["qwen35.ssm.time_step_rank"] -= 1
++    tensors["blk.0.attn_qkv.weight"].shape = (g.channels + 128, g.hidden)
++    with pytest.raises(ValueError, match="attn_qkv"):
++        validate(source, g)
++
++
++def test_f32_control_cast_and_head_order(geometry, tmp_path):
++    g = geometry
++    # Nonrepresentable values exercise BF16 rounding, not just integer row IDs.
++    values = (np.arange(g.value_heads * 128, dtype=np.float32) * 0.00137).reshape(g.value_heads, 128)
++    path = tmp_path / "controls.gguf"
++    write_gguf(path, {"general.architecture": "qwen35"}, [("w", values.shape, 0, values.tobytes())])
++    order = [repeat * 16 + key for key in range(16) for repeat in range(g.value_heads // 16)]
++    with GGUFFile(path) as source:
++        actual = gdn_control_source(source, "w", g).rows(0, g.value_heads)
++    assert torch.equal(actual, torch.from_numpy(values[order]).to(torch.bfloat16))
 diff --git a/tests/convert/test_dflash2_gguf.py b/tests/convert/test_dflash2_gguf.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..848bafb65fd32392b58633702e00f827dd7f193c
@@ -13300,7 +14303,7 @@ index 0000000000000000000000000000000000000000..848bafb65fd32392b58633702e00f827
 +    path,_=fixture(tmp_path,**overrides)
 +    with pytest.raises(ValueError):DraftSource(path)
 diff --git a/tests/convert/test_gguf_blocks.py b/tests/convert/test_gguf_blocks.py
-index d0cd4786b0fa581867696ad2b2666cce4d4330f6..9dc6474b572b8d15630ec0c2bf9ed6b70b8eea41 100644
+index d0cd4786b0fa581867696ad2b2666cce4d4330f6..0c8959cbb83c81b7698bbba23ee6fa9272d7d6eb 100644
 --- a/tests/convert/test_gguf_blocks.py
 +++ b/tests/convert/test_gguf_blocks.py
 @@ -1,5 +1,8 @@
@@ -13312,16 +14315,18 @@ index d0cd4786b0fa581867696ad2b2666cce4d4330f6..9dc6474b572b8d15630ec0c2bf9ed6b7
  import numpy as np
  import pytest
  import torch
-@@ -7,7 +10,7 @@ import torch
+@@ -7,8 +10,9 @@ import torch
  from tools.artifact.formats import GGUF_FORMATS, GGUF_FORMATS_BY_TYPE
  from tools.artifact.layouts import encoded_size, gguf_blocks_geometry
  from tools.convert import gguf_blocks
 -from tools.convert.sources.gguf import GGUFFile, write_gguf
 +from tools.convert.sources.gguf import TYPE_BF16, GGUFFile, write_gguf
  
++GEOM27 = gguf_blocks.DenseGeometry(5120, 17408, 248320, 64, 24, 4, 256, 16, 48, 128, 4, False)
  TYPE_Q8_0 = 8
  
-@@ -54,6 +57,34 @@ def _q8_0_values(blocks: np.ndarray) -> np.ndarray:
+ # ggml-common.h: block values and bytes of every type the importer keeps.
+@@ -54,6 +58,34 @@ def _q8_0_values(blocks: np.ndarray) -> np.ndarray:
      scales = blocks[..., :2].copy().view(np.float16).astype(np.float32)
      codes = blocks[..., 2:].copy().view(np.int8).astype(np.float32)
      return (codes * scales).reshape(blocks.shape[0], -1)
@@ -13356,7 +14361,7 @@ index d0cd4786b0fa581867696ad2b2666cce4d4330f6..9dc6474b572b8d15630ec0c2bf9ed6b7
  
  
  def test_formats_are_ggml_blocks():
-@@ -81,6 +112,34 @@ def test_rows_are_copied_byte_for_byte_through_the_row_map(tmp_path):
+@@ -81,6 +113,34 @@ def test_rows_are_copied_byte_for_byte_through_the_row_map(tmp_path):
          )
  
  
@@ -13384,14 +14389,34 @@ index d0cd4786b0fa581867696ad2b2666cce4d4330f6..9dc6474b572b8d15630ec0c2bf9ed6b7
 +    path, _, values = _small_block_file(tmp_path, 42, rows=48)
 +    grouped = values.reshape(3, 16, 128).transpose(1, 0, 2).reshape(48, 128)
 +    with GGUFFile(path) as gguf:
-+        source = gguf_blocks.gdn_control_source(gguf, "w")
++        source = gguf_blocks.gdn_control_source(gguf, "w", GEOM27)
 +        assert torch.equal(source.rows(0, 48), torch.from_numpy(grouped.copy()).to(torch.bfloat16))
 +
 +
  def test_row_values_are_ggml_dequantization(tmp_path):
      path, blocks = _q8_0_file(tmp_path, 6, 64, 2)
      with GGUFFile(path) as gguf:
-@@ -108,3 +167,27 @@ def test_q8_0_gdn_controls_round_to_bf16_in_grouped_head_order(tmp_path):
+@@ -89,7 +149,7 @@ def test_row_values_are_ggml_dequantization(tmp_path):
+ 
+ 
+ def test_output_projection_columns_read_the_grouped_value_heads():
+-    columns = gguf_blocks.tiled_input_columns()
++    columns = gguf_blocks.tiled_input_columns(GEOM27)
+     assert sorted(columns.tolist()) == list(range(6144))
+     for tiled_head in (0, 1, 15, 16, 31, 47):
+         key_head, repeat = tiled_head % 16, tiled_head // 16
+@@ -99,12 +159,36 @@ def test_output_projection_columns_read_the_grouped_value_heads():
+ def test_q8_0_gdn_controls_round_to_bf16_in_grouped_head_order(tmp_path):
+     # Underdog-Saluki-style exports store ssm_alpha/ssm_beta as Q8_0 blocks: their values reach the
+     # Engine's BF16 operand, the exporter's tiled value heads back in the grouped order.
+-    heads = gguf_blocks.GDN_VALUE_HEADS
++    heads = GEOM27.value_heads
+     path, blocks = _q8_0_file(tmp_path, heads, 64, 5, "blk.0.ssm_alpha.weight")
+     with GGUFFile(path) as gguf:
+-        values = gguf_blocks.gdn_control_source(gguf, "blk.0.ssm_alpha.weight").rows(0, heads)
++        values = gguf_blocks.gdn_control_source(gguf, "blk.0.ssm_alpha.weight", GEOM27).rows(0, heads)
+     tiled = _q8_0_values(blocks)
+     # Grouped head k * 3 + r is the exporter's tiled head r * 16 + k.
      grouped = [r * 16 + k for k in range(16) for r in range(3)]
      assert values.dtype == torch.bfloat16
      assert torch.equal(values, torch.from_numpy(tiled[grouped]).to(torch.bfloat16))
@@ -13404,7 +14429,7 @@ index d0cd4786b0fa581867696ad2b2666cce4d4330f6..9dc6474b572b8d15630ec0c2bf9ed6b7
 +    # GGUF tiles by repeat then key; execution groups the three repeats of each key.
 +    grouped = tiled.reshape(3, 16, 64).transpose(1, 0, 2).reshape(48, 64)
 +    with GGUFFile(path) as gguf:
-+        source = gguf_blocks.gdn_control_source(gguf, "w")
++        source = gguf_blocks.gdn_control_source(gguf, "w", GEOM27)
 +        assert source.shape == (48, 64)
 +        assert torch.equal(source.rows(0, 48), torch.from_numpy(grouped.copy()).to(torch.bfloat16))
 +
@@ -13416,7 +14441,7 @@ index d0cd4786b0fa581867696ad2b2666cce4d4330f6..9dc6474b572b8d15630ec0c2bf9ed6b7
 +               [("w", (48, 64), TYPE_BF16, words.tobytes())])
 +    expected = words.reshape(3, 16, 64).transpose(1, 0, 2).reshape(48, 64)
 +    with GGUFFile(path) as gguf:
-+        source = gguf_blocks.gdn_control_source(gguf, "w")
++        source = gguf_blocks.gdn_control_source(gguf, "w", GEOM27)
 +        actual = source.rows(0, 48).view(torch.int16).numpy().view(np.uint16)
 +        assert np.array_equal(actual, expected)
 diff --git a/tests/convert/test_ternary.py b/tests/convert/test_ternary.py
@@ -18309,7 +19334,7 @@ index 363d4a13f1f02b2728b9328f2dc3d66edf95ce69..db12cf51e50554483e5ba3939b247ccf
                            << '\n';
                  failures += f;
 diff --git a/tests/ops/softmax_attention/causal_cache.cpp b/tests/ops/softmax_attention/causal_cache.cpp
-index 0a619e6816de3a3965b9bb4868804e88e13a8a7d..71070ebceee11ae523ad376db05633a2855b7f41 100644
+index 0a619e6816de3a3965b9bb4868804e88e13a8a7d..7ff40072ffc9a5d92f2b69397030e1a6012c55bc 100644
 --- a/tests/ops/softmax_attention/causal_cache.cpp
 +++ b/tests/ops/softmax_attention/causal_cache.cpp
 @@ -4424,6 +4424,13 @@ int run_softmax_attention_dflash2_tests() {
@@ -18326,8 +19351,46 @@ index 0a619e6816de3a3965b9bb4868804e88e13a8a7d..71070ebceee11ae523ad376db05633a2
  int run_softmax_attention_causal_cache_tests() {
      if (cuda_unavailable()) {
          std::cout << "SKIP: no usable CUDA device\n";
+@@ -4475,3 +4482,37 @@ int run_softmax_attention_parallel_tile_tests() {
+     std::cout << (failures == 0 ? "PASS" : "FAIL") << " parallel query tiles\n";
+     return failures == 0 ? 0 : 1;
+ }
++
++int run_softmax_attention_dense_family_tests() {
++    std::cout << std::unitbuf;
++    if (cuda_unavailable()) return 77;
++    int failures = 0;
++    for (const Geometry geometry : {Geometry{"dense-h8-kv2", 8, 2}, Geometry{"dense-h16-kv4", 16, 4}}) {
++        failures += run_geometry(geometry);
++        for (const auto storage : {KvCacheStorage::BFloat16, KvCacheStorage::Int8Group64,
++                KvCacheStorage::RotatedInt8KeyInt4ValueGroup64, KvCacheStorage::RotatedLloyd4KeyInt4Value,
++                KvCacheStorage::RotatedInt4KeyInt4ValueE8, KvCacheStorage::RotatedE8RootKeyInt4Value,
++                KvCacheStorage::Fp8E4M3Row256, KvCacheStorage::Nvfp4Group16, KvCacheStorage::Fp8KeyNvfp4Value}) {
++            const auto check = [&](const auto& profile) {
++                return run_a1_case(geometry, profile, {.tokens=17, .base=63, .envelope_max=256,
++                    .seed=9021u, .graph_replay=true}, MappingPattern::Fragmented) +
++                    run_a3_case(geometry, profile, {.tokens=6, .base=127, .envelope_max=256,
++                    .seed=9022u, .graph_replay=true}, MappingPattern::Fragmented);
++            };
++            // These two packed profiles use the CachePlan reference encoder.
++            if (storage == KvCacheStorage::RotatedInt8KeyInt4ValueGroup64)
++                failures += check(kPlanRk8v4);
++            else if (storage == KvCacheStorage::RotatedLloyd4KeyInt4Value)
++                failures += check(kPlanRk4v4);
++            else failures += check(storage);
++        }
++        for (const auto plan : {kPlanBf16, kPlanInt8, kPlanRk8v4}) {
++            failures += run_batch_case(geometry, plan,
++                {6, {61, 127, 511}, {6, 3, 0}, {2, 0, 1}, MappingPattern::Fragmented, 9041u});
++            failures += run_batch_case(geometry, plan,
++                {16, {49, 2041}, {16, 7}, {1, 0}, MappingPattern::Fragmented, 9042u});
++        }
++    }
++    std::cout << (failures ? "FAIL" : "PASS") << " dense-family causal attention\n";
++    return failures ? 1 : 0;
++}
 diff --git a/tests/ops/softmax_attention/main.cpp b/tests/ops/softmax_attention/main.cpp
-index 5f1825d18b97fbbaeb04ce2ab210b1046bf07c5e..243780fc47b756b56d8c023b6aeb4d95af1c314e 100644
+index 5f1825d18b97fbbaeb04ce2ab210b1046bf07c5e..9622daa1a54376edcb99edb036699a23f0622b3b 100644
 --- a/tests/ops/softmax_attention/main.cpp
 +++ b/tests/ops/softmax_attention/main.cpp
 @@ -10,6 +10,7 @@ int run_softmax_attention_fp8_prompt_tests();
@@ -18338,7 +19401,24 @@ index 5f1825d18b97fbbaeb04ce2ab210b1046bf07c5e..243780fc47b756b56d8c023b6aeb4d95
  int run_softmax_attention_rk4v4_e8_tests();
  int run_softmax_attention_rk2v4_e8_tests();
  int run_softmax_attention_plain_and_packed_tests();
-@@ -66,6 +67,9 @@ int main(int argc, char** argv) {
+@@ -17,6 +18,7 @@ int run_softmax_attention_context_tests();
+ int run_softmax_attention_wide_tests();
+ int run_softmax_attention_parallel_tile_tests();
+ int run_softmax_attention_quantized_depth_tests();
++int run_softmax_attention_dense_family_tests();
+ 
+ namespace {
+ 
+@@ -40,6 +42,8 @@ int run_guarded(const char* what, int (*suite)()) {
+ } // namespace
+ 
+ int main(int argc, char** argv) {
++    if (argc == 2 && std::string_view(argv[1]) == "--dense-family-only")
++        return run_guarded("dense family", run_softmax_attention_dense_family_tests);
+     if (argc == 2 && std::string_view(argv[1]) == "--quantized-depth-only")
+         return run_guarded("quantized depth", run_softmax_attention_quantized_depth_tests);
+     if (argc == 2 && std::string_view(argv[1]) == "--wide-only")
+@@ -66,6 +70,9 @@ int main(int argc, char** argv) {
      if (argc == 2 && std::string_view(argv[1]) == "--nvfp4-only") {
          return run_guarded("nvfp4", run_softmax_attention_nvfp4_tests);
      }
@@ -18348,15 +19428,74 @@ index 5f1825d18b97fbbaeb04ce2ab210b1046bf07c5e..243780fc47b756b56d8c023b6aeb4d95
      if (argc == 2 && std::string_view(argv[1]) == "--k8v4-only") {
          return run_guarded("k8v4", run_softmax_attention_k8v4_tests);
      }
-@@ -77,7 +81,7 @@ int main(int argc, char** argv) {
+@@ -77,7 +84,7 @@ int main(int argc, char** argv) {
      }
      if (argc != 1) {
          std::cerr << "usage: ninfer_softmax_attention_test "
 -                     "[--dflash2-only|--nvfp4-only|--k8v4-only|--rk4v4-e8-only|--rk2v4-e8-only|"
-+                     "[--dflash2-only|--nvfp4-only|--k8v4-only|--rk8v4-only|--rk4v4-e8-only|--rk2v4-e8-only|"
++                     "[--dense-family-only|--dflash2-only|--nvfp4-only|--k8v4-only|--rk8v4-only|--rk4v4-e8-only|--rk2v4-e8-only|"
                       "--int8-prompt-only|--fp8-prompt-only|--pack-gqa-only|"
                       "--wide-only|--parallel-tiles-only|--quantized-depth-only]\n";
          return 2;
+diff --git a/tests/ops/test_gdn_gating_proj.cpp b/tests/ops/test_gdn_gating_proj.cpp
+index 8241e7996351b46c5d8d322700462d794eec05d8..246838d2051239b9ca5a21baef1f79fd50e1f0df 100644
+--- a/tests/ops/test_gdn_gating_proj.cpp
++++ b/tests/ops/test_gdn_gating_proj.cpp
+@@ -757,6 +757,16 @@ int main() {
+     failures += verify_workspace_capacity_contract(
+         kQwen35, plan_endpoints(kQwen35, device.multiprocessor_count(), 3905));
+ 
++    for (const auto geometry : {Geometry{"dense_0_8b", 1024, 16, false},
++                                Geometry{"dense_2b", 2048, 16, true},
++                                Geometry{"dense_4b", 2560, 32, false},
++                                Geometry{"dense_9b", 4096, 32, true}}) {
++        for (const int tokens : {1, 2, 8, 17, 128, 257}) {
++            failures += run_projection_case(geometry, tokens, 0xA000u + tokens, execution);
++            failures += run_norm_projection_case(geometry, tokens, 0xB000u + tokens, norm_execution);
++        }
++    }
++
+     // Every registered 27B projection route, including predicated and full token tiles, and both
+     // sides of each sm_86 residency boundary (768/769, 1664/1665, 3456/3457).
+     for (const std::int32_t tokens :
+diff --git a/tests/ops/test_gdn_replay_fold.cpp b/tests/ops/test_gdn_replay_fold.cpp
+index e31e747b02731bf92b5807a96fb26132cd5b590d..f57a4b3b3a5c52699907788c673424525d387c19 100644
+--- a/tests/ops/test_gdn_replay_fold.cpp
++++ b/tests/ops/test_gdn_replay_fold.cpp
+@@ -662,6 +662,7 @@ int run_record_fold_rounds() {
+                  device_destinations = to_device(destination_steps);
+ 
+     int failures = 0;
++
+     const std::vector<std::int32_t> commits =
+         kWidth == 64   ? std::vector<std::int32_t>{1, 4, 15, 16, 17, 31, 32, 33, 47, 48, 63, 64}
+         : kWidth == 32 ? std::vector<std::int32_t>{1, 4, 15, 16, 17, 31, 32}
+@@ -789,6 +790,16 @@ int main(int argc, char** argv) {
+     }
+ 
+     int failures = 0;
++    if (argc == 2 && std::string(argv[1]) == "--dense-family-only") {
++        for (const FoldProfile profile : {FoldProfile{18, 16, 6144}, FoldProfile{24, 32, 8192}}) {
++            for (int commit = 0; commit <= 6; ++commit)
++                failures += run_case(profile, 6, 1, {commit}, 2400U + commit, true);
++            failures += run_case(profile, 6, 2, {0, 6}, 2410U, true);
++            failures += run_case(profile, 6, 2, {1, 3}, 2411U);
++        }
++        std::cout << (failures ? "FAIL" : "OK") << " dense-family gdn_replay_fold\n";
++        return failures ? 1 : 0;
++    }
+     if (argc == 2 && std::string(argv[1]) == "--wide-only") {
+         for (const int width : {33, 48, 64}) {
+             for (int commit = 0; commit <= width; ++commit) {
+@@ -813,7 +824,7 @@ int main(int argc, char** argv) {
+         return failures == 0 ? 0 : 1;
+     }
+     if (argc != 1) {
+-        std::cerr << "usage: ninfer_gdn_replay_fold_test [--ngram-only|--wide-only]\n";
++        std::cerr << "usage: ninfer_gdn_replay_fold_test [--ngram-only|--wide-only|--dense-family-only]\n";
+         return 2;
+     }
+     failures += run_case({48, 48, 10240}, 2, 1, {2}, 1801U, true);
 diff --git a/tests/ops/test_sliding_window_attention.cpp b/tests/ops/test_sliding_window_attention.cpp
 index af68951e0f7ad4863bcd59b4428057578b70048a..78dba9e8c4e1b09e77272deba54046597b75b4ef 100644
 --- a/tests/ops/test_sliding_window_attention.cpp
@@ -21005,6 +22144,105 @@ index 08a9358be49a29994e8942360734a891db713648..aac03d81fb175dbd3e0b6ca9e3aac4c5
          from .sources.gguf_source import GGUFSource
  
          return GGUFSource(path)
+diff --git a/tools/convert/dense_geometry.py b/tools/convert/dense_geometry.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c47433ef3112d0836a6f9ad357ae533cd59144b5
+--- /dev/null
++++ b/tools/convert/dense_geometry.py
+@@ -0,0 +1,93 @@
++"""Qwen3.5 dense GGUF geometry and exporter head-order transforms."""
++from dataclasses import dataclass
++import numpy as np
++
++
++@dataclass(frozen=True)
++class DenseGeometry:
++    hidden: int
++    intermediate: int
++    vocabulary: int
++    layers: int
++    attention_heads: int
++    kv_heads: int
++    attention_dim: int
++    key_heads: int
++    value_heads: int
++    head_dim: int
++    taps: int
++    tied: bool
++
++    @classmethod
++    def from_config(cls, config):
++        if "num_experts" in config:
++            raise ValueError("the dense GGUF recipe does not accept MoE weights")
++        result = cls(*(config[k] for k in (
++            "hidden_size", "intermediate_size", "vocab_size", "num_hidden_layers",
++            "num_attention_heads", "num_key_value_heads", "head_dim",
++            "linear_num_key_heads", "linear_num_value_heads", "linear_key_head_dim",
++            "linear_conv_kernel_dim", "tie_word_embeddings")))
++        if (any(type(v) is not int or v <= 0 for v in tuple(vars(result).values())[:-1])
++                or type(result.tied) is not bool
++                or config["linear_value_head_dim"] != result.head_dim
++                or result.value_heads % result.key_heads
++                or result.attention_heads % result.kv_heads
++                or result.attention_dim != 256 or result.head_dim != 128 or result.taps != 4
++                or (result.attention_heads, result.kv_heads) not in ((8, 2), (16, 4), (24, 4))
++                or result.hidden % 128 or result.key_heads != 16
++                or result.value_heads not in (16, 32, 48)
++                or config["layer_types"] != ["full_attention" if result.full_attention(i)
++                    else "linear_attention" for i in range(result.layers)]):
++            raise ValueError("invalid dense GGUF head geometry or layer layout")
++        return result
++
++    @property
++    def query_rows(self): return self.attention_heads * self.attention_dim
++
++    @property
++    def kv_rows(self): return self.kv_heads * self.attention_dim
++
++    @property
++    def key_dim(self): return self.key_heads * self.head_dim
++
++    @property
++    def value_dim(self): return self.value_heads * self.head_dim
++
++    @property
++    def channels(self): return 2 * self.key_dim + self.value_dim
++
++    @staticmethod
++    def full_attention(layer): return (layer + 1) % 4 == 0
++
++    def expected_header(self):
++        return {"general.architecture": "qwen35", **{"qwen35." + key: value for key, value in {
++            "embedding_length": self.hidden, "feed_forward_length": self.intermediate,
++            "attention.head_count": self.attention_heads, "attention.head_count_kv": self.kv_heads,
++            "attention.key_length": self.attention_dim, "attention.value_length": self.attention_dim,
++            "ssm.conv_kernel": self.taps, "ssm.state_size": self.head_dim,
++            "ssm.group_count": self.key_heads, "ssm.time_step_rank": self.value_heads,
++            "ssm.inner_size": self.value_dim, "full_attention_interval": 4}.items()}}
++
++    def untile(self, array, head_dim):
++        if array.shape[0] != self.value_heads * head_dim:
++            raise ValueError("GDN value-head row count differs from config")
++        per_key = self.value_heads // self.key_heads
++        heads = np.arange(self.value_heads)
++        indices = (heads % per_key) * self.key_heads + heads // per_key
++        return np.ascontiguousarray(array.reshape(self.value_heads, head_dim, *array.shape[1:])
++                                   [indices].reshape(array.shape))
++
++    def untiled_rows(self, base):
++        per_key = self.value_heads // self.key_heads
++        def select(begin, end):
++            r = np.arange(begin, end, dtype=np.int64)
++            heads, lanes = r // self.head_dim, r % self.head_dim
++            return base + ((heads % per_key) * self.key_heads + heads // per_key) * self.head_dim + lanes
++        return select
++
++    def attention_rows(self, gate):
++        def select(begin, end):
++            r = np.arange(begin, end, dtype=np.int64)
++            d = self.attention_dim
++            return (r // d) * 2 * d + (d if gate else 0) + r % d
++        return select
 diff --git a/tools/convert/dflash2_gguf.py b/tools/convert/dflash2_gguf.py
 new file mode 100644
 index 0000000000000000000000000000000000000000..0e271fc6cc4466cfe0cfb156d1a656b9c5b0e235
@@ -21417,7 +22655,7 @@ index 0000000000000000000000000000000000000000..0e271fc6cc4466cfe0cfb156d1a656b9
 +
 +__all__ = ["DraftSource", "TensorSignature", "draft_blocks", "validate"]
 diff --git a/tools/convert/gguf_blocks.py b/tools/convert/gguf_blocks.py
-index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0bdd5d8d50 100644
+index 23174618a8c4fefb292d10f1247057cfbe4ceb28..67862b6f517059e40548d56f9d4f57207b7499cf 100644
 --- a/tools/convert/gguf_blocks.py
 +++ b/tools/convert/gguf_blocks.py
 @@ -1,17 +1,19 @@
@@ -21439,11 +22677,11 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
  
  The GDN controls ``ssm_alpha`` and ``ssm_beta`` are BF16 operands of the Engine. Exporters store
 -them as BF16 words or as Q8_0 blocks (Underdog-Saluki and similar releases), whose values are
-+them as BF16 words or quantized blocks (for example Q8_0 in Underdog-Saluki releases), whose values are
++them as BF16 words, F32/F16 or quantized blocks (for example Q8_0 in Underdog-Saluki releases), whose values are
  rounded to BF16: the one place a stored value changes.
  
  Vision comes from the release's ``mmproj`` GGUF (``--source vision=mmproj.gguf``) with the official
-@@ -28,9 +30,11 @@ import torch
+@@ -28,133 +30,96 @@ import torch
  
  from tools.artifact.formats import GGUF_FORMATS_BY_TYPE
  
@@ -21454,18 +22692,186 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
 -from .sources.gguf import GGUFFile
 +from .sources.gguf import GGUFFile, TYPE_NAMES
  from .sources.logical import EncodedRows, LogicalSource, array_source
- from .ternary import (
-     ATTENTION_HEAD_DIM,
-@@ -60,7 +64,7 @@ from .ternary import (
- 
- MTP_BLOCK = LAYERS
- # The storage the GDN controls may have (gdn_control_source).
+-from .ternary import (
+-    ATTENTION_HEAD_DIM,
+-    ATTENTION_KV_ROWS,
+-    ATTENTION_QUERY_ROWS,
+-    GDN_CHANNELS,
+-    GDN_HEAD_DIM,
+-    GDN_KEY_DIM,
+-    GDN_KEY_HEADS,
+-    GDN_TAPS,
+-    GDN_VALUE_DIM,
+-    GDN_VALUE_HEADS,
+-    HIDDEN,
+-    INTERMEDIATE,
+-    LAYERS,
+-    VOCABULARY,
+-    RowMap,
+-    _direct,
+-    _flat,
+-    _norm,
+-    attention_rows,
+-    full_attention,
+-    rows,
+-    untile,
+-    untiled_rows,
+-)
+-
+-MTP_BLOCK = LAYERS
+-# The storage the GDN controls may have (gdn_control_source).
 -GDN_CONTROL_TYPES = ("BF16", "Q8_0")
-+GDN_CONTROL_TYPES = ("BF16", *(TYPE_NAMES[type_id] for type_id in GGUF_FORMATS_BY_TYPE))
+-
+-EXPECTED_HEADER = {
+-    "general.architecture": "qwen35",
+-    "qwen35.embedding_length": HIDDEN,
+-    "qwen35.feed_forward_length": INTERMEDIATE,
+-    "qwen35.attention.head_count": 24,
+-    "qwen35.attention.head_count_kv": 4,
+-    "qwen35.attention.key_length": ATTENTION_HEAD_DIM,
+-    "qwen35.attention.value_length": ATTENTION_HEAD_DIM,
+-    "qwen35.ssm.conv_kernel": GDN_TAPS,
+-    "qwen35.ssm.state_size": GDN_HEAD_DIM,
+-    "qwen35.ssm.group_count": GDN_KEY_HEADS,
+-    "qwen35.ssm.time_step_rank": GDN_VALUE_HEADS,
+-    "qwen35.ssm.inner_size": GDN_VALUE_DIM,
+-    "qwen35.full_attention_interval": 4,
+-}
+-
+-
+-def _attention_tensors(prefix: str) -> dict[str, tuple[tuple[int, ...], str]]:
++from .ternary import RowMap, _direct, _flat, _norm, rows
++from .dense_geometry import DenseGeometry
++
++GDN_CONTROL_TYPES = ("F32", "F16", "BF16", *(TYPE_NAMES[t] for t in GGUF_FORMATS_BY_TYPE))
++
++
++def _attention_tensors(prefix: str, geom: DenseGeometry) -> dict[str, tuple[tuple[int, ...], str]]:
+     return {
+-        prefix + "attn_q.weight": ((2 * ATTENTION_QUERY_ROWS, HIDDEN), "blocks"),
+-        prefix + "attn_k.weight": ((ATTENTION_KV_ROWS, HIDDEN), "blocks"),
+-        prefix + "attn_v.weight": ((ATTENTION_KV_ROWS, HIDDEN), "blocks"),
+-        prefix + "attn_output.weight": ((HIDDEN, ATTENTION_QUERY_ROWS), "blocks"),
+-        prefix + "attn_q_norm.weight": ((ATTENTION_HEAD_DIM,), "F32"),
+-        prefix + "attn_k_norm.weight": ((ATTENTION_HEAD_DIM,), "F32"),
++        prefix + "attn_q.weight": ((2 * geom.query_rows, geom.hidden), "blocks"),
++        prefix + "attn_k.weight": ((geom.kv_rows, geom.hidden), "blocks"),
++        prefix + "attn_v.weight": ((geom.kv_rows, geom.hidden), "blocks"),
++        prefix + "attn_output.weight": ((geom.hidden, geom.query_rows), "blocks"),
++        prefix + "attn_q_norm.weight": ((geom.attention_dim,), "F32"),
++        prefix + "attn_k_norm.weight": ((geom.attention_dim,), "F32"),
+     }
  
- EXPECTED_HEADER = {
-     "general.architecture": "qwen35",
-@@ -166,7 +170,9 @@ def validate(gguf: GGUFFile) -> None:
+ 
+-def _layer_tensors(prefix: str) -> dict[str, tuple[tuple[int, ...], str]]:
++def _layer_tensors(prefix: str, geom: DenseGeometry) -> dict[str, tuple[tuple[int, ...], str]]:
+     return {
+-        prefix + "attn_norm.weight": ((HIDDEN,), "F32"),
+-        prefix + "post_attention_norm.weight": ((HIDDEN,), "F32"),
+-        prefix + "ffn_gate.weight": ((INTERMEDIATE, HIDDEN), "blocks"),
+-        prefix + "ffn_up.weight": ((INTERMEDIATE, HIDDEN), "blocks"),
+-        prefix + "ffn_down.weight": ((HIDDEN, INTERMEDIATE), "blocks"),
++        prefix + "attn_norm.weight": ((geom.hidden,), "F32"),
++        prefix + "post_attention_norm.weight": ((geom.hidden,), "F32"),
++        prefix + "ffn_gate.weight": ((geom.intermediate, geom.hidden), "blocks"),
++        prefix + "ffn_up.weight": ((geom.intermediate, geom.hidden), "blocks"),
++        prefix + "ffn_down.weight": ((geom.hidden, geom.intermediate), "blocks"),
+     }
+ 
+ 
+-def expected_tensors(mtp: bool) -> dict[str, tuple[tuple[int, ...], str | tuple[str, ...]]]:
++def expected_tensors(mtp: bool, geom: DenseGeometry) -> dict[str, tuple[tuple[int, ...], str | tuple[str, ...]]]:
+     """Row-major shape and kind of every tensor: "blocks" (any stored ggml block type) or the
+     ggml type names it may have."""
+ 
+     out = {
+-        "token_embd.weight": ((VOCABULARY, HIDDEN), "blocks"),
+-        "output.weight": ((VOCABULARY, HIDDEN), "blocks"),
+-        "output_norm.weight": ((HIDDEN,), "F32"),
++        "token_embd.weight": ((geom.vocabulary, geom.hidden), "blocks"),
++        "output.weight": ((geom.vocabulary, geom.hidden), "blocks"),
++        "output_norm.weight": ((geom.hidden,), "F32"),
+     }
+-    for layer in range(LAYERS):
++    if geom.tied:
++        del out["output.weight"]
++    for layer in range(geom.layers):
+         p = f"blk.{layer}."
+-        out |= _layer_tensors(p)
+-        if full_attention(layer):
+-            out |= _attention_tensors(p)
++        out |= _layer_tensors(p, geom)
++        if geom.full_attention(layer):
++            out |= _attention_tensors(p, geom)
+             continue
+         out |= {
+-            p + "attn_qkv.weight": ((GDN_CHANNELS, HIDDEN), "blocks"),
+-            p + "attn_gate.weight": ((GDN_VALUE_DIM, HIDDEN), "blocks"),
+-            p + "ssm_out.weight": ((HIDDEN, GDN_VALUE_DIM), "blocks"),
+-            p + "ssm_alpha.weight": ((GDN_VALUE_HEADS, HIDDEN), GDN_CONTROL_TYPES),
+-            p + "ssm_beta.weight": ((GDN_VALUE_HEADS, HIDDEN), GDN_CONTROL_TYPES),
+-            p + "ssm_a": ((GDN_VALUE_HEADS,), "F32"),
+-            p + "ssm_dt.bias": ((GDN_VALUE_HEADS,), "F32"),
+-            p + "ssm_conv1d.weight": ((GDN_CHANNELS, GDN_TAPS), "F32"),
+-            p + "ssm_norm.weight": ((GDN_HEAD_DIM,), "F32"),
++            p + "attn_qkv.weight": ((geom.channels, geom.hidden), "blocks"),
++            p + "attn_gate.weight": ((geom.value_dim, geom.hidden), "blocks"),
++            p + "ssm_out.weight": ((geom.hidden, geom.value_dim), "blocks"),
++            p + "ssm_alpha.weight": ((geom.value_heads, geom.hidden), GDN_CONTROL_TYPES),
++            p + "ssm_beta.weight": ((geom.value_heads, geom.hidden), GDN_CONTROL_TYPES),
++            p + "ssm_a": ((geom.value_heads,), "F32"),
++            p + "ssm_dt.bias": ((geom.value_heads,), "F32"),
++            p + "ssm_conv1d.weight": ((geom.channels, geom.taps), "F32"),
++            p + "ssm_norm.weight": ((geom.head_dim,), "F32"),
+         }
+     if mtp:
+-        p = f"blk.{MTP_BLOCK}."
+-        out |= _layer_tensors(p) | _attention_tensors(p)
++        p = f"blk.{geom.layers}."
++        out |= _layer_tensors(p, geom) | _attention_tensors(p, geom)
+         out |= {
+-            p + "nextn.eh_proj.weight": ((HIDDEN, 2 * HIDDEN), "blocks"),
+-            p + "nextn.enorm.weight": ((HIDDEN,), "F32"),
+-            p + "nextn.hnorm.weight": ((HIDDEN,), "F32"),
+-            p + "nextn.shared_head_norm.weight": ((HIDDEN,), "F32"),
++            p + "nextn.eh_proj.weight": ((geom.hidden, 2 * geom.hidden), "blocks"),
++            p + "nextn.enorm.weight": ((geom.hidden,), "F32"),
++            p + "nextn.hnorm.weight": ((geom.hidden,), "F32"),
++            p + "nextn.shared_head_norm.weight": ((geom.hidden,), "F32"),
+         }
+     return out
+ 
+ 
+-def has_mtp(gguf: GGUFFile) -> bool:
+-    return f"blk.{MTP_BLOCK}.nextn.eh_proj.weight" in gguf.tensors
++def has_mtp(gguf: GGUFFile, geom: DenseGeometry) -> bool:
++    return f"blk.{geom.layers}.nextn.eh_proj.weight" in gguf.tensors
+ 
+ 
+-def validate(gguf: GGUFFile) -> None:
+-    """Refuse any GGUF that is not a dense Qwen3.5/3.8-27B text tower of stored block types."""
++def validate(gguf: GGUFFile, geom: DenseGeometry) -> None:
++    """Reject a GGUF whose dense text tower, MTP head or stored tensor types differ from config."""
+ 
+-    for key, expected in EXPECTED_HEADER.items():
++    for key, expected in geom.expected_header().items():
+         if gguf.kv.get(key) != expected:
+             raise ValueError(
+                 f"{gguf.path}: {key} = {gguf.kv.get(key)!r}, expected {expected!r}"
+             )
+-    mtp = has_mtp(gguf)
++    mtp = has_mtp(gguf, geom)
+     blocks = gguf.kv.get("qwen35.block_count")
+-    if blocks != LAYERS + (1 if mtp else 0):
+-        raise ValueError(f"{gguf.path}: {blocks} blocks, expected {LAYERS} (+1 for MTP)")
+-    expected = expected_tensors(mtp)
++    if blocks != geom.layers + (1 if mtp else 0):
++        raise ValueError(f"{gguf.path}: {blocks} blocks, expected {geom.layers} (+1 for MTP)")
++    expected = expected_tensors(mtp, geom)
+     if set(gguf.tensors) != set(expected):
+         missing = sorted(set(expected) - set(gguf.tensors))[:5]
+         extra = sorted(set(gguf.tensors) - set(expected))[:5]
+@@ -166,7 +131,9 @@ def validate(gguf: GGUFFile) -> None:
          if kind == "blocks":
              accepted = info.type_id in GGUF_FORMATS_BY_TYPE
          else:
@@ -21476,19 +22882,160 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
          if info.shape != shape or not accepted:
              raise ValueError(f"{gguf.path}: {name} is {info.type_name} {info.shape}")
      end = max(info.offset + info.nbytes for info in gguf.tensors.values())
-@@ -272,9 +278,9 @@ def block_source(
+@@ -270,16 +237,19 @@ def block_source(
+     )
  
- def gdn_control_source(gguf: GGUFFile, tensor: str) -> LogicalSource:
+ 
+-def gdn_control_source(gguf: GGUFFile, tensor: str) -> LogicalSource:
++def gdn_control_source(gguf: GGUFFile, tensor: str, geom: DenseGeometry) -> LogicalSource:
      """A GDN A/B control as its BF16 operand, its value heads in the grouped order: BF16 words
 -    as stored, Q8_0 values rounded to BF16."""
 +    as stored, quantized values rounded to BF16."""
  
 -    if gguf.info(tensor).type_id == GGML_Q8_0:
+-        values = untile(_dequantize(gguf, tensor, 0, GDN_VALUE_HEADS).numpy(), 1)
 +    if gguf.info(tensor).type_id in GGUF_FORMATS_BY_TYPE:
-         values = untile(_dequantize(gguf, tensor, 0, GDN_VALUE_HEADS).numpy(), 1)
++        values = geom.untile(_dequantize(gguf, tensor, 0, geom.value_heads).numpy(), 1)
          return array_source(
              torch.from_numpy(np.ascontiguousarray(values)).to(torch.bfloat16), tensor
-@@ -461,22 +467,39 @@ def text_sources(
+         )
+-    words = untile(gguf.read_bf16_words(tensor), 1)
++    if gguf.info(tensor).type_name != "BF16":
++        values = geom.untile(gguf.read_direct(tensor), 1)
++        return array_source(torch.from_numpy(np.ascontiguousarray(values)).to(torch.bfloat16), tensor)
++    words = geom.untile(gguf.read_bf16_words(tensor), 1)
+     return array_source(
+         torch.from_numpy(np.ascontiguousarray(words.view(np.int16))).view(torch.bfloat16),
+         tensor,
+@@ -358,27 +328,27 @@ def q8_native_source(
+                          raw_source.read_values, encoded)
+ 
+ 
+-def tiled_input_columns() -> np.ndarray:
++def tiled_input_columns(geom: DenseGeometry) -> np.ndarray:
+     """For each stored ``ssm_out`` column (tiled value heads), its grouped activation element."""
+ 
+-    columns = np.arange(GDN_VALUE_DIM, dtype=np.int64)
+-    tiled_head, lane = columns // GDN_HEAD_DIM, columns % GDN_HEAD_DIM
+-    per_key = GDN_VALUE_HEADS // GDN_KEY_HEADS
+-    grouped_head = (tiled_head % GDN_KEY_HEADS) * per_key + tiled_head // GDN_KEY_HEADS
+-    return (grouped_head * GDN_HEAD_DIM + lane).astype(np.int32)
++    columns = np.arange(geom.value_dim, dtype=np.int64)
++    tiled_head, lane = columns // geom.head_dim, columns % geom.head_dim
++    per_key = geom.value_heads // geom.key_heads
++    grouped_head = (tiled_head % geom.key_heads) * per_key + tiled_head // geom.key_heads
++    return (grouped_head * geom.head_dim + lane).astype(np.int32)
+ 
+ 
+ def _attention(
+-    gguf: GGUFFile, g: str, a: str
++    gguf: GGUFFile, g: str, a: str, geom: DenseGeometry
+ ) -> tuple[dict[str, LogicalSource], dict[str, LogicalSource]]:
+-    q_shape, kv_shape = (ATTENTION_QUERY_ROWS, HIDDEN), (ATTENTION_KV_ROWS, HIDDEN)
++    q_shape, kv_shape = (geom.query_rows, geom.hidden), (geom.kv_rows, geom.hidden)
+     encoded = {
+-        a + "query": block_source(gguf, g + "attn_q.weight", q_shape, attention_rows(False)),
+-        a + "gate": block_source(gguf, g + "attn_q.weight", q_shape, attention_rows(True)),
++        a + "query": block_source(gguf, g + "attn_q.weight", q_shape, geom.attention_rows(False)),
++        a + "gate": block_source(gguf, g + "attn_q.weight", q_shape, geom.attention_rows(True)),
+         a + "key": block_source(gguf, g + "attn_k.weight", kv_shape, rows()),
+         a + "value": block_source(gguf, g + "attn_v.weight", kv_shape, rows()),
+         a + "output": block_source(
+-            gguf, g + "attn_output.weight", (HIDDEN, ATTENTION_QUERY_ROWS), rows()
++            gguf, g + "attn_output.weight", (geom.hidden, geom.query_rows), rows()
+         ),
+     }
+     direct = {
+@@ -389,13 +359,13 @@ def _attention(
+ 
+ 
+ def _layer(
+-    gguf: GGUFFile, g: str, p: str
++    gguf: GGUFFile, g: str, p: str, geom: DenseGeometry
+ ) -> tuple[dict[str, LogicalSource], dict[str, LogicalSource]]:
+     encoded = {
+-        p + "mlp/gate": block_source(gguf, g + "ffn_gate.weight", (INTERMEDIATE, HIDDEN), rows()),
+-        p + "mlp/up": block_source(gguf, g + "ffn_up.weight", (INTERMEDIATE, HIDDEN), rows()),
++        p + "mlp/gate": block_source(gguf, g + "ffn_gate.weight", (geom.intermediate, geom.hidden), rows()),
++        p + "mlp/up": block_source(gguf, g + "ffn_up.weight", (geom.intermediate, geom.hidden), rows()),
+         p + "mlp/down": block_source(
+-            gguf, g + "ffn_down.weight", (HIDDEN, INTERMEDIATE), rows()
++            gguf, g + "ffn_down.weight", (geom.hidden, geom.intermediate), rows()
+         ),
+     }
+     direct = {
+@@ -406,77 +376,94 @@ def _layer(
+ 
+ 
+ def text_sources(
+-    gguf: GGUFFile, *, mtp: bool
++    gguf: GGUFFile, *, mtp: bool, geom: DenseGeometry
+ ) -> tuple[dict[str, LogicalSource], dict[str, LogicalSource]]:
+     """Encoded block sources and direct sources of every GGUF-backed text (and MTP) parameter."""
+ 
+     encoded = {
+         "text/token_embedding": block_source(
+-            gguf, "token_embd.weight", (VOCABULARY, HIDDEN), rows()
++            gguf, "token_embd.weight", (geom.vocabulary, geom.hidden), rows()
+         ),
+-        "text/output_head": block_source(gguf, "output.weight", (VOCABULARY, HIDDEN), rows()),
++        "text/output_head": block_source(gguf, "token_embd.weight" if geom.tied else "output.weight", (geom.vocabulary, geom.hidden), rows()),
+     }
+     direct = {"text/final_norm": _norm(gguf, "output_norm.weight", True)}
+-    for layer in range(LAYERS):
++    for layer in range(geom.layers):
+         g, p = f"blk.{layer}.", f"text/layers/{layer}/"
+-        e, d = _layer(gguf, g, p)
++        e, d = _layer(gguf, g, p, geom)
+         encoded |= e
+         direct |= d
+-        if full_attention(layer):
+-            e, d = _attention(gguf, g, p + "attention/")
++        if geom.full_attention(layer):
++            e, d = _attention(gguf, g, p + "attention/", geom)
+             encoded |= e
+             direct |= d
+             continue
+         n = p + "gdn/"
+         qkv = g + "attn_qkv.weight"
+-        encoded[n + "query"] = block_source(gguf, qkv, (GDN_KEY_DIM, HIDDEN), rows())
+-        encoded[n + "key"] = block_source(gguf, qkv, (GDN_KEY_DIM, HIDDEN), rows(GDN_KEY_DIM))
++        encoded[n + "query"] = block_source(gguf, qkv, (geom.key_dim, geom.hidden), rows())
++        encoded[n + "key"] = block_source(gguf, qkv, (geom.key_dim, geom.hidden), rows(geom.key_dim))
+         encoded[n + "value"] = block_source(
+-            gguf, qkv, (GDN_VALUE_DIM, HIDDEN), untiled_rows(2 * GDN_KEY_DIM)
++            gguf, qkv, (geom.value_dim, geom.hidden), geom.untiled_rows(2 * geom.key_dim)
+         )
+         encoded[n + "z"] = block_source(
+-            gguf, g + "attn_gate.weight", (GDN_VALUE_DIM, HIDDEN), untiled_rows(0)
++            gguf, g + "attn_gate.weight", (geom.value_dim, geom.hidden), geom.untiled_rows(0)
+         )
+         # Tiled input columns: the Use gathers the grouped activation (see tiled_input_columns).
+         encoded[n + "output"] = block_source(
+-            gguf, g + "ssm_out.weight", (HIDDEN, GDN_VALUE_DIM), rows()
++            gguf, g + "ssm_out.weight", (geom.hidden, geom.value_dim), rows()
+         )
+         for role, tensor in (("a_projection", "ssm_alpha.weight"), ("b_projection", "ssm_beta.weight")):
+-            direct[n + role] = gdn_control_source(gguf, g + tensor)
+-        ssm_a = untile(gguf.read_direct(g + "ssm_a"), 1).astype(np.float64)
++            direct[n + role] = gdn_control_source(gguf, g + tensor, geom)
++        ssm_a = geom.untile(gguf.read_direct(g + "ssm_a"), 1).astype(np.float64)
+         if not np.all(ssm_a < 0):
+             raise ValueError(f"{g}ssm_a must be strictly negative (-exp(A_log))")
+         direct[n + "a_log"] = _direct(
+             np.log(-ssm_a).astype(np.float32), torch.float32, g + "ssm_a"
+         )
+         direct[n + "dt_bias"] = _direct(
+-            untile(gguf.read_direct(g + "ssm_dt.bias"), 1), torch.float32, g + "ssm_dt.bias"
++            geom.untile(gguf.read_direct(g + "ssm_dt.bias"), 1), torch.float32, g + "ssm_dt.bias"
+         )
+         taps = gguf.read_direct(g + "ssm_conv1d.weight")
+         channels = np.concatenate(
+-            [taps[: 2 * GDN_KEY_DIM], untile(taps[2 * GDN_KEY_DIM :], GDN_HEAD_DIM)]
++            [taps[: 2 * geom.key_dim], geom.untile(taps[2 * geom.key_dim :], geom.head_dim)]
+         )
+         direct[n + "convolution"] = _direct(
+             channels.T, torch.bfloat16, g + "ssm_conv1d.weight"
          )
          direct[n + "norm"] = _norm(gguf, g + "ssm_norm.weight", False)
      if mtp:
@@ -21508,20 +23055,20 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
 -            ("final_norm", "nextn.shared_head_norm.weight"),
 -        ):
 -            direct["mtp/" + role] = _norm(gguf, g + tensor, True)
-+        e, d = mtp_sources(gguf)
++        e, d = mtp_sources(gguf, geom)
 +        encoded.update(e)
 +        direct.update(d)
 +    return encoded, direct
 +
 +
-+def mtp_sources(gguf: GGUFFile) -> tuple[dict[str, LogicalSource], dict[str, LogicalSource]]:
-+    """Dense 27B MTP blocks with the exporter's zero-centred (+1 stored) norms.
++def mtp_sources(gguf: GGUFFile, geom: DenseGeometry) -> tuple[dict[str, LogicalSource], dict[str, LogicalSource]]:
++    """Dense Qwen3.5 MTP blocks with the exporter's zero-centred (+1 stored) norms.
 +
 +    This is the same MTP schema used by the dense GGUF recipe. A ternary target
 +    may use it independently; its main weights need not be GGUF block formats.
 +    """
-+    required = {name: value for name, value in expected_tensors(True).items()
-+                if name.startswith(f"blk.{MTP_BLOCK}.")}
++    required = {name: value for name, value in expected_tensors(True, geom).items()
++                if name.startswith(f"blk.{geom.layers}.")}
 +    for name, (shape, kind) in required.items():
 +        info = gguf.info(name)
 +        if info.shape != shape:
@@ -21530,13 +23077,13 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
 +            block_format(gguf, name)
 +        elif info.type_name not in ("F32", "F16", "BF16"):
 +            raise ValueError(f"{name}: MTP norm must be a direct format")
-+    g, p = f"blk.{MTP_BLOCK}.", "mtp/layers/0/"
-+    encoded, direct = _layer(gguf, g, p)
-+    e, d = _attention(gguf, g, p + "attention/")
++    g, p = f"blk.{geom.layers}.", "mtp/layers/0/"
++    encoded, direct = _layer(gguf, g, p, geom)
++    e, d = _attention(gguf, g, p + "attention/", geom)
 +    encoded.update(e)
 +    direct.update(d)
 +    encoded["mtp/input_projection"] = block_source(
-+        gguf, g + "nextn.eh_proj.weight", (HIDDEN, 2 * HIDDEN), rows())
++        gguf, g + "nextn.eh_proj.weight", (geom.hidden, 2 * geom.hidden), rows())
 +    for role, tensor in (("embedding_norm", "nextn.enorm.weight"),
 +                         ("hidden_norm", "nextn.hnorm.weight"),
 +                         ("final_norm", "nextn.shared_head_norm.weight")):
@@ -21544,7 +23091,7 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
      return encoded, direct
  
  
-@@ -513,6 +536,7 @@ def _companions(model, recipe, sources) -> None:
+@@ -513,6 +500,7 @@ def _companions(model, recipe, sources) -> None:
      """Vision from the mmproj GGUF in the official formats; DFlash2 as the official recipe."""
  
      vision = _vision_source(model, sources) if "vision" in model.components else None
@@ -21552,7 +23099,7 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
      for name, parameter in model.parameters.items():
          if name.startswith("vision/"):
              source = model.source(name, vision)
-@@ -528,6 +552,11 @@ def _companions(model, recipe, sources) -> None:
+@@ -528,6 +516,11 @@ def _companions(model, recipe, sources) -> None:
                      source=source,
                  )
          elif name.startswith(("dflash/", "dflash2/")) and parameter.projection:
@@ -21564,8 +23111,90 @@ index 23174618a8c4fefb292d10f1247057cfbe4ceb28..ae215687cc4b2396c09cbf20fff8bd0b
              if name.endswith(
                  (
                      "/attention_conv/kernel_projection",
+@@ -552,25 +545,19 @@ def _group_same_format(recipe, names: list[str], formats: dict[str, str]) -> Non
+         recipe.group(names)
+ 
+ 
+-def qwen3_8_27b_gguf(model, recipe, sources):
+-    """A Qwen3.8-27B GGUF in its own block formats from `--source gguf=MODEL.gguf`."""
++def qwen3_5_dense_gguf(model, recipe, sources):
++    """A dense Qwen3.5-family GGUF in its own block formats from `--source gguf=MODEL.gguf`."""
+ 
+-    config = model.config
+-    if (
+-        "num_experts" in config
+-        or config["hidden_size"] != HIDDEN
+-        or config["num_hidden_layers"] != LAYERS
+-    ):
+-        raise ValueError("the GGUF block recipe requires the Qwen3.8-27B Dense geometry")
++    geom = DenseGeometry.from_config(model.config)
+     gguf = sources["gguf"]
+     if not isinstance(gguf, GGUFFile):
+         raise ValueError("--source gguf must name the model's .gguf file")
+-    validate(gguf)
++    validate(gguf, geom)
+     mtp = "mtp" in model.components
+-    if mtp and not has_mtp(gguf):
+-        raise ValueError(f"{gguf.path}: the MTP component needs an -mtp GGUF (blk.64.nextn.*)")
++    if mtp and not has_mtp(gguf, geom):
++        raise ValueError(f"{gguf.path}: the MTP component needs an -mtp GGUF (blk.{geom.layers}.nextn.*)")
+     _companions(model, recipe, sources)
+-    encoded, direct = text_sources(gguf, mtp=mtp)
++    encoded, direct = text_sources(gguf, mtp=mtp, geom=geom)
+     formats = {}
+     for name, source in encoded.items():
+         format = source.read_encoded(0, 1).format
+@@ -585,11 +572,13 @@ def qwen3_8_27b_gguf(model, recipe, sources):
+             method=cast_direct,
+             source=source,
+         )
+-    prefixes = [f"text/layers/{layer}/" for layer in range(LAYERS)]
++    if geom.tied:
++        recipe.share("text/output_head", "text/token_embedding")
++    prefixes = [f"text/layers/{layer}/" for layer in range(geom.layers)]
+     if mtp:
+         prefixes.append("mtp/layers/0/")
+     for p in prefixes:
+-        if p.startswith("text/") and not full_attention(int(p.split("/")[2])):
++        if p.startswith("text/") and not geom.full_attention(int(p.split("/")[2])):
+             n = p + "gdn/"
+             qkv = [n + "query", n + "key", n + "value"]
+             recipe.group(qkv + [n + "z"] if formats[n + "z"] == formats[n + "query"] else qkv)
+@@ -601,27 +590,26 @@ def qwen3_8_27b_gguf(model, recipe, sources):
+             )
+         _group_same_format(recipe, [p + "mlp/gate", p + "mlp/up"], formats)
+     columns = AuxiliaryValue(
+-        "int32", (GDN_VALUE_DIM,), tiled_input_columns().astype("<i4").tobytes()
++        "int32", (geom.value_dim,), tiled_input_columns(geom).astype("<i4").tobytes()
+     )
+-    for layer in range(LAYERS):
+-        if full_attention(layer):
++    for layer in range(geom.layers):
++        if geom.full_attention(layer):
+             continue
+         name = f"text/layers/{layer}/gdn/output"
+         for input_name in model.parameters[name].inputs:
+             recipe.use(name, input_name, auxiliaries={"input_columns": columns})
+ 
+ 
+-RECIPES = {"qwen3_8_27b_gguf": qwen3_8_27b_gguf}
++RECIPES = {"qwen3_5_dense_gguf": qwen3_5_dense_gguf}
+ 
+ __all__ = [
+-    "EXPECTED_HEADER",
+     "RECIPES",
+     "block_format",
+     "block_source",
+     "expected_tensors",
+     "gdn_control_source",
+     "has_mtp",
+-    "qwen3_8_27b_gguf",
++    "qwen3_5_dense_gguf",
+     "q2_native_source",
+     "q8_native_source",
+     "text_sources",
 diff --git a/tools/convert/ternary.py b/tools/convert/ternary.py
-index 204dda382192976fcdb89849ba9dcff701baa275..66a2c33803585445f82729fc32f2e4072d869e2b 100644
+index 204dda382192976fcdb89849ba9dcff701baa275..85196616a5509c41307d972f5de0795343ec7816 100644
 --- a/tools/convert/ternary.py
 +++ b/tools/convert/ternary.py
 @@ -157,7 +157,10 @@ def validate(gguf: GGUFFile) -> None:
@@ -21580,7 +23209,7 @@ index 204dda382192976fcdb89849ba9dcff701baa275..66a2c33803585445f82729fc32f2e407
              raise ValueError(f"{gguf.path}: {name} is {info.type_name} {info.shape}")
      end = max(info.offset + info.nbytes for info in gguf.tensors.values())
      if gguf.data_bytes_available < end:
-@@ -437,7 +440,34 @@ def bonsai2_27b_ternary(model, recipe, sources):
+@@ -437,7 +440,35 @@ def bonsai2_27b_ternary(model, recipe, sources):
              )
  
  
@@ -21596,7 +23225,8 @@ index 204dda382192976fcdb89849ba9dcff701baa275..66a2c33803585445f82729fc32f2e407
 +    if "mtp" not in model.components:
 +        raise ValueError("the GGUF MTP recipe requires --components text,mtp")
 +    bonsai2_27b_ternary(model, recipe, sources)
-+    encoded, direct = mtp_sources(sources["gguf"])
++    from .dense_geometry import DenseGeometry
++    encoded, direct = mtp_sources(sources["gguf"], DenseGeometry.from_config(model.config))
 +    formats = {}
 +    for name, source in encoded.items():
 +        formats[name] = source.read_encoded(0, 1).format
