@@ -202,7 +202,7 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     await page.selectOption("[data-theme-select]", "blue");
     await page.reload();
     await page.waitForFunction(
-      () => document.querySelector('[data-gpu="load"]').textContent === "42",
+      () => document.querySelector('[data-gpu="load"]')?.textContent === "42",
     );
     assert.equal(await page.locator("#app").getAttribute("data-theme"), "blue");
     if (shot)
@@ -294,7 +294,7 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     await page.fill("#api-key", "test-key");
     await page.locator("[data-auth] button").click();
     await page.waitForFunction(
-      () => document.querySelector('[data-gpu="load"]').textContent === "42",
+      () => document.querySelector('[data-gpu="load"]')?.textContent === "42",
     );
     assert.equal(
       await page.evaluate(() => localStorage.getItem("kvmem-monitor-key")),
