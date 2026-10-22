@@ -437,6 +437,36 @@ specifically on missing samples (zero), confirming that the regression detects
 the defect. The fixed source and executable were restored afterwards.
 This diagnostic uses transfer verification and a small window: extended-request
 wall times were 8.92 and 9.61 seconds with the fix versus 4.70 seconds in the
-single negative-control run. The extra cost is unresolved; these are not warmed
-throughput measurements or evidence of unchanged performance. The model returned
+single negative-control run. These single runs were not warmed throughput
+measurements. The model returned
 EOS for these supplied assistant prefixes, so answer quality is not qualified.
+
+Follow-up attribution on the same GPU/model used one diagnostic binary with a
+temporary old-guard switch: fixed/old/fixed process order, three identical
+base-plus-extension cycles per process, with the first cycle reported separately.
+All extensions restored 46 tokens and evaluated the same 2471-token prompt.
+Cold first requests took 9.99/8.84/8.90 seconds; subsequent fixed requests took
+4.15-4.57 seconds and old-guard requests 4.15-4.16 seconds. The ordinary model
+prefill work was 3.353-3.366 seconds in both variants. Accepted attention feedback
+(including copies, synchronization, graph and Pressure updates) totaled
+13.1-13.4 milliseconds with the fix versus about 0.12 milliseconds with the old
+guard. Warm restore times varied from 375 to 735 milliseconds and explain much
+of the residual end-to-end variation; this small series is not a general
+no-regression performance qualification.
+
+The several-second delay occurs before attention feedback in the first
+210-token model prefill chunk, which took 4.77-5.72 seconds versus about
+328 milliseconds on later cycles. An independent empty CUDA cache reproduced a
+10.05-second first request, with 5.775 seconds inside layer-index 13's FFN host
+call, while its final GPU wait was only 1.3 milliseconds; the next request took
+4.51 seconds. This supports model-operator first-use compilation/loading cache
+cost, not graph sampling, as the cause of the large gap. The exact CUDA internal
+API responsible was not isolated. The server's built-in warmup only submits
+"hi" with four output tokens, so it does not exercise this large-prefill path.
+
+Nsight tracing changed cold-start timing and is excluded from the latency
+comparison. Forcing `CUDA_MODULE_LOADING=EAGER` did not solve the issue: its first
+request took 27.49 seconds and its second 4.20 seconds; the setting was not adopted.
+All temporary timers and diagnostic switches were removed and the normal server
+rebuilt. Future timing comparisons must warm the relevant prompt/chunk shape and
+report cold-start latency separately from steady-state inference.
