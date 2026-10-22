@@ -25,14 +25,10 @@ inline double parse_graph_alpha(const char* text) {
         throw std::invalid_argument("KVMem graph alpha must be finite and in [0,1]");
     return value;
 }
-inline void validate_query_scoring(QueryScorer scorer, int aggregation, bool lrfu, double alpha) {
+inline void validate_query_scoring(QueryScorer scorer, int aggregation, double alpha) {
     if ((scorer != QueryScorer::PageSoftmax && scorer != QueryScorer::MeanQCosine) ||
         (aggregation != 0 && aggregation != 1) || !std::isfinite(alpha) || alpha < 0 || alpha > 1)
         throw std::invalid_argument("invalid KVMem Query scoring configuration");
-    if (scorer == QueryScorer::PageSoftmax && lrfu)
-        throw std::invalid_argument("page-softmax does not support LRFU; use --no-kvmem-lrfu");
-    if (scorer == QueryScorer::MeanQCosine && alpha != 0)
-        throw std::invalid_argument("meanq-cosine does not support graph propagation; use alpha 0");
 }
 inline double parse_lrfu_real(const char* text, bool allow_zero) {
     char* end = nullptr;

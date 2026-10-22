@@ -407,15 +407,17 @@ std::vector<double> propagate_query_scores(const std::vector<double>& raw,
     double total = 0;
     std::unordered_set<uint64_t> seen;
     for (size_t i = 0; i < n; ++i) {
-        finite_mass(raw[i]);
+        check(std::isfinite(raw[i]), "nonfinite Query graph seed");
         check(frame.starts[i] % graph.block_tokens == 0 && seen.insert(frame.starts[i]).second,
               "invalid or duplicate Query graph identity");
-        if (frame.transport_mask[i]) { allowed.emplace(frame.starts[i], i); total += raw[i]; }
+        if (frame.transport_mask[i]) { allowed.emplace(frame.starts[i], i); total += std::max(0., raw[i]); }
     }
     check(std::isfinite(total), "graph seed sum overflow");
     if (allowed.size() <= 1 || total == 0 || alpha == 0) return raw;
     std::vector<double> seed(n, 0), output = raw;
-    for (const auto& item : allowed) seed[item.second] = raw[item.second]/total;
+    // Transport positive evidence only. Negative cosine residuals remain local:
+    // result = min(raw, 0) + G(max(raw, 0)). History is never a graph seed.
+    for (const auto& item : allowed) seed[item.second] = std::max(0., raw[item.second])/total;
     auto transfer = [&](size_t i, size_t j, double weight) {
         const double delta = total*seed[i]*weight;
         output[i] -= delta; output[j] += delta;
@@ -446,9 +448,11 @@ std::vector<double> propagate_query_scores(const std::vector<double>& raw,
                 transfer(source->second, target->second, alpha*.5*edge.mass/denominator);
         }
     }
-    for (auto& value : output) {
-        check(std::isfinite(value) && value >= -1e-12*std::max(1., total), "invalid graph propagation result");
-        value = std::max(0., value);
+    for (size_t i = 0; i < n; ++i) {
+        const double residual = std::min(0., raw[i]);
+        check(std::isfinite(output[i]) && output[i] >= residual-1e-12*std::max(1., total),
+              "invalid graph propagation result");
+        output[i] = std::max(residual, output[i]);
     }
     return output;
 }

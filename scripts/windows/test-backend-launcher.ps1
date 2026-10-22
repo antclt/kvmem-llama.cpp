@@ -40,7 +40,16 @@ try {
             $agg = if ($cosine -or $variant['ScoreAggregation'] -eq 'max') { 'max' } else { 'mean' }
             if ($chosen.argv[[array]::IndexOf($chosen.argv,'--kvmem-score-agg')+1] -ne $agg) { throw 'GQA aggregation default lost' }
         }
-        foreach ($conflict in @(@{NoLrfu=$false}, @{QueryScorer='meanq-cosine';GraphAlpha=0.2}, @{LrfuLambda=0.3})) {
+        foreach ($scorer in 'page-softmax','meanq-cosine') {
+            foreach ($history in $false,$true) { foreach ($alpha in 0,0.2,1) {
+                $chosen = & $launcher @common -Backend $backend -Model $model -QueryScorer $scorer -Lrfu:$history -GraphAlpha $alpha | ConvertFrom-Json
+                if (($chosen.argv -contains '--kvmem-lrfu') -ne $history -or
+                    [double]$chosen.argv[[array]::IndexOf($chosen.argv,'--kvmem-graph-alpha')+1] -ne $alpha) {
+                    throw 'Independent Query controls were lost in the launch plan'
+                }
+            } }
+        }
+        foreach ($conflict in @(@{Lrfu=$true;NoLrfu=$true}, @{GraphAlpha=-0.1}, @{LrfuLambda=0.3})) {
             $rejected = $false
             try { $null = & $launcher @common -Backend $backend -Model $model @conflict } catch { $rejected = $true }
             if (!$rejected) { throw 'Accepted an incompatible scoring combination' }

@@ -9338,7 +9338,7 @@ index 0000000000000000000000000000000000000000..5d7887107ac74e1407c89231672e4a53
 +} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/storage/memory_statistics.cpp b/src/models/qwen3_5/program/storage/memory_statistics.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..dbe537342ebde519817bc406b80bcdb0c29ff313
+index 0000000000000000000000000000000000000000..10ee49e6f5f253ce8420f21731cbea3cb7210621
 --- /dev/null
 +++ b/src/models/qwen3_5/program/storage/memory_statistics.cpp
 @@ -0,0 +1,331 @@
@@ -9508,8 +9508,8 @@ index 0000000000000000000000000000000000000000..dbe537342ebde519817bc406b80bcdb0
 +            scores=kvmem::mean_query_cosine_scores(*state.statistics,query,uint32_t(frame.starts.size()),aggregation);
 +        } else {
 +            scores=memory_query_scorer->score(*state.statistics,query,frame,aggregation);
-+            scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : state.graph,kvmem_options.graph_alpha);
 +        }
++        scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : state.graph,kvmem_options.graph_alpha);
 +    } catch (...) {
 +        if(prefix) state.statistics->restore_mean_checkpoint(frontier,previous);
 +        throw;
@@ -11824,7 +11824,7 @@ index c056b1f50025966fc6f804d680d2977ff73ae57a..5332603b7fa60096b0081b9fdebc008a
 +
  } // namespace ninfer::runtime
 diff --git a/src/runtime/engine/model_instance.cpp b/src/runtime/engine/model_instance.cpp
-index d738cd25d51654a844224538418f7cf255c26d45..da5ca95f4868c9b7c37ec6d3f45c05f3df55dbaf 100644
+index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5415b9cc8 100644
 --- a/src/runtime/engine/model_instance.cpp
 +++ b/src/runtime/engine/model_instance.cpp
 @@ -1,4 +1,6 @@
@@ -11927,7 +11927,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..da5ca95f4868c9b7c37ec6d3f45c05f3
 +    }
 +    if(!options.kvmem.query_max_tokens) throw std::invalid_argument("KVMem Query cap must be positive");
 +    kvmem::validate_query_scoring(options.kvmem.query_meanq_cosine ? kvmem::QueryScorer::MeanQCosine : kvmem::QueryScorer::PageSoftmax,
-+        options.kvmem.score_agg_max ? 1 : 0,options.kvmem.lrfu,options.kvmem.graph_alpha);
++        options.kvmem.score_agg_max ? 1 : 0,options.kvmem.graph_alpha);
 +    if (options.kvmem.selected_tokens)
 +        publish_diagnostic(options.diagnostic_observer, DiagnosticLevel::Info,
 +            "KVMEM_SCORING scorer=%s agg=%s lrfu=%d lambda=%.6g top_frac=%.6g graph_alpha=%.6g",
@@ -13703,7 +13703,7 @@ index e8245d645c1419441c2397bd7381edf216c75a57..ddf618d92b29234a35f6bf5a05456dcb
      std::uint64_t requests_failed_total_         = 0;
      std::uint64_t requests_rejected_total_       = 0;
 diff --git a/src/serve/serve_options.cpp b/src/serve/serve_options.cpp
-index 8fc5043c46b464507bb1bd5cc898936dbab34510..2762c8d764ab475ad4964acd36eeb5dc193133a4 100644
+index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf0ad340bc 100644
 --- a/src/serve/serve_options.cpp
 +++ b/src/serve/serve_options.cpp
 @@ -1,6 +1,9 @@
@@ -13728,7 +13728,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..2762c8d764ab475ad4964acd36eeb5dc
 +            "  --kvmem-lrfu / --no-kvmem-lrfu  Query history (default on only for cosine)\n"
 +            "  --kvmem-lrfu-lambda X        history decay in [0,1] (default 0.5)\n"
 +            "  --kvmem-lrfu-top-frac X      history hit fraction in (0,1] (default 0.9)\n"
-+            "  --kvmem-graph-alpha X        page-softmax propagation in [0,1] (default 0.2; cosine 0)\n"
++            "  --kvmem-graph-alpha X        Query propagation in [0,1] (default: page-softmax 0.2; cosine 0)\n"
 +           "  --kvmem-query-max-tokens N  cap per-token Query capture to its tail (default 512)\n"
 +            "  --kvmem-gen-reserve N         positive append workspace R (default 1024), aligned to 64\n"
 +           "  --kvmem-host-mib N            positive Host native KV payload budget H, MiB (default 16384)\n"
@@ -21861,7 +21861,7 @@ index 982f4ec8969c36b08bac58727d230fe7f2ac1c18..7444638be6959fd867f6039233c34c28
      run_test("admission waits for Program boundary", test_admission_waits_for_program_boundary);
      run_test("session publication order", test_session_publication_order_controls_tied_source);
 diff --git a/tests/test_serve_options.cpp b/tests/test_serve_options.cpp
-index a257ca089f1634b494dc9229d33335aa3ac01f39..9da347963e46ca56ce9eb730643d3254b65eba43 100644
+index a257ca089f1634b494dc9229d33335aa3ac01f39..59e1290fbadf91f855f870796b5d69b051556d8d 100644
 --- a/tests/test_serve_options.cpp
 +++ b/tests/test_serve_options.cpp
 @@ -2,9 +2,12 @@
@@ -21911,7 +21911,7 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..9da347963e46ca56ce9eb730643d3254
      failures += check(parse({"ninfer-serve", "model.ninfer"}).speculative.draft_min_p == 0,
                        "draft confidence must be opt-in");
      for (const auto* floor : {"0", "0.3", "1"}) {
-@@ -62,6 +83,550 @@ int main() {
+@@ -62,6 +83,559 @@ int main() {
                                   "--expert-dma-share", share}).hybrid_experts.dma_share == std::stof(share),
                            "server did not preserve an explicit hybrid DMA share");
      }
@@ -21969,6 +21969,15 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..9da347963e46ca56ce9eb730643d3254
 +                "Query scorer options were not mapped to Engine");
 +            args.push_back("--no-kvmem-lrfu");
 +            failures += check(!make_engine_options(parse(args)).kvmem.lrfu,"explicit history disable was lost");
++            for (const bool history : {false,true}) for (const auto* alpha : {"0","0.2","1"}) {
++                auto combined = memory_args;
++                combined.insert(combined.end(), {"--kvmem-query-scorer",scorer,"--kvmem-score-agg",aggregation,
++                    "--kvmem-graph-alpha",alpha,history ? "--kvmem-lrfu" : "--no-kvmem-lrfu"});
++                const auto options = make_engine_options(parse(combined)).kvmem;
++                failures += check(options.query_meanq_cosine == cosine && options.lrfu == history &&
++                    options.graph_alpha == std::stod(alpha) && options.score_agg_max == (aggregation == "max"),
++                    "orthogonal Query options were coupled in Engine mapping");
++            }
 +        }
 +    }
 +    {
@@ -22462,7 +22471,7 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..9da347963e46ca56ce9eb730643d3254
      const auto archive = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens",
                                  "5", "--ngram-draft-tokens", "63", "--ngram-archive-mib", "512",
                                  "--ngram-session-mib", "128", "--ngram-native-sessions"});
-@@ -98,7 +663,6 @@ int main() {
+@@ -98,7 +672,6 @@ int main() {
      for (const auto& tail : std::vector<std::vector<std::string>>{
               {"--ngram-draft-tokens", "64"},
               {"--ngram-min-match", "3"},
@@ -22470,7 +22479,7 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..9da347963e46ca56ce9eb730643d3254
               {"--spec", "none"}}) {
          std::vector<std::string> arguments{"ninfer-serve",
                                             "model.ninfer",
-@@ -134,15 +698,11 @@ int main() {
+@@ -134,15 +707,11 @@ int main() {
      }
      failures += check(parse({"ninfer-serve", "model.ninfer"}).speculative.ngram_draft_tokens == 0,
                        "ngram default needs a neural backend");
@@ -22491,7 +22500,7 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..9da347963e46ca56ce9eb730643d3254
  
      const auto mtp_ngram = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens",
                                    "3", "--ngram-draft-tokens", "15"});
-@@ -181,14 +741,12 @@ int main() {
+@@ -181,14 +750,12 @@ int main() {
              } catch (const std::invalid_argument&) { rejected = true; }
              failures += check(rejected, "unsupported neural/ngram pair admitted");
          }
@@ -22512,7 +22521,7 @@ index a257ca089f1634b494dc9229d33335aa3ac01f39..9da347963e46ca56ce9eb730643d3254
          const auto wide_single =
              parse({"ninfer-serve", "model.ninfer", "--spec", backend, "--draft-tokens", "3",
                     "--ngram-draft-tokens", "63", "--max-concurrency", "1"});
-@@ -1647,3 +2205,11 @@ int main() {
+@@ -1647,3 +2214,11 @@ int main() {
  
      return failures == 0 ? 0 : 1;
  }

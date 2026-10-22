@@ -124,7 +124,7 @@ NInfer KVMem KV formats: `bf16`, `int8`, `fp8`, `nvfp4`, `k8v4`, `rk8v4`, `rk4v4
 
 ### Retrieval and SSD
 
-Source builds default to C: each query token/head computes softmax over eligible Mean-K pages, followed by one-hop local/attention propagation. Prefill and decode pressure use accumulated accepted attention over resident candidates, without graph propagation or cold recall. Sink, recent and retained media still consume B. Startup options also support Mean-Q cosine (with optional LRFU) and normalized GQA max; page-softmax plus LRFU is rejected. See [algorithm, limits and validation](docs/graph-recall.md).
+Source builds default to C: each query token/head computes softmax over eligible Mean-K pages, followed by one-hop local/attention propagation. Prefill and decode pressure use accumulated accepted attention over resident candidates, without graph propagation or cold recall. Sink, recent and retained media still consume B. Startup options independently select page-softmax or Mean-Q cosine, GQA mean or max, graph strength and optional LRFU. Both scorers apply graph propagation before history accumulation; cosine transports only positive evidence while retaining negative residuals. See [algorithm, limits and validation](docs/graph-recall.md).
 
 Run these examples with workers **built from this source**:
 

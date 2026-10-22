@@ -172,11 +172,26 @@ Page-softmax max takes each head's page probabilities, the maximum within each
 KV head's GQA group, then renormalizes that group over eligible pages. It averages
 KV groups/layers and sums Query tokens. Mean-Q cosine first sums Query rows and
 uses the existing cosine scorer: max compares individual Query heads; mean folds
-heads within a GQA group before cosine. Its signed scores retain their ordering;
-no clipping or offset enters LRFU. History is committed once at accepted prefill,
-not on probes, tool continuations or speculative rejected rows.
+heads within a GQA group before cosine.
 
-Page-softmax plus LRFU and meanq-cosine plus nonzero graph alpha are rejected.
+Scorer, graph propagation and LRFU are independent controls. Both scorers follow
+the same order: current Query scores, one-hop graph propagation, LRFU preview
+(when enabled), then selection. History is committed once at accepted prefill,
+not on probes, tool continuations or speculative rejected rows. Repeated probes
+derive from the same committed history. Accumulated history is never a graph seed.
+
+For signed cosine scores `s`, propagate only `p = max(s, 0)` and retain the
+negative residual locally: `r = min(s, 0) + G_alpha(p)`. Thus negative evidence
+cannot spread as negative attention mass, but its ordering is not erased by a
+global clamp or offset. A negative page can receive positive evidence from
+neighbors. Alpha zero returns `s` exactly; an all-nonpositive vector also remains
+unchanged. Nonnegative page-softmax scores use the existing propagation formula.
+Mandatory pages remain excluded from transport. LRFU consumes `r` using its
+existing hit-fraction and decay rules: history represents relevance to previous
+queries, not just the current one. Page-softmax still sums Query tokens, so
+longer queries can contribute more history mass; enabling LRFU does not add a
+new per-query normalization or make scores comparable between scorers.
+
 Selecting a scorer alone does not enable KVMem; use `--kvmem` or a positive budget.
 Startup diagnostics print the resolved configuration.
 
@@ -185,6 +200,8 @@ Startup diagnostics print the resolved configuration.
 --kvmem-query-scorer meanq-cosine --kvmem-score-agg max --no-kvmem-lrfu
 --kvmem-query-scorer page-softmax --kvmem-score-agg mean --kvmem-graph-alpha 0.2
 --kvmem-query-scorer page-softmax --kvmem-score-agg max --kvmem-graph-alpha 0.2
+--kvmem-query-scorer page-softmax --kvmem-graph-alpha 0.2 --kvmem-lrfu
+--kvmem-query-scorer meanq-cosine --kvmem-graph-alpha 0.2 --kvmem-lrfu
 ```
 
 Windows launchers expose `-QueryScorer`, `-ScoreAggregation`, `-GraphAlpha`,
