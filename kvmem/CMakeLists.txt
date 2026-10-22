@@ -19,6 +19,10 @@ set(KVMEM_CORE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "KVMem s
 # Call only after the embedding backend has enabled CUDA. Host-only builds keep
 # the independent reference and never acquire a CUDA runtime dependency.
 function(kvmem_enable_cuda_recall)
+    # The standalone tests and embedding backend can both request this target.
+    if (TARGET kvmem-recall-cuda)
+        return()
+    endif()
     if (NOT CMAKE_CUDA_COMPILER)
         message(FATAL_ERROR "Enable CUDA before configuring its recall scorer")
     endif()
