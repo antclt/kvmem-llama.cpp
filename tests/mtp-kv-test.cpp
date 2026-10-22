@@ -692,7 +692,7 @@ static void check_gdn_transactions(llama_model * model, ggml_type type, int draf
 int main(int argc, char ** argv) {
     const bool target_only = argc == 3 && std::string(argv[2]) == "--target-only";
     if (argc != 2 && !target_only) {
-        std::fprintf(stderr, "Usage: %s model.gguf [--target-only] (requires CUDA; full suite requires Qwen 27B MTP weights)\n", argv[0]);
+        std::fprintf(stderr, "Usage: %s model.gguf [--target-only] (requires CUDA; full suite requires dense Qwen3.5 weights with a matching MTP head)\n", argv[0]);
         return argc == 1 ? 77 : 1;
     }
     try {

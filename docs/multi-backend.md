@@ -10,6 +10,8 @@ Windows 入口 `scripts/windows/start-backend.ps1` 在启动时选择 `llamacpp`
 
 切换后端时的参数、默认值和执行行为区别见 [两后端实现差异](multi-backend-differences.md)，包括 ninfer 固定 64-token block、recent 默认且至少保留一页（参数至少 64 tokens）、R 与输出上限，以及 Host 和磁盘预算的不同含义。
 
+Qwen3.5 dense 的 0.8B/2B/4B/9B/27B 规格与原生 MTP 适配范围、4B 两后端验收及模型复用方法见 [家族适配记录](qwen35-dense-family.md)。
+
 ## 启动
 
 ninfer 预编译包可直接运行默认脚本。将包含文本、视觉和 MTP 组件的模型放到包根目录，命名为 `model.ninfer`；包和模型的完整路径不能含中文字符。

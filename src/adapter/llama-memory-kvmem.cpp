@@ -325,7 +325,8 @@ bool llama_memory_kvmem::gdn_replay_commit(llama_context * ctx, uint32_t n_keep)
     for (const auto & group : replay.groups) {
         const auto * layers = static_cast<const ggml_cuda_gdn_replay_layer *>(ggml_backend_buffer_get_base(group->descriptors.get()));
         if (cudaSetDevice(group->device) != cudaSuccess ||
-                !ggml_backend_cuda_gdn_fold(layers, group->layers, n_keep, recr_->replay_capacity, group->stream)) {
+                !ggml_backend_cuda_gdn_fold(layers, group->layers, n_keep, recr_->replay_capacity,
+                    model_.hparams.ssm_n_group, model_.hparams.ssm_dt_rank, group->stream)) {
             ok = false;
             break;
         }
@@ -718,7 +719,8 @@ static kvmem_pool_plan kvmem_compute_pool(
             if (cparams.n_rs_seq > 0) {
                 const uint64_t state = static_cast<uint64_t>(model.hparams.n_embd_r() + model.hparams.n_embd_s()) * sizeof(float);
                 // Match the five FP32 ReplaySSM record widths in llama_memory_recurrent.
-                const uint64_t records = static_cast<uint64_t>(2048 + 6144 + 48 + 48 + 10240) *
+                const uint64_t records = (3 * uint64_t(model.hparams.ssm_n_group) * model.hparams.ssm_d_state +
+                        2 * uint64_t(model.hparams.ssm_d_inner) + 2 * uint64_t(model.hparams.ssm_dt_rank)) *
                         sizeof(float) * (1 + cparams.n_rs_seq);
                 mtp_state_bytes[dev] += kvmem_current_execution().params.mtp_state == 2 ? state + records : state * (1 + cparams.n_rs_seq);
             }

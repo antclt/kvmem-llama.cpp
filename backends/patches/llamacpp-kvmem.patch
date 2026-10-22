@@ -415,14 +415,14 @@ index 7a65d8121b1c1f135bef3586058b83c07ce0cb73..9c4fd6c2aefb9452dba2691f36fbd0b7
      //
      // Utils
 diff --git a/ggml/include/ggml-cuda.h b/ggml/include/ggml-cuda.h
-index 1cd81eeaebcdf4abcd46c87ba1a9a46e275aa12b..4665d07f277933fb1afa98514da0db91cb2510c5 100644
+index 1cd81eeaebcdf4abcd46c87ba1a9a46e275aa12b..649d9713339e0ab9887d61b7ad0ec4c357bc1c7f 100644
 --- a/ggml/include/ggml-cuda.h
 +++ b/ggml/include/ggml-cuda.h
 @@ -42,6 +42,23 @@ GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
  
  GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
  
-+// FP32 Qwen GDN layout: 128-wide heads, 16 key heads, 48 value heads, conv width 4.
++// FP32 Qwen GDN layout: 128-wide heads, model-defined key/value head counts, conv width 4.
 +struct ggml_cuda_gdn_replay_layer {
 +    float * state;
 +    float * conv;
@@ -437,7 +437,7 @@ index 1cd81eeaebcdf4abcd46c87ba1a9a46e275aa12b..4665d07f277933fb1afa98514da0db91
 +// n_keep == 0 is a no-op; records outside the accepted prefix are never read.
 +GGML_BACKEND_API bool ggml_backend_cuda_gdn_fold(
 +        const struct ggml_cuda_gdn_replay_layer * layers,
-+        int n_layers, int n_keep, int capacity, void * stream);
++        int n_layers, int n_keep, int capacity, int key_heads, int value_heads, void * stream);
 +
  #ifdef  __cplusplus
  }
@@ -695,7 +695,7 @@ index 7a73e138ef1fc3040ef00a2280c0344e2b4ae5f1..6d6a8fa1b82402d5334815316df31bd0
              : state_out_base + (iv3 * H + iv1) * S_v * S_v;
  
 diff --git a/ggml/src/ggml-cuda/gated_delta_net.cu b/ggml/src/ggml-cuda/gated_delta_net.cu
-index ae2374cbcdd79b3383d622b85d3d6a086c8d5e5e..703528d319e9cbf86e12abe8abd707ae78818c85 100644
+index ae2374cbcdd79b3383d622b85d3d6a086c8d5e5e..4dc05e805362290b1739cb0f87e5f13ef8873e3c 100644
 --- a/ggml/src/ggml-cuda/gated_delta_net.cu
 +++ b/ggml/src/ggml-cuda/gated_delta_net.cu
 @@ -1,5 +1,6 @@
@@ -760,12 +760,12 @@ index ae2374cbcdd79b3383d622b85d3d6a086c8d5e5e..703528d319e9cbf86e12abe8abd707ae
          ggml_cuda_gdn_mma_args args = ggml_cuda_gdn_mma_args_from_tensor(dst);
          args.state_out = state_d;
          if (ggml_cuda_gdn_mma_launch(ctx.device, args, stream)) {
-@@ -391,3 +385,73 @@ void ggml_cuda_op_gated_delta_net_fused_cache(
+@@ -391,3 +385,77 @@ void ggml_cuda_op_gated_delta_net_fused_cache(
          ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_cuda_gated_delta_net_fused_cache cache) {
      ggml_cuda_op_gated_delta_net_impl(ctx, dst, &cache);
  }
 +
-+static __global__ void gdn_fold_f32(const ggml_cuda_gdn_replay_layer * layers, int n_keep) {
++static __global__ void gdn_fold_f32(const ggml_cuda_gdn_replay_layer * layers, int n_keep, int key_heads, int value_heads) {
 +    constexpr int width = ggml_cuda_get_physical_warp_size();
 +    constexpr int lanes_per_col = width / gdn_cols_per_warp;
 +    constexpr int rows = 128 / lanes_per_col;
@@ -781,15 +781,15 @@ index ae2374cbcdd79b3383d622b85d3d6a086c8d5e5e..703528d319e9cbf86e12abe8abd707ae
 +        s[r] = state[r * lanes_per_col + lane];
 +    }
 +    for (int t = 0; t < n_keep; ++t) {
-+        const float * key = layer.key + (t * 16 + head % 16) * 128;
++        const float * key = layer.key + (t * key_heads + head % key_heads) * 128;
 +        float k[rows];
 +#pragma unroll
 +        for (int r = 0; r < rows; ++r) {
 +            k[r] = key[r * lanes_per_col + lane];
 +        }
-+        const float decay = expf(layer.gate[t * 48 + head]);
++        const float decay = expf(layer.gate[t * value_heads + head]);
 +        const float delta = gdn_delta_f32<rows, lanes_per_col>(s, k, decay,
-+                layer.value[(t * 48 + head) * 128 + col], layer.beta[t * 48 + head]);
++                layer.value[(t * value_heads + head) * 128 + col], layer.beta[t * value_heads + head]);
 +#pragma unroll
 +        for (int r = 0; r < rows; ++r) {
 +            s[r] = gdn_update_f32(s[r], k[r], decay, delta);
@@ -801,16 +801,16 @@ index ae2374cbcdd79b3383d622b85d3d6a086c8d5e5e..703528d319e9cbf86e12abe8abd707ae
 +    }
 +}
 +
-+static __global__ void gdn_conv_fold_f32(const ggml_cuda_gdn_replay_layer * layers, int n_keep) {
++static __global__ void gdn_conv_fold_f32(const ggml_cuda_gdn_replay_layer * layers, int n_keep, int channels) {
 +    const int channel = blockIdx.x * blockDim.x + threadIdx.x;
-+    if (channel >= 10240) return;
++    if (channel >= channels) return;
 +    const auto layer = layers[blockIdx.y];
 +    float history[3];
 +#pragma unroll
 +    for (int i = 0; i < 3; ++i) {
 +        const int source = n_keep + i;
 +        history[i] = source < 3 ? layer.conv[channel * 3 + source]
-+                                : layer.conv_input[(source - 3) * 10240 + channel];
++                                : layer.conv_input[(source - 3) * channels + channel];
 +    }
 +#pragma unroll
 +    for (int i = 0; i < 3; ++i) {
@@ -819,19 +819,23 @@ index ae2374cbcdd79b3383d622b85d3d6a086c8d5e5e..703528d319e9cbf86e12abe8abd707ae
 +}
 +
 +bool ggml_backend_cuda_gdn_fold(const ggml_cuda_gdn_replay_layer * layers,
-+        int n_layers, int n_keep, int capacity, void * stream_ptr) {
++        int n_layers, int n_keep, int capacity, int key_heads, int value_heads, void * stream_ptr) {
 +    if (n_keep == 0) return true;
-+    if (!layers || n_layers <= 0 || n_keep < 0 || n_keep > capacity || capacity > 6) return false;
++    if (key_heads <= 0 || value_heads <= 0 || value_heads % key_heads != 0 ||
++            int64_t(2) * key_heads + value_heads > INT_MAX / 128 ||
++            n_keep < 0 || n_keep > capacity || capacity < 1 || capacity > 6) return false;
++    if (!layers || n_layers <= 0) return false;
++    const int channels = (2 * key_heads + value_heads) * 128;
 +    const auto stream = static_cast<cudaStream_t>(stream_ptr);
 +#if defined(GGML_USE_HIP)
 +    const int width = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 +    if (width != 32 && width != 64) return false;
-+    gdn_fold_f32<<<dim3(48, n_layers, 8), dim3(width, 4), 0, stream>>>(layers, n_keep);
++    gdn_fold_f32<<<dim3(value_heads, n_layers, 8), dim3(width, 4), 0, stream>>>(layers, n_keep, key_heads, value_heads);
 +#else
-+    gdn_fold_f32<<<dim3(48, n_layers, 8), dim3(32, 4), 0, stream>>>(layers, n_keep);
++    gdn_fold_f32<<<dim3(value_heads, n_layers, 8), dim3(32, 4), 0, stream>>>(layers, n_keep, key_heads, value_heads);
 +#endif
 +    if (cudaGetLastError() != cudaSuccess) return false;
-+    gdn_conv_fold_f32<<<dim3(40, n_layers), 256, 0, stream>>>(layers, n_keep);
++    gdn_conv_fold_f32<<<dim3((channels + 255) / 256, n_layers), 256, 0, stream>>>(layers, n_keep, channels);
 +    return cudaGetLastError() == cudaSuccess;
 +}
 diff --git a/ggml/src/ggml-cuda/gated_delta_net.cuh b/ggml/src/ggml-cuda/gated_delta_net.cuh
@@ -2078,10 +2082,10 @@ index 484eafb749910567b8c50ec36d46bdb678c75426..488c7a15e3ed1714f058a693347768eb
      ~llama_memory_hybrid() = default;
  
 diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
-index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf202d968c7 100644
+index 2893d819e5079de63e7ab39b45afc90fc6dd9165..c05f36aaecb46dd834fefa541e027ff8f10241ac 100644
 --- a/src/llama-memory-recurrent.cpp
 +++ b/src/llama-memory-recurrent.cpp
-@@ -25,14 +25,19 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -25,14 +25,22 @@ llama_memory_recurrent::llama_memory_recurrent(
                   uint32_t   mem_size,
                   uint32_t   n_seq_max,
                   uint32_t   n_rs_seq,
@@ -2098,12 +2102,15 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
 +    this->n_rs_seq = replay ? 0 : n_rs_seq;
 +    replay_capacity = replay ? n_rs_seq + 1 : 0;
 +    GGML_ASSERT(!replay || (mem_size == 1 && n_seq_max == 1 && n_rs_seq > 0 && n_rs_seq <= 5 &&
-+                type_r == GGML_TYPE_F32 && type_s == GGML_TYPE_F32 && hparams.ssm_d_inner == 6144 &&
-+                hparams.ssm_d_state == 128 && hparams.ssm_n_group == 16 && hparams.ssm_dt_rank == 48 && hparams.ssm_d_conv == 4));
++                type_r == GGML_TYPE_F32 && type_s == GGML_TYPE_F32 &&
++                hparams.ssm_d_state == 128 && hparams.ssm_d_conv == 4 &&
++                hparams.ssm_n_group > 0 && hparams.ssm_dt_rank > 0 &&
++                hparams.ssm_dt_rank % hparams.ssm_n_group == 0 &&
++                hparams.ssm_d_inner == hparams.ssm_dt_rank * hparams.ssm_d_state));
      rs_idx.assign(n_seq_max, 0);
  
      cells.clear();
-@@ -52,7 +57,7 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -52,7 +60,7 @@ llama_memory_recurrent::llama_memory_recurrent(
          if (it == ctx_map.end()) {
              ggml_init_params params = {
                  // r and s per layer, plus the separate PLE conv row where the model has one
@@ -2112,7 +2119,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
                  /*.mem_buffer =*/ NULL,
                  /*.no_alloc   =*/ true,
              };
-@@ -73,6 +78,7 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -73,6 +81,7 @@ llama_memory_recurrent::llama_memory_recurrent(
      r_l.resize(n_layer);
      s_l.resize(n_layer);
      p_l.resize(n_layer);
@@ -2120,7 +2127,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
  
      for (int i = 0; i < n_layer; i++) {
          if (filter && !filter(i)) {
-@@ -98,7 +104,7 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -98,7 +107,7 @@ llama_memory_recurrent::llama_memory_recurrent(
              throw std::runtime_error("failed to create ggml context for rs cache");
          }
  
@@ -2129,12 +2136,14 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
          ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
          ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
          ggml_format_name(r, "cache_r_l%d", i);
-@@ -106,6 +112,15 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -106,6 +115,17 @@ llama_memory_recurrent::llama_memory_recurrent(
          r_l[i] = r;
          s_l[i] = s;
  
 +        if (replay) {
-+            const int64_t widths[REPLAY_COUNT] = {2048, 6144, 48, 48, 10240};
++            const int64_t key_width = int64_t(hparams.ssm_n_group) * hparams.ssm_d_state;
++            const int64_t widths[REPLAY_COUNT] = {key_width, hparams.ssm_d_inner,
++                hparams.ssm_dt_rank, hparams.ssm_dt_rank, 2 * key_width + hparams.ssm_d_inner};
 +            for (int j = 0; j < REPLAY_COUNT; ++j) {
 +                auto * record = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, widths[j], replay_capacity);
 +                ggml_format_name(record, "gdn_record_%d_l%d", j, i);
@@ -2145,7 +2154,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
          // the PLE history needs its own row: Meta must mirror it while the delta-net conv state next door stays split
          if (hparams.ple_conv_state() > 0 && hparams.is_ple(i)) {
              ggml_tensor * p = ggml_new_tensor_2d(ctx, type_r, hparams.ple_conv_state(), n_rows);
-@@ -138,7 +153,7 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -138,7 +158,7 @@ llama_memory_recurrent::llama_memory_recurrent(
          const size_t memory_size_p = size_p_bytes();
  
          LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u seqs %2u rs_seq), R (%s): %7.2f MiB, S (%s): %7.2f MiB, P (%s): %7.2f MiB\n", __func__,
@@ -2154,7 +2163,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
                  ggml_type_name(type_r), (float)memory_size_r / (1024.0f * 1024.0f),
                  ggml_type_name(type_s), (float)memory_size_s / (1024.0f * 1024.0f),
                  ggml_type_name(type_r), (float)memory_size_p / (1024.0f * 1024.0f));
-@@ -146,6 +161,9 @@ llama_memory_recurrent::llama_memory_recurrent(
+@@ -146,6 +166,9 @@ llama_memory_recurrent::llama_memory_recurrent(
  }
  
  void llama_memory_recurrent::clear(bool data) {
@@ -2164,7 +2173,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
      for (int32_t i = 0; i < (int32_t) size; ++i) {
          cells[i].pos = -1;
          cells[i].seq_id.clear();
-@@ -495,6 +513,12 @@ llama_memory_context_ptr llama_memory_recurrent::init_update(llama_context * lct
+@@ -495,6 +518,12 @@ llama_memory_context_ptr llama_memory_recurrent::init_update(llama_context * lct
  }
  
  bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {
@@ -2177,7 +2186,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
      // simply remember the full state because it is very small for this type of cache
      // TODO: optimize
      auto org_cells = cells;
-@@ -787,6 +811,9 @@ size_t llama_memory_recurrent::size_p_bytes() const {
+@@ -787,6 +816,9 @@ size_t llama_memory_recurrent::size_p_bytes() const {
  
  void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
      GGML_UNUSED(flags);
@@ -2187,7 +2196,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
  
      std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
      std::vector<std::pair<uint32_t, uint32_t>> cell_ranges_data; // logical source row ranges
-@@ -868,6 +895,9 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
+@@ -868,6 +900,9 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
  
  void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
      GGML_UNUSED(flags);
@@ -2197,7 +2206,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
  
      uint32_t cell_count;
      io.read(&cell_count, sizeof(cell_count));
-@@ -895,6 +925,7 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
+@@ -895,6 +930,7 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
      if (n_rs_seq != 0) {
          set_rs_idx(seq_id, 0);
      }
@@ -2205,7 +2214,7 @@ index 2893d819e5079de63e7ab39b45afc90fc6dd9165..5566e5494f8ee4f0dc0101bd3728caf2
  }
  
  void llama_memory_recurrent::state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id) const {
-@@ -1353,6 +1384,48 @@ uint32_t llama_memory_recurrent_context::get_size() const {
+@@ -1353,6 +1389,48 @@ uint32_t llama_memory_recurrent_context::get_size() const {
      return mem->size;
  }
  

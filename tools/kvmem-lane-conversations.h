@@ -2,6 +2,7 @@
 
 // Included after the server's conversation payload and checkpoint helpers.
 class kvmem_lane_conversations {
+    friend struct kvmem_lane_conversations_test_access;
     using bundle_ptr = std::unique_ptr<llama_kvmem_store_bundle, decltype(&llama_kvmem_store_bundle_free)>;
     struct snapshot {
         kvmem_store_match match;
@@ -237,8 +238,8 @@ public:
             if (victim == entries_.end())
                 throw std::runtime_error("native KV capacity is reserved by other requests or retained lane owners");
             if (victim->first == op.outgoing) {
-                // finish() still names the outgoing owner. Reclaim its content
-                // while retaining that empty catalog node until handover ends.
+                // Reclaim the previous owner's content here; session quota
+                // enforcement can retire the empty catalog node afterwards.
                 auto& held = victim->second;
                 llama_kvmem_store_bundle_reset(held.parked.get());
                 llama_driver_drop_conversation(held.payload);
@@ -282,8 +283,10 @@ public:
                 auto target = entries_.find(op.id);
                 if (target != entries_.end()) target->second.committed = snapshot{};
                 if (op.attached && op.outgoing != op.id) entries_.at(op.outgoing).committed = snapshot{};
+                entries_.at(op.outgoing).switching = false;
             }
-            entries_.at(op.outgoing).switching = false;
+            // Successful attach released outgoing. Another lane may already
+            // have evicted it or reserved it for a different handover.
             enforce_sessions(op.lane);
             enforce_bytes();
         } catch (const std::exception & e) {
@@ -295,7 +298,7 @@ public:
             auto target = entries_.find(op.id);
             if (target != entries_.end()) target->second.busy = false;
             auto out = entries_.find(op.outgoing);
-            if (out != entries_.end()) { out->second.switching = false; out->second.committed = snapshot{}; }
+            if (!op.ready && out != entries_.end()) { out->second.switching = false; out->second.committed = snapshot{}; }
         }
         st.active_prompt.reset();
     }
