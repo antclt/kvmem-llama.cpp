@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(kvmem_llamacpp LANGUAGES CXX)
+option(KVMEM_CUDA_TESTS "Build the independent CUDA recall qualification" OFF)
+if (KVMEM_CUDA_TESTS)
+    enable_language(CUDA)
+endif()
 
 # Guard against a poisoned build directory. If the very first configure cannot
 # identify the compiler (clang++ not yet on PATH, for example), CMake never
@@ -38,6 +42,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 enable_testing()
 add_subdirectory(kvmem)
+if (KVMEM_CUDA_TESTS)
+    kvmem_enable_cuda_recall()
+    add_executable(graph_recall_cuda_test kvmem/tests/graph_recall_cuda_test.cpp)
+    target_link_libraries(graph_recall_cuda_test PRIVATE kvmem)
+    add_test(NAME graph_recall_cuda_test COMMAND graph_recall_cuda_test)
+endif()
 
 find_package(Threads REQUIRED)
 add_executable(kvmem-lane-pool-test tests/lane-pool-test.cpp)
@@ -113,6 +123,9 @@ if (KVMEM_BUILD_LLAMA)
         # let ggml select the local GPU architecture. This keeps the CUDA path
         # portable without changing its backend semantics.
         option(GGML_CUDA "ggml: use CUDA" ON)
+        if (GGML_CUDA)
+            enable_language(CUDA)
+        endif()
     else()
         # ROCm: the CUDA backend must stay off and no CUDA arch may be forced.
         set(GGML_CUDA OFF CACHE BOOL "ggml: use CUDA" FORCE)
@@ -217,6 +230,10 @@ if (KVMEM_BUILD_LLAMA)
     set(LLAMA_KVMEM ON CACHE BOOL "" FORCE)
     set(LLAMA_KVMEM_ROOT "${CMAKE_SOURCE_DIR}" CACHE PATH "" FORCE)
     add_subdirectory(backends/llamacpp)
+    if (GGML_CUDA AND NOT KVMEM_ROCM)
+        enable_language(CUDA)
+        kvmem_enable_cuda_recall()
+    endif()
 
     if (KVMEM_GPU_BACKEND STREQUAL "HIP")
         if (WIN32 AND EXISTS "${ROCM_PATH}/lib/llvm/amdgcn/bitcode/ocml.bc")
