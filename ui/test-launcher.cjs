@@ -241,6 +241,11 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  }
  assert.equal((await api('status')).body.state,'stopped','editing/templates/checks never start a service');
  // Model-free lifecycle feedback: pending request, loading, ready and failure.
+ const lifecycleGpu={uuid:'GPU-browser-lifecycle-fixture',name:'Browser lifecycle fixture'};
+ const lifecycleInfo=async route=>route.fulfill({json:{...info,gpus:[lifecycleGpu]}});
+ await page.route('**/api/launcher/info',lifecycleInfo);
+ await page.reload();await page.locator('[data-param=Backend]').waitFor();
+ await page.locator('[data-param=Backend]').selectOption('llamacpp');
  const navBefore=await page.locator('.s-nav').boundingBox();
  const chat=page.locator('[data-chat-link]');
  assert.equal(await chat.isVisible(),true);
@@ -249,7 +254,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  let lifecycle={state:'stopped',url:null};
  await page.route('**/api/launcher/status',route=>route.fulfill({json:lifecycle}));
  await page.locator('[data-param=Model]').fill('C:/models/test.gguf');
- if(info.gpus.length)for(const check of await page.locator('[data-gpu-choice]').all())await check.setChecked(await check.getAttribute('data-gpu-choice')===info.gpus[0].uuid);
+ await page.locator(`[data-gpu-choice="${lifecycleGpu.uuid}"]`).check();
  let releaseStart;
  await page.route('**/api/launcher/start',async route=>{await new Promise(resolve=>releaseStart=resolve);lifecycle={state:'starting',url:'http://127.0.0.1:18200',pid:123};await route.fulfill({json:lifecycle});});
  await page.locator('[data-action=start]').click();
@@ -277,6 +282,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.ok((await page.locator('[data-launch-help]').textContent()).includes('端口已占用'));
  await page.locator('[data-dialog=error] [data-dialog-close]').click();
  await page.unroute('**/api/launcher/start');await page.unroute('**/api/launcher/status');
+ await page.unroute('**/api/launcher/info',lifecycleInfo);
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  await page.locator('[data-template-tab=builtin]').click();
  assert.deepEqual(await page.locator('.s-nav [data-page]').evaluateAll(items=>items.map(el=>el.dataset.page)),['config','monitor','about']);
