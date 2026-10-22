@@ -23,7 +23,7 @@
   // v0.18.0 Windows NInfer recipe, including the fd77613 release launcher update.
   // Machine-specific paths and GPU placement are selected locally.
   const presets = [
-    {id:'ninfer-v018', title:['NInfer · 0.18 资源配置 + C','NInfer · 0.18 resources + C'], note:['200K 上下文 · 36K 历史 KV · 12 GiB RAM · 图像 / MTP','200K context · 36K history KV · 12 GiB RAM · Vision / MTP'], parameters:{Backend:'ninfer',Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,MtpDrafts:4,AdaptiveMtp:true,NgramDrafts:31,NgramMinMatch:12,Vision:true,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,NoLrfu:true,ScoreAggregation:'mean',DeviceProfile:'off',FastPrefill:false}},
+    {id:'ninfer-v018', title:['NInfer · 0.18 资源配置 + C','NInfer · 0.18 resources + C'], note:['200K 上下文 · 36K 历史 KV · 12 GiB RAM · 图像 / MTP','200K context · 36K history KV · 12 GiB RAM · Vision / MTP'], parameters:{Backend:'ninfer',Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,MtpDrafts:4,AdaptiveMtp:true,NgramDrafts:31,NgramMinMatch:12,Vision:true,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,QueryScorer:'page-softmax',GraphAlpha:0.2,Lrfu:false,ScoreAggregation:'mean',QueryMaxTokens:512,QueryReplayMaxTokens:2048,DeviceProfile:'off',FastPrefill:false}},
   ];
   const defaults={Backend:'ninfer',Model:'',Worker:'',Gpu:'',Context:262144,Budget:32768,HostMiB:16384,Reserve:1024,Prefill:128,MaxTokens:1024,Port:18200,ListenHost:'127.0.0.1',SinkTokens:12288,RecentTokens:1024};
   // Switching engines keeps the current common settings. Model assets, native
@@ -31,7 +31,7 @@
   const sharedSettings=['Gpu','Context','Budget','Reserve','HostMiB','Prefill','MaxTokens',
     'Port','ListenHost','SinkTokens','RecentTokens','RetainedSessions','Concurrency',
     'DiskEnabled','DiskPath','DiskMiB',
-    'ModelAlias','LogLevel'];
+    'ModelAlias','LogLevel','QueryScorer','ScoreAggregation','GraphAlpha','Lrfu','LrfuLambda','LrfuTopFraction','QueryMaxTokens','QueryReplayMaxTokens'];
   const names={llamacpp:'llama.cpp',ninfer:'NInfer'};
   const groups=[['缓存与历史','Cache & history'],['硬件与加速','Hardware & acceleration'],['生成与思考','Generation & thinking'],['模板与图像','Templates & vision'],['服务与并发','Service & concurrency']];
   const make=(tag,attrs={},text)=>{const el=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));if(text!==undefined)el.textContent=text;return el;};
@@ -152,6 +152,7 @@
   }
   function launchData(){
     const data=collect(),p=data.parameters;
+    if(info.query_scoring_version!==2)throw Error(tr('启动配置已更新，请完整更新并重启控制台，再刷新页面。','Launch settings changed. Update and restart the complete console, then refresh.'));
     if(p.Backend==='llamacpp'&&info.kv_cache_version!==1)throw Error(tr('K/V 独立格式设置已更新，请先关闭原启动窗口并重新启动控制台，然后刷新页面。','Independent K/V settings have been updated. Close the original startup window, restart the console, then refresh this page.'));
     const disk=root.querySelector('[data-param=DiskEnabled]');
     if(disk?.checked&&!disk.disabled){
@@ -198,7 +199,7 @@
   }
   function message(text,error=false){const el=root.querySelector('[data-launch-message]');if(el){el.textContent=text;el.classList.toggle('l-error',error);el.setAttribute('role',error?'alert':'status');}}
   async function api(path,data,timeout=60000){const response=await fetch('/api/launcher/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-KVMem-Token':info.token},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(timeout)});const value=await response.json();if(!response.ok)throw Error(value.error||'HTTP '+response.status);return value;}
-  function collect(){const params={};root.querySelectorAll('[data-param]').forEach(el=>{if(el.disabled||el.dataset.uiOnly==='true')return;const k=el.dataset.param;if(el.type==='checkbox'){if(el.dataset.inverted==='true'?!el.checked:el.checked)params[k]=true;}else if(el.multiple){params[k]=Array.from(el.selectedOptions).map(x=>x.value).join(',');}else if(el.value!==''){params[k]=el.type==='number'?Number(el.value):el.value;}});const layers=params.StageLayers;if(layers)params.StageLayers=layers.split(',').map(x=>Number(x.trim()));const raw=root.querySelector('[data-native]');if(raw?.value.trim()){const args=JSON.parse(raw.value);if(!Array.isArray(args))throw Error(tr('原生参数必须为 JSON 数组','Native arguments must be a JSON array'));params.WorkerArgs=args;}return {schema_version:1,parameters:params};}
+  function collect(){const params={};root.querySelectorAll('[data-param]').forEach(el=>{if(el.disabled||el.dataset.uiOnly==='true')return;const k=el.dataset.param;if(el.type==='checkbox'){const checked=el.dataset.inverted==='true'?!el.checked:el.checked;if(checked||el.dataset.explicitBoolean==='true')params[k]=checked;}else if(el.multiple){params[k]=Array.from(el.selectedOptions).map(x=>x.value).join(',');}else if(el.value!==''){params[k]=el.type==='number'?Number(el.value):el.value;}});const layers=params.StageLayers;if(layers)params.StageLayers=layers.split(',').map(x=>Number(x.trim()));const raw=root.querySelector('[data-native]');if(raw?.value.trim()){const args=JSON.parse(raw.value);if(!Array.isArray(args))throw Error(tr('原生参数必须为 JSON 数组','Native arguments must be a JSON array'));params.WorkerArgs=args;}return {schema_version:1,parameters:params};}
   function field(parent,p,key,zh,en,type='text',options=null,note=null,disabled=false){
     const label=make('label',{class:'l-field l-row'}),title=tr(zh,en);
     if(type==='checkbox'){
@@ -239,6 +240,9 @@
     for(const key of ['VisionTokens','VisionResidency'])dependency(key,vision,tr('先开启图像输入。','Enable vision input first.'));
     dependency('ThinkingBudget',get('ThinkingMode')?.value!=='off',tr('默认思考模式已关闭；重新开启或选择默认后可设置预算。','Default thinking is off. Select on or default to set a budget.'));
     dependency('ReasoningEffort',get('ThinkingMode')?.value!=='off',tr('默认思考模式已关闭；选择默认后可设置思考强度。','Default thinking is off. Select default to set reasoning effort.'));
+    const history=!!get('Lrfu')?.checked;
+    for(const key of ['LrfuLambda','LrfuTopFraction'])dependency(key,history,tr('先开启历史累计。','Enable LRFU history first.'));
+    const fraction=get('LrfuTopFraction');if(fraction)fraction.setCustomValidity(fraction.value!==''&&Number(fraction.value)<=0?tr('候选比例必须大于 0。','The reward fraction must be greater than 0.'): '');
     const backend=get('Backend').value,mode=get('SpeculativeMode')?.value||'none';
     const profiles=info.speculative_capabilities?.[backend]||{none:{},...(backend==='ninfer'?{mtp:{max_draft_tokens:15,adaptive:true,ngram:true,max_concurrency:8,max_devices:8}}:{})};
     const cap=profiles[mode]||{},enabled=mode!=='none';
@@ -512,6 +516,11 @@
     // Migrate old templates in memory; only canonical fields are submitted.
     p={...p,SpeculativeMode:p.SpeculativeMode??(p.MtpEnabled===false?'none':Number(p.MtpDrafts)>0?'mtp':'none'),
       DraftTokens:p.DraftTokens??p.MtpDrafts??4,DraftPolicy:p.DraftPolicy??(p.AdaptiveMtp?'adaptive':'fixed')};
+    const legacyScoring=!p.QueryScorer&&('NoLrfu' in p||'LrfuLambda' in p||'LrfuTopFraction' in p);
+    const scorer=p.QueryScorer||(legacyScoring&&(!p.NoLrfu||p.ScoreAggregation==='max'||'LrfuLambda' in p||'LrfuTopFraction' in p)?'meanq-cosine':'page-softmax');
+    p={...p,QueryScorer:scorer,ScoreAggregation:p.ScoreAggregation??(scorer==='meanq-cosine'?'max':'mean'),
+      GraphAlpha:p.GraphAlpha??(scorer==='meanq-cosine'?0:0.2),Lrfu:p.Lrfu??('NoLrfu' in p?!p.NoLrfu:scorer==='meanq-cosine'),
+      QueryMaxTokens:p.QueryMaxTokens??512,QueryReplayMaxTokens:p.QueryReplayMaxTokens??2048};
     let refreshGpuOrder=()=>{};
     const b=p.Backend,n=b==='ninfer',l=b==='llamacpp';
     closeHelp();root.replaceChildren();
@@ -617,9 +626,18 @@
     field(panels[0],p,'RetainedSessions','保留会话数量（可选）','Retained sessions (optional)','number',null,['保留的空闲会话数量，不含正在使用的会话','Idle sessions to retain; excludes active sessions']);
     const advanced=make('details',{class:'l-advanced'});advanced.append(make('summary',{},tr('高级 · 历史检索与保留策略','Advanced · History retrieval & retention')));const ag=make('div',{class:'l-fields'});advanced.append(ag);['SinkTokens','RecentTokens','RetainedSessions'].forEach(k=>{const el=panels[0].querySelector(`[data-param="${k}"]`);if(el)ag.append(el.closest('label'));});panels[0].append(advanced);
     const retrieval=make('section',{class:'l-retrieval l-wide','data-graph-recall':''});
-    retrieval.append(make('h3',{class:'s-title'},tr('图传播召回 C','Graph recall C')));
-    retrieval.append(make('p',{},tr('按当前问题召回相关历史；空间不足时按累计注意力保留驻留内容。','Recall relevant history for the current query; retain resident content by accumulated attention when space is needed.')));
-    panels[0].append(retrieval);
+    retrieval.append(make('h3',{class:'s-title'},tr('历史检索','History retrieval')));
+    retrieval.append(make('p',{},tr('当前问题评分 → 图传播 → 可选历史累计。空间不足时按注意力保留驻留内容。','Current query scores → graph propagation → optional LRFU history. Attention retains resident content under pressure.')));
+    if(legacyScoring)retrieval.append(make('p',{class:'l-muted','data-scoring-migration':''},tr('已将旧检索设置转换为明确参数；请检查下方评分器和历史累计选项。','Legacy retrieval settings were converted to explicit controls. Review the scorer and LRFU settings below.')));
+    const scoring=make('div',{class:'l-fields'});retrieval.append(scoring);
+    field(scoring,p,'QueryScorer','评分器','Query scorer','text',[['page-softmax','Page softmax'],['meanq-cosine','Mean-Q cosine']],['评分器、图传播与历史累计可以独立组合。','Scorer, graph propagation and LRFU can be combined independently.']);
+    field(scoring,p,'ScoreAggregation','分组查询聚合','GQA score aggregation','text',[['mean',tr('平均','Mean')],['max',tr('最大','Max')]]);
+    const alpha=field(scoring,p,'GraphAlpha','图传播强度','Graph strength','number',null,['范围 0–1；0 关闭传播。cosine 仅传播正向证据，负分保留在原页。','Range 0–1; 0 disables propagation. Cosine transports positive evidence and retains negative residuals locally.']);alpha.max='1';alpha.step='any';alpha.required=true;
+    const history=field(scoring,p,'Lrfu','历史累计 · LRFU','LRFU history','checkbox',null,['对历次问题的重要性做衰减累计。top-fraction 只筛正向奖励，负分仍保留。','Accumulate decayed relevance across queries. Top-fraction gates positive rewards while retaining negative evidence.']);history.dataset.explicitBoolean='true';
+    const decay=field(scoring,{LrfuLambda:0.5,...p},'LrfuLambda','历史衰减系数','History decay','number');decay.max='1';decay.step='any';decay.required=true;
+    const fraction=field(scoring,{LrfuTopFraction:0.9,...p},'LrfuTopFraction','正向奖励候选比例','Positive reward fraction','number');fraction.min='0';fraction.max='1';fraction.step='any';fraction.required=true;
+    for(const [key,zh,en,note] of [['QueryMaxTokens','问题评分上限 · tokens','Query score limit · tokens',['仅使用当前问题末尾的这些 tokens 评分。','Score with at most this many trailing tokens of the current question.']],['QueryReplayMaxTokens','完整回放上限 · tokens','Causal replay limit · tokens',['超过上限时保持驻留视图并使用 Pressure；不会截断因果回放。','Above this limit, retain the resident view with Pressure; causal replay is not truncated.']]]){const limit=field(scoring,p,key,zh,en,'number',null,note);limit.min='1';limit.required=true;}
+    advanced.append(retrieval);
     field(panels[1],p,'Prefill','预填充块大小 · tokens','Prefill chunk · tokens','number');
     const layerSplit=field(panels[1],{...p,StageLayers:(p.StageLayers||[]).join(',')},'StageLayers','多卡层数分配（可选）','Layer split (optional)','text',null,[n?'依次对应上方第 1、2…张显卡，用逗号分隔；留空由后端分配':'当前接入暂不支持设置多卡层数',n?'Comma-separated counts for GPU 1, 2, … above; empty uses backend allocation':'Layer assignment is unavailable in this integration'],!n);
     layerSplit.addEventListener('input',refreshGpuOrder);refreshGpuOrder();
@@ -702,7 +720,7 @@
     updateStatus(runtime);
     draftStatus();
   }
-  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running;root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){const ready=status.state==='ready'&&!!status.url;chat.hidden=false;chat.setAttribute('aria-disabled',String(!ready));if(ready)chat.href=status.url+'/';else chat.removeAttribute('href');}renderLaunchProgress();}
+  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running;root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){const ready=status.state==='ready'&&!!status.url;chat.hidden=false;chat.setAttribute('aria-disabled',String(!ready));if(ready)chat.href=status.url+'/';else chat.removeAttribute('href');}renderLaunchProgress();}
   function renderLaunchProgress(){
     const box=root.querySelector('[data-launch-progress]');if(!box)return;
     const state=startPending?'preparing':launchFailure?'failed':runtime?.state;

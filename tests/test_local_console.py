@@ -39,7 +39,91 @@ class ConsoleTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.controller = console.Controller(console.ROOT, self.tmp.name, 18199)
+        self.capability_stub = patch.object(self.controller, 'worker_capabilities', return_value={
+            'schema_version': 1, 'query_scoring_revision': 2, 'independent_graph_lrfu': True,
+            'signed_lrfu_hits': True, 'executable_sha256': 'a' * 64})
+        self.capability_stub.start()
+        self.addCleanup(self.capability_stub.stop)
         self.config = {'schema_version': 1, 'parameters': dict(console.DEFAULTS)}
+
+    def test_scoring_controls_and_legacy_migration(self):
+        for scorer in ('page-softmax', 'meanq-cosine'):
+            for history in (False, True):
+                for alpha in (0, .2, 1):
+                    params = dict(console.DEFAULTS, QueryScorer=scorer, Lrfu=history,
+                                  GraphAlpha=alpha, ScoreAggregation='max', QueryMaxTokens=128,
+                                  QueryReplayMaxTokens=1024)
+                    normalized = console.normalize({'schema_version': 1, 'parameters': params}, self.controller.backends)
+                    self.assertEqual(normalized['parameters'], params)
+        for no_history in (False, True):
+            legacy = dict(console.DEFAULTS, NoLrfu=no_history, ScoreAggregation='max',
+                          LrfuLambda=.4, LrfuTopFraction=.8)
+            migrated = console.normalize({'schema_version': 1, 'parameters': legacy}, self.controller.backends)['parameters']
+            self.assertEqual(migrated['QueryScorer'], 'meanq-cosine')
+            self.assertEqual(migrated['Lrfu'], not no_history)
+            self.assertNotIn('NoLrfu', migrated)
+            if no_history: self.assertNotIn('LrfuLambda', migrated)
+        for invalid in ({'QueryScorer': 'bad'}, {'GraphAlpha': float('nan')}, {'GraphAlpha': 1.1},
+                        {'ScoreAggregation': 'median'}, {'QueryMaxTokens': 0},
+                        {'QueryReplayMaxTokens': 0}, {'QueryScorer': 'page-softmax', 'Lrfu': False, 'LrfuLambda': .4}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                console.normalize({'schema_version': 1, 'parameters': dict(console.DEFAULTS, **invalid)}, self.controller.backends)
+
+    def test_worker_contract_rejects_old_or_wrong_worker_and_caches_probe(self):
+        worker = Path(self.tmp.name) / 'worker.exe'; worker.write_bytes(b'fixture')
+        contract = dict(schema_version=1, backend='ninfer', query_scoring_revision=2,
+                        independent_graph_lrfu=True, signed_lrfu_hits=True)
+        with patch.object(console.subprocess, 'run', return_value=SimpleNamespace(
+                returncode=0, stdout=json.dumps(contract))) as run:
+            first = console.Controller.worker_capabilities(self.controller, worker, 'ninfer')
+            second = console.Controller.worker_capabilities(self.controller, worker, 'ninfer')
+            self.assertEqual(first, second); self.assertEqual(run.call_count, 1)
+            self.assertEqual(len(first['executable_sha256']), 64)
+            self.assertEqual(run.call_args.kwargs['env']['CUDA_VISIBLE_DEVICES'], '-1')
+        for value in ([], dict(contract, backend='llamacpp'), dict(contract, query_scoring_revision=1)):
+            self.controller.worker_cache.clear()
+            with patch.object(console.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(value))):
+                with self.assertRaisesRegex(ValueError, 'Worker does not support'):
+                    console.Controller.worker_capabilities(self.controller, worker, 'ninfer')
+
+    def test_actual_scoring_is_observed_independently_of_the_editing_draft(self):
+        planned = self.controller.scoring_from_argv(['worker', '--kvmem-query-scorer', 'meanq-cosine',
+            '--kvmem-score-agg', 'max', '--kvmem-graph-alpha', '.123456789', '--no-kvmem-lrfu'])
+        self.controller.active = self.config
+        self.controller.active_plan = {'resolved_scoring': planned}
+        self.controller.log_path.write_text('KVMEM_SCORING scorer=meanq-cosine agg=max lrfu=0 lambda=0.5 top_frac=0.9 graph_alpha=0.123456789\nKVMEM_LIMITS query_max_tokens=512', encoding='utf-8')
+        status = self.controller.status()
+        self.assertFalse(status['scoring_confirmed'])
+        with self.controller.log_path.open('a', encoding='utf-8') as stream:
+            stream.write(' query_replay_max_tokens=2048\n')
+        self.assertTrue(self.controller.status()['scoring_confirmed'])
+        self.controller.save({'schema_version': 1, 'parameters': dict(console.DEFAULTS, QueryScorer='page-softmax')})
+        self.assertEqual(self.controller.status()['effective_scoring']['scorer'], 'meanq-cosine')
+        self.controller.active_plan['resolved_scoring'] = dict(planned, graph_alpha=.5)
+        self.assertTrue(self.controller.status()['scoring_mismatch'])
+
+    def test_mixed_package_components_are_rejected(self):
+        package = Path(self.tmp.name) / 'mixed-package'; package.mkdir()
+        asset = package / 'launcher.js'; asset.write_text('original', encoding='utf-8')
+        digest = console.hashlib.sha256(asset.read_bytes()).hexdigest()
+        (package / 'console-build.json').write_text(json.dumps({
+            'launch_contract_version': 2, 'controller_files': {'launcher.js': digest}}), encoding='utf-8')
+        backend_root = console.ROOT
+        with patch.object(console, 'ROOT', package):
+            control = console.Controller(backend_root, package / 'state', 18199)
+            control.stop()
+            asset.write_text('partial update', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'Console file mismatch'):
+                console.Controller(backend_root, package / 'state2', 18199)
+
+    def test_stale_launcher_reports_version_mismatch_before_running(self):
+        folder = Path(self.tmp.name) / 'old-launcher'
+        script = folder / 'scripts/windows/start-backend.ps1'; script.parent.mkdir(parents=True)
+        script.write_text("[ValidateSet('llamacpp', 'ninfer')][string]$Backend", encoding='utf-8')
+        control = console.Controller(folder, folder / 'state', 18199)
+        with self.assertRaisesRegex(ValueError, 'Launcher version mismatch'):
+            control.plan(self.config)
+        self.assertIsNone(control.process)
 
     def tearDown(self):
         self.controller.stop()

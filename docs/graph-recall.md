@@ -211,9 +211,14 @@ Startup diagnostics print the resolved configuration.
 
 Windows launchers expose `-QueryScorer`, `-ScoreAggregation`, `-GraphAlpha`,
 `-Lrfu`/`-NoLrfu`, `-LrfuLambda` and `-LrfuTopFraction` with the same defaults.
-The graphical launcher retains the default C recipe; these variants are CLI
-options, not new UI controls. Published performance tables describe their
-original release, not these variants.
+The graphical launcher's Cache & history advanced section exposes these controls
+and the Query/replay limits. Its default recipe remains C; selecting another
+scorer does not toggle the independently editable graph and LRFU settings.
+Legacy signed-cosine templates migrate to explicit controls, including disabled
+LRFU. Preview checks the worker's model-free `--kvmem-capabilities` contract;
+runtime details and monitoring show the native startup report separately from
+the editable draft. Published performance tables describe their original
+release, not these variants.
 
 ## Focused qualification
 

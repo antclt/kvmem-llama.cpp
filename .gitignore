@@ -13,6 +13,7 @@ __pycache__/
 *.pyc
 
 /build-ui*/
+/ui/node_modules/
 
 /build-win*/
 /build-session*/

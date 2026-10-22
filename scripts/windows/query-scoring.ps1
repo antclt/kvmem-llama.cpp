@@ -16,4 +16,6 @@ function Get-KVMemQueryScoringArgs($Bound) {
         $fraction = if ($Bound.ContainsKey('LrfuTopFraction')) { [double]$Bound['LrfuTopFraction'] } else { 0.9 }
         @('--kvmem-lrfu-lambda', $decay.ToString('R',$culture), '--kvmem-lrfu-top-frac', $fraction.ToString('R',$culture))
     } else { '--no-kvmem-lrfu' }
+    if ($Bound.ContainsKey('QueryMaxTokens')) { @('--kvmem-query-max-tokens', "$($Bound['QueryMaxTokens'])") }
+    if ($Bound.ContainsKey('QueryReplayMaxTokens')) { @('--kvmem-query-replay-max-tokens', "$($Bound['QueryReplayMaxTokens'])") }
 }

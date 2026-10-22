@@ -256,6 +256,16 @@ jobs:
           node-version: '24'
       - run: python3 tests/test_webui_builder.py
         if: needs.changes.outputs.run_ci == 'true'
+      - name: Install console browser tests
+        if: needs.changes.outputs.run_ci == 'true' && matrix.mode == 'lightweight'
+        working-directory: ui
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Test console and monitor in Chromium
+        if: needs.changes.outputs.run_ci == 'true' && matrix.mode == 'lightweight'
+        working-directory: ui
+        run: npm test
       - name: Build UI
         if: needs.changes.outputs.run_ci == 'true'
         env:

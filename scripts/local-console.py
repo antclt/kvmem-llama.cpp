@@ -6,6 +6,7 @@ shell command strings. No third-party Python dependencies. Windows launch suppor
 import argparse
 import copy
 import ctypes
+import hashlib
 from ctypes import wintypes
 import json
 import mimetypes
@@ -33,13 +34,14 @@ DEFAULTS = dict(Backend='ninfer', Model='', Worker='', Gpu='', Context=262144,
                 SinkTokens=12288, RecentTokens=1024)
 STRINGS = {'Backend', 'Model', 'Worker', 'Gpu', 'ListenHost', 'KvType', 'KvTypeK', 'KvTypeV', 'DiskPath',
            'VisionResidency',
-           'DeviceProfile', 'ScoreAggregation', 'ApiKey', 'ModelAlias', 'LogLevel',
+           'DeviceProfile', 'ScoreAggregation', 'QueryScorer', 'ApiKey', 'ModelAlias', 'LogLevel',
            'ChatTemplateFile', 'ThinkingMode', 'ReasoningEffort', 'SpeculativeMode', 'DraftPolicy', 'DraftModel'}
 INTEGERS = {'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
             'MtpDrafts', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions',
-            'VisionTokens', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'DiskMiB', 'DraftTokens'}
-BOOLEANS = {'AdaptiveMtp', 'FastPrefill', 'Vision', 'NoLrfu', 'PreserveThinking'}
-DECIMALS = {'LrfuLambda', 'LrfuTopFraction'}
+            'VisionTokens', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'DiskMiB', 'DraftTokens',
+            'QueryMaxTokens', 'QueryReplayMaxTokens'}
+BOOLEANS = {'AdaptiveMtp', 'FastPrefill', 'Vision', 'NoLrfu', 'Lrfu', 'PreserveThinking'}
+DECIMALS = {'LrfuLambda', 'LrfuTopFraction', 'GraphAlpha'}
 # Deliberately limited native escape hatch. Common options must not be duplicated.
 NATIVE = {'llamacpp': {'--threads', '--threads-batch', '--n-gpu-layers'},
           'ninfer': {'--threads'}}
@@ -73,6 +75,31 @@ def normalize(data, backends):
             raise ValueError(f'{key} must be boolean')
         if key in DECIMALS and (type(value) not in (int, float) or not 0 <= value <= 1):
             raise ValueError(f'{key} must be between 0 and 1')
+    # Old signed-cosine templates predate QueryScorer. Resolve their intent once
+    # and submit canonical independent controls, including explicit false.
+    legacy_scoring = 'QueryScorer' not in p and bool({'NoLrfu', 'LrfuLambda', 'LrfuTopFraction'} & p.keys())
+    if legacy_scoring:
+        p['QueryScorer'] = 'meanq-cosine' if (
+            not p.get('NoLrfu', False) or p.get('ScoreAggregation') == 'max' or
+            'LrfuLambda' in p or 'LrfuTopFraction' in p) else 'page-softmax'
+    if 'NoLrfu' in p:
+        if 'Lrfu' in p and p['Lrfu'] == p['NoLrfu']:
+            raise ValueError('Lrfu conflicts with NoLrfu')
+        p['Lrfu'] = not p.pop('NoLrfu')
+        if legacy_scoring and not p['Lrfu']:
+            p.pop('LrfuLambda', None); p.pop('LrfuTopFraction', None)
+    if p.get('QueryScorer', 'page-softmax') not in {'page-softmax', 'meanq-cosine'}:
+        raise ValueError('Unsupported QueryScorer')
+    if p.get('ScoreAggregation', 'mean') not in {'mean', 'max'}:
+        raise ValueError('Unsupported ScoreAggregation')
+    for key in ('QueryMaxTokens', 'QueryReplayMaxTokens'):
+        if key in p and p[key] <= 0:
+            raise ValueError(f'{key} must be positive')
+    history = p.get('Lrfu', p.get('QueryScorer') == 'meanq-cosine')
+    if not history and {'LrfuLambda', 'LrfuTopFraction'} & p.keys():
+        raise ValueError('LRFU tuning requires enabled LRFU')
+    if 'LrfuTopFraction' in p and p['LrfuTopFraction'] <= 0:
+        raise ValueError('LrfuTopFraction must be in (0,1]')
     if p.get('ListenHost', '127.0.0.1') not in {'127.0.0.1', '0.0.0.0'}:
         raise ValueError('ListenHost must be 127.0.0.1 or 0.0.0.0')
     if not 1 <= p.get('Port', 18200) <= 65535:
@@ -202,6 +229,7 @@ class Controller:
         if not match:
             raise ValueError('Cannot detect supported backends from start-backend.ps1')
         self.backends = [name for name in re.findall(r"'([^']+)'", match[1]) if name in NATIVE]
+        self.launcher_query_contract = all(name in source for name in ('QueryScorer', 'GraphAlpha', 'QueryMaxTokens', 'QueryReplayMaxTokens'))
         profile_file = self.backend_root / 'scripts/speculative-capabilities.json'
         self.speculative_profiles = json.loads(profile_file.read_text(encoding='utf-8-sig')) if profile_file.is_file() else {}
         if not self.backends:
@@ -211,10 +239,87 @@ class Controller:
         self.picker_lock = threading.Lock()
         self.process = self.job = self.log = None
         self.active = None
+        self.active_plan = None
+        self.worker_cache = {}
+        self.observed_scoring = {}
+        self.observed_offset = 0
+        self.observed_pending = ''
         self.redactions = set()
         self.exit_code = None
         self.draft_path = self.state_dir / 'launch-draft.json'
         self.log_path = self.state_dir / 'service.log'
+        manifest_path = ROOT / 'console-build.json'
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
+            if manifest.get('launch_contract_version') != 2:
+                raise ValueError('控制台组件版本不匹配，请完整更新启动包。 Console components do not match; update the complete package.')
+            for name, digest in manifest.get('controller_files', {}).items():
+                path = (ROOT / name).resolve()
+                if not path.is_relative_to(ROOT.resolve()) or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                    raise ValueError('控制台文件不匹配，请完整更新启动包。 Console file mismatch: ' + name)
+
+    def worker_capabilities(self, worker, backend):
+        path = Path(worker).resolve()
+        stat = path.stat()
+        key = (str(path), stat.st_size, stat.st_mtime_ns, backend)
+        if key in self.worker_cache:
+            return copy.deepcopy(self.worker_cache[key])
+        try:
+            run = subprocess.run([str(path), '--kvmem-capabilities'], capture_output=True,
+                                 encoding='utf-8', errors='replace', timeout=10, cwd=path.parent,
+                                 env=dict(os.environ, CUDA_VISIBLE_DEVICES='-1'),
+                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            value = json.loads(run.stdout)
+            if run.returncode or not isinstance(value, dict) or value.get('schema_version') != 1 or value.get('backend') != backend or value.get('query_scoring_revision', 0) < 2 or not value.get('independent_graph_lrfu') or not value.get('signed_lrfu_hits'):
+                raise ValueError('incompatible worker contract')
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+            raise ValueError('后端版本不支持当前启动配置，请完整更新后端和控制台。 '
+                             'Worker does not support this launch contract; update the complete package. ' + str(path)) from error
+        with path.open('rb') as stream:
+            hasher = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1 << 20), b''):
+                hasher.update(chunk)
+            digest = hasher.hexdigest()
+        value['executable_sha256'] = digest
+        value['path'] = str(path)
+        self.worker_cache = {key: value}
+        return copy.deepcopy(value)
+
+    @staticmethod
+    def scoring_from_argv(argv):
+        def value(flag, default):
+            return argv[argv.index(flag) + 1] if flag in argv else default
+        return {'scorer': value('--kvmem-query-scorer', 'page-softmax'),
+                'agg': value('--kvmem-score-agg', 'mean'), 'lrfu': '--kvmem-lrfu' in argv,
+                'lambda': float(value('--kvmem-lrfu-lambda', .5)),
+                'top_frac': float(value('--kvmem-lrfu-top-frac', .9)),
+                'graph_alpha': float(value('--kvmem-graph-alpha', .2)),
+                'query_max_tokens': int(value('--kvmem-query-max-tokens', 512)),
+                'query_replay_max_tokens': int(value('--kvmem-query-replay-max-tokens', 2048))}
+
+    def observe_scoring(self):
+        if not self.active_plan or not self.log_path.is_file():
+            return
+        with self.log_path.open('rb') as stream:
+            stream.seek(self.observed_offset)
+            data = stream.read(1 << 20)
+            self.observed_offset = stream.tell()
+        text = self.observed_pending + data.decode('utf-8', errors='replace')
+        lines = text.split('\n')
+        self.observed_pending = lines.pop()
+        for line in lines:
+            for marker in ('KVMEM_SCORING ', 'KVMEM_LIMITS '):
+                if marker not in line:
+                    continue
+                for key, value in re.findall(r'(\w+)=([^\s]+)', line.split(marker, 1)[1]):
+                    if key in {'scorer', 'agg'}:
+                        self.observed_scoring[key] = value
+                    elif key == 'lrfu':
+                        self.observed_scoring[key] = value == '1'
+                    elif key in {'lambda', 'top_frac', 'graph_alpha'}:
+                        self.observed_scoring[key] = float(value)
+                    elif key in {'query_max_tokens', 'query_replay_max_tokens'}:
+                        self.observed_scoring[key] = int(value)
 
     def worker_defaults(self):
         # A source checkout and a runnable installation need not share a directory.
@@ -264,6 +369,8 @@ class Controller:
 
     def plan(self, data, *, reveal_secrets=False):
         clean = normalize(data, self.backends)
+        if not self.launcher_query_contract:
+            raise ValueError('启动脚本版本不匹配，请完整更新控制台和启动脚本。 Launcher version mismatch; update the complete console package.')
         api_key = clean['parameters'].pop('ApiKey', '')
         if api_key:
             self.redactions.add(api_key)
@@ -303,6 +410,8 @@ class Controller:
             if api_key:
                 argv.extend(['--api-key', api_key if reveal_secrets else '<redacted>'])
             result['warnings'] = self.redact(run.stdout[:start].strip())
+            result['worker'] = self.worker_capabilities(argv[0], params['Backend'])
+            result['resolved_scoring'] = self.scoring_from_argv(argv)
             return result
         finally:
             Path(name).unlink(missing_ok=True)
@@ -562,6 +671,7 @@ class Controller:
 
     def status(self):
         with self.lock:
+            self.observe_scoring()
             running = self.process is not None and self.process.poll() is None
             if self.process and not running:
                 self.exit_code = self.process.returncode
@@ -570,6 +680,14 @@ class Controller:
                       'pid': self.process.pid if running else None, 'exit_code': self.exit_code,
                       'active_config': without_secrets(self.active) if self.active else None,
                       'api_key_configured': bool(self.active and self.active['parameters'].get('ApiKey')), 'url': None}
+            result['planned_scoring'] = copy.deepcopy(self.active_plan.get('resolved_scoring')) if self.active_plan else None
+            result['effective_scoring'] = dict(self.observed_scoring) or None
+            result['worker'] = copy.deepcopy(self.active_plan.get('worker')) if self.active_plan else None
+            planned = result['planned_scoring']
+            result['scoring_confirmed'] = bool(planned and all(
+                key in self.observed_scoring and self.observed_scoring[key] == value for key, value in planned.items()))
+            result['scoring_mismatch'] = bool(planned and set(planned).issubset(self.observed_scoring)
+                                              and not result['scoring_confirmed'])
             if running:
                 port = self.active['parameters'].get('Port', 18200)
                 result['url'] = f'http://127.0.0.1:{port}'
@@ -611,6 +729,8 @@ class Controller:
                     raise ValueError(f'端口 {port} 无法使用，可能已有服务占用。请在“服务与并发”中更换端口，'
                                      '或先停止原服务。此控制台不会停止外部服务。') from error
             env = dict(os.environ); env.update(result.get('environment', {}))
+            plan_summary = {'resolved_scoring': result.get('resolved_scoring'), 'worker': result.get('worker')}
+            self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
             self.log = self.log_path.open('wb')
             self.job = WindowsJob()
             try:
@@ -625,7 +745,7 @@ class Controller:
                 self.process.stdin.close()
             except Exception:
                 self._release(); raise
-            self.active, self.exit_code = clean, None
+            self.active, self.active_plan, self.exit_code = clean, plan_summary, None
             return self.status()
 
     def stop(self):
@@ -635,7 +755,8 @@ class Controller:
                 self.job.close(); self.job = None
             if process:
                 process.wait(timeout=10)
-            self._release(); self.exit_code = None; self.active = None
+            self._release(); self.exit_code = None; self.active = None; self.active_plan = None
+            self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
             return self.status()
 
     def log_tail(self):
@@ -719,6 +840,7 @@ class Handler(BaseHTTPRequestHandler):
                                 'console_protocol': 1, 'console_root': str(ROOT.resolve()),
                                 'model_library_version': 1,
                                 'kv_cache_version': 1,
+                                'query_scoring_version': 2,
                                 'speculative_capabilities': self.control.speculative_profiles,
                                 'state_dir': str(self.control.state_dir),
                                 'backend_root': str(self.control.backend_root), 'gpus': self.server.gpus,

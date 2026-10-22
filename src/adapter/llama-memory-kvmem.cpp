@@ -4388,7 +4388,8 @@ void llama_memory_kvmem::score_retrieval(const llama_kvmem_tail_mean_state* pref
             scores=kvmem::page_softmax_scores(*raw_,query,frame,aggregation);
 #endif
         }
-        scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : graph_,graph_alpha_);
+        if (graph_alpha_ > 0)
+            scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : graph_,graph_alpha_);
     } catch (...) {
         if (prefix) raw_->restore_mean_checkpoint(frontier,previous);
         throw;

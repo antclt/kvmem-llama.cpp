@@ -545,6 +545,12 @@
   window.addEventListener("kvmem-runtime-status", (event) => {
     const old = consoleRuntime?.state;
     consoleRuntime = event.detail;
+    const observed = consoleRuntime.effective_scoring, panel = $("[data-effective-scoring]");
+    if (panel) {
+      const tr = (zh,en) => i18n.language === 'en' ? en : zh;
+      panel.dataset.scoringState = consoleRuntime.scoring_confirmed ? 'confirmed' : consoleRuntime.scoring_mismatch ? 'mismatch' : observed ? 'pending' : 'unavailable';
+      panel.textContent = observed ? `${tr('服务报告','Service reports')}: ${observed.scorer || '—'} · ${observed.agg || '—'} · α ${observed.graph_alpha ?? '—'} · LRFU ${observed.lrfu === undefined ? '—' : observed.lrfu ? tr('开启','on') : tr('关闭','off')} · Query ${observed.query_max_tokens ?? '—'} / replay ${observed.query_replay_max_tokens ?? '—'} · ${consoleRuntime.scoring_confirmed ? tr('已核对','confirmed') : consoleRuntime.scoring_mismatch ? tr('与启动计划不同','differs from launch plan') : tr('等待完整报告','awaiting full report')}` : tr('尚未收到实际检索配置','Actual retrieval configuration not reported yet');
+    }
     renderConnection();
     if (old !== consoleRuntime.state && consoleRuntime.state === "ready" && !busy) schedule(0);
   });

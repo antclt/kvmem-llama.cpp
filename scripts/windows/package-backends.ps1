@@ -83,8 +83,23 @@ foreach ($entry in @(@('llamacpp', $LlamaWorker, 'llama-kvmem-server.exe'),
     [IO.File]::WriteAllText((Join-Path $OutputDir "provenance/$backend-help.txt"), $stdout.Result + $stderr.Result)
     if ($process.ExitCode -ne 0) { throw "$backend failed with a clean runtime PATH" }
     $process.Dispose()
+    $info = New-KVMemProcessInfo $executable @('--kvmem-capabilities')
+    $info.EnvironmentVariables['PATH'] = "$env:SystemRoot/System32;$env:SystemRoot"
+    $info.EnvironmentVariables['CUDA_VISIBLE_DEVICES'] = '-1'
+    $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "$backend does not support the console launch contract" }
+    $contract = $stdout.Result | ConvertFrom-Json
+    if ($contract.schema_version -ne 1 -or $contract.backend -ne $backend -or
+        $contract.query_scoring_revision -lt 2 -or !$contract.independent_graph_lrfu -or !$contract.signed_lrfu_hits) {
+        throw "$backend has an incompatible console launch contract"
+    }
+    [IO.File]::WriteAllText((Join-Path $OutputDir "provenance/$backend-capabilities.json"), $stdout.Result)
+    $process.Dispose()
     $workerInfo[$backend] = @{ sha256=(Get-FileHash -LiteralPath $executable).Hash.ToLowerInvariant();
-        path="workers/$backend/$($entry[2])"; clean_path_help_passed=$true }
+        path="workers/$backend/$($entry[2])"; clean_path_help_passed=$true; launch_contract=$contract }
 }
 foreach ($script in 'start-backend.ps1', 'start-ninfer.ps1', 'start-dflash2.ps1', 'native-process.ps1', 'query-scoring.ps1') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination (Join-Path $OutputDir 'scripts/windows')

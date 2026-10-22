@@ -229,10 +229,27 @@ index a6d70323ce08b3ede98b2698022912c364cb05e0..1aab5155408e96ea21f78b1aa2a4ba06
      bool prefill_a8     = true;
      bool prefill_cublas = false;
 diff --git a/apps/serve/main.cpp b/apps/serve/main.cpp
-index 1371ac66bfe5d12b218860e4db9dec0e3afa074f..709856394faac699ea26e85856a7f414d581ed8d 100644
+index 1371ac66bfe5d12b218860e4db9dec0e3afa074f..8bb80990ce3933f5ea074a238962284b41a6528b 100644
 --- a/apps/serve/main.cpp
 +++ b/apps/serve/main.cpp
-@@ -280,6 +280,11 @@ int main(int argc, char** argv) {
+@@ -1,4 +1,5 @@
+ #include "ninfer_build_id.h"
++#include "kvmem/launch_contract.hpp"
+ #include "product/logging/engine_diagnostics.h"
+ #include "product/logging/logging.h"
+ #include "product/logging/startup_log.h"
+@@ -242,6 +243,10 @@ std::string binary_identity(const char* argv0) {
+ } // namespace
+ 
+ int main(int argc, char** argv) {
++    if (argc == 2 && std::string(argv[1]) == "--kvmem-capabilities") {
++        std::cout << kvmem::launch_capabilities("ninfer") << '\n';
++        return 0;
++    }
+     std::set_terminate(log_terminate);
+     ninfer::serve::ServeOptions options;
+     try {
+@@ -280,6 +285,11 @@ int main(int argc, char** argv) {
      }
      ninfer::product::LoggingRuntime logging(logging_options);
      const std::shared_ptr<spdlog::logger> logger = logging.logger();
@@ -244,7 +261,7 @@ index 1371ac66bfe5d12b218860e4db9dec0e3afa074f..709856394faac699ea26e85856a7f414
      ninfer::product::StartupLogRenderer startup_log(logging);
      ninfer::serve::OperationalLog operational_log(logger);
      // Stop prompts use the transient bottom line beneath the statistics panel; output without one
-@@ -344,6 +349,9 @@ int main(int argc, char** argv) {
+@@ -344,6 +354,9 @@ int main(int argc, char** argv) {
          // One model's service: its Engine loaded and warmed up. Single-model mode builds it before
          // the registry exists, to learn the model's public id; router mode builds each on demand.
          const auto make_service = [&](const ninfer::serve::ServeOptions& model_options) {
@@ -254,7 +271,7 @@ index 1371ac66bfe5d12b218860e4db9dec0e3afa074f..709856394faac699ea26e85856a7f414
              auto service = std::make_unique<ninfer::serve::GenerationService>(
                  model_options, startup_log.observer(),
                  ninfer::product::engine_diagnostic_observer(logger),
-@@ -374,8 +382,7 @@ int main(int argc, char** argv) {
+@@ -374,8 +387,7 @@ int main(int argc, char** argv) {
              try {
                  first = make_service(options);
              } catch (const std::exception& exception) {
@@ -9338,10 +9355,10 @@ index 0000000000000000000000000000000000000000..5d7887107ac74e1407c89231672e4a53
 +} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/storage/memory_statistics.cpp b/src/models/qwen3_5/program/storage/memory_statistics.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..10ee49e6f5f253ce8420f21731cbea3cb7210621
+index 0000000000000000000000000000000000000000..ad0bcd504c995ffff7d9d117b2acee7a69971ca9
 --- /dev/null
 +++ b/src/models/qwen3_5/program/storage/memory_statistics.cpp
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,332 @@
 +#include "models/qwen3_5/program/program_impl.h"
 +#include <cmath>
 +#include <cstdio>
@@ -9509,7 +9526,8 @@ index 0000000000000000000000000000000000000000..10ee49e6f5f253ce8420f21731cbea3c
 +        } else {
 +            scores=memory_query_scorer->score(*state.statistics,query,frame,aggregation);
 +        }
-+        scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : state.graph,kvmem_options.graph_alpha);
++        if (kvmem_options.graph_alpha > 0)
++            scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : state.graph,kvmem_options.graph_alpha);
 +    } catch (...) {
 +        if(prefix) state.statistics->restore_mean_checkpoint(frontier,previous);
 +        throw;
@@ -11824,7 +11842,7 @@ index c056b1f50025966fc6f804d680d2977ff73ae57a..5332603b7fa60096b0081b9fdebc008a
 +
  } // namespace ninfer::runtime
 diff --git a/src/runtime/engine/model_instance.cpp b/src/runtime/engine/model_instance.cpp
-index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5415b9cc8 100644
+index d738cd25d51654a844224538418f7cf255c26d45..8496ca82dd54c2b4c2f8e6bce9c216ad998e38c9 100644
 --- a/src/runtime/engine/model_instance.cpp
 +++ b/src/runtime/engine/model_instance.cpp
 @@ -1,4 +1,6 @@
@@ -11905,7 +11923,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
      if (options.artifact_path.empty()) {
          throw std::invalid_argument("Engine artifact_path must not be empty");
      }
-@@ -236,6 +286,113 @@ EngineOptions artifact_scoped_disk_tier(const EngineOptions& options,
+@@ -236,6 +286,117 @@ EngineOptions artifact_scoped_disk_tier(const EngineOptions& options,
  } // namespace
  
  EngineOptions normalize_engine_options(EngineOptions options) {
@@ -11930,10 +11948,14 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
 +        options.kvmem.score_agg_max ? 1 : 0,options.kvmem.graph_alpha);
 +    if (options.kvmem.selected_tokens)
 +        publish_diagnostic(options.diagnostic_observer, DiagnosticLevel::Info,
-+            "KVMEM_SCORING scorer=%s agg=%s lrfu=%d lambda=%.6g top_frac=%.6g graph_alpha=%.6g",
++            "KVMEM_SCORING scorer=%s agg=%s lrfu=%d lambda=%.17g top_frac=%.17g graph_alpha=%.17g",
 +            options.kvmem.query_meanq_cosine ? "meanq-cosine" : "page-softmax",
 +            options.kvmem.score_agg_max ? "max" : "mean",int(options.kvmem.lrfu),
 +            options.kvmem.lrfu_lambda,options.kvmem.lrfu_top_fraction,options.kvmem.graph_alpha);
++    if (options.kvmem.selected_tokens)
++        publish_diagnostic(options.diagnostic_observer, DiagnosticLevel::Info,
++            "KVMEM_LIMITS query_max_tokens=%u query_replay_max_tokens=%u",
++            options.kvmem.query_max_tokens,options.kvmem.query_replay_max_tokens);
 +    const kvmem::LrfuHistory validate_lrfu(options.kvmem.lrfu_lambda, options.kvmem.lrfu_top_fraction);
 +    if ((options.kvmem.lrfu || options.kvmem.score_agg_max || options.kvmem.query_meanq_cosine || options.kvmem.graph_alpha != 0.2) && !options.kvmem.selected_tokens)
 +        throw std::invalid_argument("KVMem retrieval options require selected_tokens");
@@ -12019,7 +12041,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
      switch (options.purpose) {
      case EnginePurpose::Generation:
          break;
-@@ -259,6 +416,22 @@ EngineOptions normalize_engine_options(EngineOptions options) {
+@@ -259,6 +420,22 @@ EngineOptions normalize_engine_options(EngineOptions options) {
          throw std::invalid_argument("Engine max_concurrency must be in [1,8]");
      }
      ContextCacheOptions& cache = options.context_cache;
@@ -12042,7 +12064,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
      if (options.speculative.ngram_archive_bytes != 0 &&
          options.speculative.ngram_draft_tokens == 0) {
          throw std::invalid_argument(
-@@ -270,10 +443,9 @@ EngineOptions normalize_engine_options(EngineOptions options) {
+@@ -270,10 +447,9 @@ EngineOptions normalize_engine_options(EngineOptions options) {
          throw std::invalid_argument("ngram session capacity must be between 1 MiB and the total "
                                      "archive capacity");
      }
@@ -12056,7 +12078,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
      }
      const std::uint32_t concurrency = options.max_concurrency;
      // Injected grafts stay resident for the life of the Engine, each in a StateImage and a
-@@ -623,6 +795,30 @@ ResidencyTransition ModelInstance::resume(DeviceContext& device, DeviceSnapshot&
+@@ -623,6 +799,30 @@ ResidencyTransition ModelInstance::resume(DeviceContext& device, DeviceSnapshot&
  ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& device) {
      validate_options(requested);
      install_device_route_profile_for(requested, device);
@@ -12087,7 +12109,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
      const auto start = Clock::now();
      // Every later stage of startup checks its options against the ones the model was loaded with, so
      // the stage split is decided once, here, and carried in the options from then on.
-@@ -680,8 +876,15 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
+@@ -680,8 +880,15 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
              options.context_cache.host_kv_capacity_bytes = 0;
          }
      }
@@ -12103,7 +12125,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
      frontend.complete();
      StartupPhaseScope planning(options.startup_observer, StartupPhase::TargetFinalize);
      const std::size_t overlay_window_bytes =
-@@ -701,15 +904,39 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
+@@ -701,15 +908,39 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
              graft_main_pages += (graft.n_slots + page_tokens - 1U) / page_tokens;
          }
      }
@@ -12149,7 +12171,7 @@ index d738cd25d51654a844224538418f7cf255c26d45..fd3f704be5a90c6eafdd7285b95913b5
      std::unique_ptr<models::qwen3_5::execution::NativeExpertRuntime> experts;
      if (!instance->model->expert_sources().layers.empty()) {
          // Price startup with the real allocations before the KV plan is finalized: the delivery
-@@ -721,75 +948,139 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
+@@ -721,75 +952,139 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
          const bool automatic_kv = options.kv_capacity.mode == KvCapacityMode::Automatic;
          const std::uint64_t headroom =
              automatic_kv ? options.kv_capacity.automatic_headroom_bytes : 0;
@@ -13703,7 +13725,7 @@ index e8245d645c1419441c2397bd7381edf216c75a57..ddf618d92b29234a35f6bf5a05456dcb
      std::uint64_t requests_failed_total_         = 0;
      std::uint64_t requests_rejected_total_       = 0;
 diff --git a/src/serve/serve_options.cpp b/src/serve/serve_options.cpp
-index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf0ad340bc 100644
+index 8fc5043c46b464507bb1bd5cc898936dbab34510..5e8b8b49ab87d398632287a7cd0fd64cf3fe9bbf 100644
 --- a/src/serve/serve_options.cpp
 +++ b/src/serve/serve_options.cpp
 @@ -1,6 +1,9 @@
@@ -13716,7 +13738,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
  #include "product/post_thinking_options.h"
  #include "product/rope_yarn_options.h"
  #include "product/speculative_options.h"
-@@ -88,6 +91,36 @@ std::string serve_usage_text(const char* argv0) {
+@@ -88,6 +91,37 @@ std::string serve_usage_text(const char* argv0) {
             "  --version                     print the build version and exit\n"
             "\n"
             "MODEL & CONTEXT\n"
@@ -13729,6 +13751,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
 +            "  --kvmem-lrfu-lambda X        history decay in [0,1] (default 0.5)\n"
 +            "  --kvmem-lrfu-top-frac X      history hit fraction in (0,1] (default 0.9)\n"
 +            "  --kvmem-graph-alpha X        Query propagation in [0,1] (default: page-softmax 0.2; cosine 0)\n"
++            "  --kvmem-capabilities         Print model-free console capability JSON and exit\n"
 +           "  --kvmem-query-max-tokens N  cap per-token Query capture to its tail (default 512)\n"
 +            "  --kvmem-gen-reserve N         positive append workspace R (default 1024), aligned to 64\n"
 +           "  --kvmem-host-mib N            positive Host native KV payload budget H, MiB (default 16384)\n"
@@ -13753,7 +13776,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
             "  --max-context N               logical context ceiling of each request (default\n"
             "                                8192)\n"
             "  --max-concurrency N           requests decoded together, 1..8 (default 1)\n"
-@@ -105,7 +138,7 @@ std::string serve_usage_text(const char* argv0) {
+@@ -105,7 +139,7 @@ std::string serve_usage_text(const char* argv0) {
             "  --chat-template FILE          replace the artifact's chat template at startup\n"
             "  --device N                    CUDA device index (default 0)\n"
             "  --devices A,B,...             one pipeline stage per listed device, 2..8\n"
@@ -13762,7 +13785,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
             "  --stage-layers A,B,...        layers per stage in --devices order (default:\n"
             "                                split by free memory)\n"
             "  --expert-residency device|host|disk  MoE experts on GPU (default), in pinned\n"
-@@ -168,6 +201,26 @@ std::string serve_usage_text(const char* argv0) {
+@@ -168,6 +202,26 @@ std::string serve_usage_text(const char* argv0) {
             "  --rope-scaling-original-context N\n"
             "                                the interpolation threshold (default: the\n"
             "                                model's native window)\n"
@@ -13789,7 +13812,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
             "  --wddm-evictable-budget       Windows builds: budget against dedicated\n"
             "                                memory, committing arenas at startup\n"
             "\n"
-@@ -202,9 +255,8 @@ std::string serve_usage_text(const char* argv0) {
+@@ -202,9 +256,8 @@ std::string serve_usage_text(const char* argv0) {
             "KV CACHE\n"
             "  --kv-capacity N|auto          shared KV capacity in tokens (default\n"
             "                                --max-context, or auto with\n"
@@ -13801,7 +13824,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
             "                                " +
             std::to_string(kDefaultKvCapacityHeadroomBytes / (1024ULL * 1024ULL)) +
             "); alias --vram-headroom-mib\n"
-@@ -343,8 +395,8 @@ std::string serve_usage_text(const char* argv0) {
+@@ -343,8 +396,8 @@ std::string serve_usage_text(const char* argv0) {
             "  --ngram-draft-tokens N        copy up to N tokens (1..63) per round from\n"
             "                                earlier prompt, tool-result or output text,\n"
             "                                verified alongside --spec; on with 15 whenever\n"
@@ -13812,7 +13835,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
             "  --ngram-min-match N           shortest match a copy is drawn from, 4..64\n"
             "                                (default 12)\n"
             "  --ngram-archive-mib N         keep finished requests' copy sources in RAM for\n"
-@@ -356,7 +408,7 @@ std::string serve_usage_text(const char* argv0) {
+@@ -356,7 +409,7 @@ std::string serve_usage_text(const char* argv0) {
             "  --lookup-ngram N              context-lookup drafting alongside --spec: the\n"
             "                                last N tokens are matched against the sequence\n"
             "                                so far and what followed is proposed (default 0:\n"
@@ -13821,7 +13844,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
             "\n"
             "VISION (off by default)\n"
             "  --vision                      accept images and video and load the Vision GPU\n"
-@@ -419,8 +471,7 @@ std::string serve_usage_text(const char* argv0) {
+@@ -419,8 +472,7 @@ std::string serve_usage_text(const char* argv0) {
             "\n"
             "API BEHAVIOR\n"
             "  --structured-output           accept JSON and JSON Schema response formats;\n"
@@ -13831,7 +13854,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
             "  --unconstrained-response-format\n"
             "                                without --structured-output, generate such a\n"
             "                                request unconstrained instead of refusing it\n"
-@@ -532,6 +583,7 @@ std::vector<std::uint32_t> parse_stage_layers(std::string_view text) {
+@@ -532,6 +584,7 @@ std::vector<std::uint32_t> parse_stage_layers(std::string_view text) {
  
  ServeOptions parse_serve_options(int argc, char** argv) {
      ServeOptions options;
@@ -13839,7 +13862,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
      options.startup_argv.reserve(static_cast<std::size_t>(argc));
      bool redact_next = false;
      for (int i = 0; i < argc; ++i) {
-@@ -624,6 +676,20 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -624,6 +677,20 @@ ServeOptions parse_serve_options(int argc, char** argv) {
              options.kv_capacity  = parse_kv_capacity(require_value("--kv-capacity"));
              kv_capacity_explicit = true;
              continue;
@@ -13860,7 +13883,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
          }
          if (arg == "--kv-headroom-mib" || arg == "--vram-headroom-mib") {
              // --vram-headroom-mib is the Wallawalla47 fork's name for the same headroom.
-@@ -1219,7 +1285,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1219,7 +1286,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
              continue;
          }
          if (arg == "--derive-session-keys") {
@@ -13869,7 +13892,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
              options.derive_session_keys = true;
              continue;
          }
-@@ -1303,6 +1369,13 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1303,6 +1370,13 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                  require_value("--rope-scaling-original-context"));
              continue;
          }
@@ -13883,7 +13906,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
          if (arg == "--wddm-evictable-budget") {
              options.wddm_evictable_budget = true;
              continue;
-@@ -1521,6 +1594,48 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1521,6 +1595,48 @@ ServeOptions parse_serve_options(int argc, char** argv) {
          throw std::invalid_argument("--default-graft '" + options.default_graft +
                                      "' does not name a --graft");
      }
@@ -13932,7 +13955,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
      if (!kv_capacity_explicit) {
          // The hybrid cache turns every Device page no active request holds into block cache, so
          // it sizes the KV pool to free VRAM unless a capacity is given.
-@@ -1534,8 +1649,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1534,8 +1650,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
              "caching systems");
      }
      if (options.context_cache.mode == ContextCacheMode::Hybrid) {
@@ -13943,7 +13966,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
                                          " configures the default prefix cache and cannot be "
                                          "combined with --use-alt-prefix-caching");
          }
-@@ -1574,10 +1689,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1574,10 +1690,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                                      " requires --use-alt-prefix-caching");
      }
      if (kv_headroom_mib.has_value()) {
@@ -13960,7 +13983,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
      }
      if (long_anchor_spacing_explicit && !options.context_cache.automatic_long_anchors) {
          throw std::invalid_argument("--long-anchor-spacing requires --auto-long-anchors");
-@@ -1648,7 +1769,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1648,7 +1770,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
          throw std::invalid_argument("--stats-port must be in [1,65535] and differ from --port");
      }
      if (options.max_context == 0) { throw std::invalid_argument("--max-context must be positive"); }
@@ -13969,7 +13992,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
          options.kv_capacity.explicit_tokens < options.max_context) {
          throw std::invalid_argument("--kv-capacity must be at least --max-context");
      }
-@@ -1689,10 +1810,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1689,10 +1811,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
          throw std::invalid_argument(
              "--cuda-graph-allowance-mib requires CUDA graphs (omit --no-cuda-graph)");
      }
@@ -13985,7 +14008,7 @@ index 8fc5043c46b464507bb1bd5cc898936dbab34510..a4e763419776a67e659808946eda7caf
      }
      if (options.ngram_native_sessions && options.speculative.ngram_archive_bytes == 0) {
          throw std::invalid_argument("--ngram-native-sessions requires --ngram-archive-mib");
-@@ -1712,6 +1834,88 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1712,6 +1835,88 @@ ServeOptions parse_serve_options(int argc, char** argv) {
      if (options.sleep_idle_seconds != 0 && !options.suspend.enabled && !options.router()) {
          throw std::invalid_argument("--sleep-idle-seconds requires --model-suspend");
      }

@@ -14,6 +14,8 @@ param(
     [ValidateSet('page-softmax', 'meanq-cosine')][string]$QueryScorer = 'page-softmax',
     [ValidateSet('mean', 'max')][string]$ScoreAggregation,
     [ValidateRange(0.0, 1.0)][double]$GraphAlpha,
+    [ValidateRange(1, 2147483647)][int]$QueryMaxTokens,
+    [ValidateRange(1, 2147483647)][int]$QueryReplayMaxTokens,
     [switch]$Lrfu,
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda,
