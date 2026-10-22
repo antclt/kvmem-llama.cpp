@@ -134,7 +134,7 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto(url);
     await page.waitForFunction(
-      () => document.querySelector('[data-gpu="load"]').textContent === "42",
+      () => document.querySelector('[data-gpu="load"]')?.textContent === "42",
     );
     assert.equal(await page.locator("#app").getAttribute("data-theme"), "dark");
     assert.equal(await page.locator('[data-gpu="power"]').textContent(), "—");
