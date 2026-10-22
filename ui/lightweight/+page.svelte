@@ -9,7 +9,10 @@
   import { settingsStore } from '$lib/stores/settings/index.svelte';
   import { streamChat } from './api';
 
-  type Message = DatabaseMessage & { uiStatus?: string };
+  type Message = DatabaseMessage & {
+    uiStatus?: string;
+    timings?: DatabaseMessage['timings'] & { predicted_per_second?: number };
+  };
   let props = $state<any>(null);
   let conversations = $state<DatabaseConversation[]>([]);
   let active = $state<DatabaseConversation | null>(null);
@@ -29,8 +32,14 @@
   let output = $state('');
   let sampling = $state<Record<string, string>>({temperature:'', top_p:'', top_k:'', min_p:''});
   const keys = ['temperature', 'top_p', 'top_k', 'min_p'];
-  let effectiveThinking = $derived(thinking === 'default' ? props?.kvmem.defaults.enable_thinking : thinking === 'on');
-  let defaults = $derived(props?.kvmem.sampling[effectiveThinking ? 'thinking' : 'non_thinking'] ?? {});
+  let serverThinking = $derived(props?.kvmem?.defaults?.enable_thinking);
+  let effectiveThinking = $derived(thinking === 'default' ? serverThinking : thinking === 'on');
+  let defaults = $derived(props?.kvmem?.sampling?.[effectiveThinking ? 'thinking' : 'non_thinking']
+    ?? (thinking === 'default' ? props?.default_generation_settings?.params : null) ?? {});
+  let modelName = $derived(props?.model_name ?? props?.model_alias);
+  let generationLimit = $derived(props?.kvmem?.generation_limit ?? props?.default_generation_settings?.n_ctx);
+  let defaultOutput = $derived(props?.default_generation_settings?.params?.max_tokens
+    ?? props?.default_generation_settings?.params?.n_predict);
 
   onMount(() => {
     settingsStore.initialize();
@@ -90,7 +99,7 @@
     };
   }
   function requestOptions() {
-    const body: Record<string, unknown> = {stream:true, model:props.model_name};
+    const body: Record<string, unknown> = {stream:true, model:modelName};
     if (thinking !== 'default') body.chat_template_kwargs = {enable_thinking:thinking === 'on'};
     if (effort.trim()) body.reasoning_effort = effort.trim();
     if (budget !== '') {
@@ -98,7 +107,7 @@
       body.reasoning_budget_tokens=n;
     }
     if (output !== '') {
-      const n=Number(output); if (!Number.isInteger(n) || n<1 || n>props.kvmem.generation_limit) throw new Error(`最大输出必须在 1..${props.kvmem.generation_limit} 内`);
+      const n=Number(output); if (!Number.isInteger(n) || n<1 || n>generationLimit) throw new Error(`最大输出必须在 1..${generationLimit} 内`);
       body.max_tokens=n;
     }
     for (const key of keys) if (sampling[key] !== '') {
@@ -171,16 +180,16 @@
   </aside>
   <main>
     <header>
-      <div><strong>{props?.model_name ?? '正在连接...'}</strong><small>{props ? `${props.default_generation_settings.n_ctx.toLocaleString()} 上下文 · ${props.modalities.vision ? '支持图片' : '文本'}` : ''}</small></div>
+      <div><strong>{modelName ?? '正在连接...'}</strong><small>{props ? `${props.default_generation_settings.n_ctx.toLocaleString()} 上下文 · ${props.modalities.vision ? '支持图片' : '文本'}` : ''}</small></div>
       <div class="actions"><a class="monitor-link" href="./monitor/" target="_blank" rel="noopener">监控 ↗</a><Button variant="outline" onclick={()=>settingsOpen=!settingsOpen}>参数</Button>{#if active}<Button variant="ghost" disabled={busy || loadingHistory} onclick={removeConversation}>删除对话</Button>{/if}</div>
     </header>
     {#if settingsOpen}
       <section class="settings" aria-label="生成参数">
         <p>留空即跟随服务器。思考强度与思考 token 预算分别设置。</p>
-        <label>思考<select bind:value={thinking} disabled={busy || loadingHistory}><option value="default">跟随服务器（{props?.kvmem.defaults.enable_thinking ? '开启' : '关闭'}）</option><option value="on">开启</option><option value="off">关闭</option></select></label>
-        <label>模型思考强度<input aria-label="模型思考强度" bind:value={effort} disabled={busy || loadingHistory} placeholder={props?.kvmem.defaults.chat_template_kwargs.reasoning_effort ?? '跟随模板'} list="efforts" /><datalist id="efforts"><option value="low"></option><option value="medium"></option><option value="xhigh"></option></datalist></label>
-        <label>思考 token 预算<input aria-label="思考 token 预算" type="text" inputmode="numeric" bind:value={budget} disabled={busy || loadingHistory} placeholder={String(props?.kvmem.defaults.reasoning_budget_tokens ?? '')} /></label>
-        <label>最大输出（含思考）<input aria-label="最大输出" type="text" inputmode="numeric" bind:value={output} disabled={busy || loadingHistory} placeholder={String(props?.default_generation_settings.params.max_tokens ?? '')} /></label>
+        <label>思考<select bind:value={thinking} disabled={busy || loadingHistory}><option value="default">跟随服务器（{serverThinking === true ? '开启' : serverThinking === false ? '关闭' : '未报告'}）</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+        <label>模型思考强度<input aria-label="模型思考强度" bind:value={effort} disabled={busy || loadingHistory} placeholder={props?.kvmem?.defaults?.chat_template_kwargs?.reasoning_effort ?? '跟随模板'} list="efforts" /><datalist id="efforts"><option value="low"></option><option value="medium"></option><option value="xhigh"></option></datalist></label>
+        <label>思考 token 预算<input aria-label="思考 token 预算" type="text" inputmode="numeric" bind:value={budget} disabled={busy || loadingHistory} placeholder={String(props?.kvmem?.defaults?.reasoning_budget_tokens ?? '')} /></label>
+        <label>最大输出（含思考）<input aria-label="最大输出" type="text" inputmode="numeric" bind:value={output} disabled={busy || loadingHistory} placeholder={defaultOutput > 0 ? String(defaultOutput) : ''} /></label>
         {#each keys as key}<label>{key}<input aria-label={key} bind:value={sampling[key]} disabled={busy || loadingHistory} inputmode="decimal" placeholder={defaults[key] === undefined ? '' : String(Number(Number(defaults[key]).toPrecision(6)))} /></label>{/each}
       </section>
     {/if}
@@ -197,7 +206,9 @@
               {#if message.uiStatus==='pending'}<span>{stopping ? '正在停止...' : '正在生成...'}</span>{/if}
               {#if message.uiStatus==='interrupted'}<span>已中止</span>{/if}
               {#if message.uiStatus==='error'}<span>生成失败</span>{/if}
-              {#if message.timings?.predicted_ms && message.timings.predicted_n !== undefined}<span>{(1000*message.timings.predicted_n/message.timings.predicted_ms).toFixed(2)} tok/s · {message.timings.predicted_n} token</span>{/if}
+              {#if message.timings && typeof message.timings.predicted_n === 'number' && Number.isInteger(message.timings.predicted_n) && message.timings.predicted_n >= 0}
+                <span class="timing">{#if message.timings.predicted_n > 1 && typeof message.timings.predicted_per_second === 'number' && Number.isFinite(message.timings.predicted_per_second) && message.timings.predicted_per_second > 0}{message.timings.predicted_per_second.toFixed(2)} tok/s · {/if}{message.timings.predicted_n} token</span>
+              {/if}
               {#if message.content}<button onclick={()=>copy(message.content)}>复制</button><button onclick={()=>download(message.content)}>下载</button>{/if}
             </footer>
           {/if}

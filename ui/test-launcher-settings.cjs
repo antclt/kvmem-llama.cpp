@@ -59,8 +59,10 @@ module.exports = async function settingsChecks({browser,base,info}) {
   await group(0);await field('DiskEnabled').uncheck();
   await disabled(['DiskPath','DiskMiB']);assert.equal(await field('DiskPath').inputValue(),'C:/cache/ui fixture');
   assert.equal(await field('DiskPath').getAttribute('required'),null,'disabled SSD does not require a path');
-  assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('图传播召回 C'));
-  for(const key of ['NoLrfu','ScoreAggregation'])assert.equal(await field(key).count(),0,'legacy draft cannot expose '+key);
+  assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('历史检索'));
+  assert.equal(await field('NoLrfu').count(),0,'legacy switch is migrated');
+  assert.equal(await field('QueryScorer').inputValue(),'meanq-cosine');
+  assert.equal(await field('ScoreAggregation').inputValue(),'max');
   await group(1);await field('FastPrefill').check();await disabled(['StageLayers']);
   await page.locator('[data-gpu-choice]').nth(1).check();await disabled(['StageLayers'],false);
   await field('StageLayers').fill('40,24');await page.locator('[data-gpu-choice]').nth(1).uncheck();
@@ -98,7 +100,7 @@ module.exports = async function settingsChecks({browser,base,info}) {
   const inactive=await preview();
   for(const key of ['DiskEnabled','DiskPath','DiskMiB','VisionTokens','VisionResidency','ThinkingBudget','ReasoningEffort','MtpEnabled','DraftTokens','DraftPolicy','NgramDrafts','NgramMinMatch','FastPrefill','StageLayers'])assert.equal(Object.hasOwn(inactive,key),false,'inactive override omitted: '+key);
   assert.equal(inactive.PreserveThinking,true,'preserving past reasoning is independent of the current thinking switch');
-  for(const key of ['NoLrfu','ScoreAggregation'])assert.equal(Object.hasOwn(inactive,key),false);assert.equal(inactive.ThinkingMode,'off');
+  assert.equal(Object.hasOwn(inactive,'NoLrfu'),false);assert.equal(inactive.ScoreAggregation,'max');assert.equal(inactive.Lrfu,true);assert.equal(inactive.ThinkingMode,'off');
   assert.equal(inactive.ApiKey,secret);assert.equal(inactive.ModelAlias,'UI friendly model');assert.equal(inactive.LogLevel,'debug');
   assert.equal(inactive.ChatTemplateFile,'C:/templates/ui fixture.jinja');assert.equal(inactive.RetainedSessions,1);
 

@@ -36,13 +36,13 @@ int main() {
             parse_memory(cosine,"--kvmem-lrfu"); cosine.resolve(); check(cosine.lrfu);
             parse_memory(cosine,"--kvmem-score-agg","mean"); cosine.resolve(); check(cosine.score_agg == 0);
             parse_memory(cosine,"--kvmem-graph-alpha","0.2");
-            rejects([&] {cosine.resolve();});
+            cosine.resolve(); check(cosine.graph_alpha == 0.2 && cosine.lrfu);
         }
         kvmem::CliOptions page;
         parse_memory(page,"--kvmem"); parse_memory(page,"--kvmem-score-agg","max");
         page.resolve(); check(page.score_agg == 1 && !page.lrfu && page.graph_alpha == 0.2);
         parse_memory(page,"--kvmem-graph-alpha","0"); page.resolve(); check(page.graph_alpha == 0);
-        parse_memory(page,"--kvmem-lrfu"); rejects([&] {page.resolve();});
+        parse_memory(page,"--kvmem-lrfu"); page.resolve(); check(page.lrfu);
         for (const char* value : {"nan","inf","-0.1","1.1","","0.2x"," 0.2"})
             rejects([&] {kvmem::CliOptions c; parse_memory(c,"--kvmem-graph-alpha",value);});
         for (const char* value : {"master","c","","softmax"})

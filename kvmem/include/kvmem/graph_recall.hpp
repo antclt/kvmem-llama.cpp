@@ -113,6 +113,9 @@ std::vector<uint32_t> prefill_sample_rows(uint64_t begin, uint32_t count, uint64
 // acceptance and other statistical preparations have all succeeded.
 GraphSnapshot prepare_graph_accept(const GraphSnapshot&, uint64_t begin, uint64_t end,
     const std::vector<AcceptedAttentionRow>&, size_t max_bytes, uint32_t topk = 4);
+// One hop over current-query positive mass, with signed negative residuals kept
+// at their source: min(score,0) + G(max(score,0)). Alpha zero is an exact bypass.
+// Apply before LRFU preview; never propagate accumulated history again.
 std::vector<double> propagate_query_scores(const std::vector<double>&,
     const QueryScoreFrame&, const GraphSnapshot&, double alpha = .2,
     double cross_message_weight = .25);

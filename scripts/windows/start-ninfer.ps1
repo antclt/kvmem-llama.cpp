@@ -45,6 +45,8 @@ param(
     [ValidateRange(64, 2147483647)][int]$RecentTokens = 1024,
     [ValidateSet('page-softmax', 'meanq-cosine')][string]$QueryScorer = 'page-softmax',
     [ValidateRange(0.0, 1.0)][double]$GraphAlpha,
+    [ValidateRange(1, 2147483647)][int]$QueryMaxTokens,
+    [ValidateRange(1, 2147483647)][int]$QueryReplayMaxTokens,
     [switch]$Lrfu,
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,

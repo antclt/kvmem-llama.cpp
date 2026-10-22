@@ -4,6 +4,7 @@
 #include "llama-kvmem-hooks.h"
 #include "llama-kvmem-execution.h"
 #include "kvmem/retrieval_options.hpp"
+#include "kvmem/launch_contract.hpp"
 #include "kvmem-spec.h"
 #include "kvmem-chat-sampling.h"
 #include "kvmem-chat-template.h"
@@ -140,7 +141,8 @@ static void print_usage(const char * argv0) {
             "  --kvmem-lrfu / --no-kvmem-lrfu  Query history (default on only for cosine)\n"
             "  --kvmem-lrfu-lambda X        history decay in [0,1] (default 0.5)\n"
             "  --kvmem-lrfu-top-frac X      history hit fraction in (0,1] (default 0.9)\n"
-            "  --kvmem-graph-alpha X        page-softmax propagation in [0,1] (default 0.2; cosine 0)\n"
+            "  --kvmem-graph-alpha X        Query propagation in [0,1] (default: page-softmax 0.2; cosine 0)\n"
+            "  --kvmem-capabilities         Print model-free console capability JSON and exit\n"
             "  --kvmem-query-max-tokens N cap last-user retrieval query to this many tokens\n"
             "  --kvmem-query-replay-max-tokens N bound the complete Query replay suffix (default 2048)\n"
             "                            from the end of the span (default 512; qw3-style)\n"
@@ -818,6 +820,10 @@ static bool parse_chat_request(const json & body, ChatRequest & out, std::string
 }
 
 int main(int argc, char ** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--kvmem-capabilities") {
+        puts(kvmem::launch_capabilities("llamacpp").c_str());
+        return 0;
+    }
     // Flush asynchronous common logs on every exit, including startup errors.
     struct log_flush_guard { ~log_flush_guard() { common_log_flush(common_log_main()); } } flush_logs;
     std::string ui_dir;
@@ -1100,9 +1106,11 @@ int main(int argc, char ** argv) {
     st.kparams.score_agg = options.score_agg;
     st.kparams.query_meanq_cosine = options.query_scorer == kvmem::QueryScorer::MeanQCosine;
     st.kparams.graph_alpha = options.graph_alpha;
-    if (options.enabled) fprintf(stderr,"KVMEM_SCORING scorer=%s agg=%s lrfu=%d lambda=%.6g top_frac=%.6g graph_alpha=%.6g\n",
+    if (options.enabled) fprintf(stderr,"KVMEM_SCORING scorer=%s agg=%s lrfu=%d lambda=%.17g top_frac=%.17g graph_alpha=%.17g\n",
         kvmem::query_scorer_name(options.query_scorer), options.score_agg ? "max" : "mean",
         int(options.lrfu),options.lrfu_lambda,options.lrfu_top_fraction,options.graph_alpha);
+    if (options.enabled) fprintf(stderr,"KVMEM_LIMITS query_max_tokens=%d query_replay_max_tokens=%d\n",
+        st.query_max_tokens,st.query_replay_max_tokens);
     if (options.sessions_set && options.legacy_conversations)
         throw std::invalid_argument("--kvmem-sessions counts inactive histories; do not combine it with legacy --kvmem-conversations");
     if (options.legacy_conversations)

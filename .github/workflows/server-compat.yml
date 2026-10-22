@@ -256,6 +256,16 @@ jobs:
           node-version: '24'
       - run: python3 tests/test_webui_builder.py
         if: needs.changes.outputs.run_ci == 'true'
+      - name: Install console browser tests
+        if: needs.changes.outputs.run_ci == 'true' && matrix.mode == 'lightweight'
+        working-directory: ui
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Test console and monitor in Chromium
+        if: needs.changes.outputs.run_ci == 'true' && matrix.mode == 'lightweight'
+        working-directory: ui
+        run: npm test
       - name: Build UI
         if: needs.changes.outputs.run_ci == 'true'
         env:
@@ -266,6 +276,10 @@ jobs:
           else
             python3 scripts/build-webui.py
           fi
+      - name: Test built chat against both backend props
+        if: needs.changes.outputs.run_ci == 'true' && matrix.mode == 'lightweight'
+        working-directory: ui
+        run: node test-chat-props.cjs
       - name: Documentation-only result
         if: needs.changes.outputs.run_ci == 'false'
         run: echo 'Documentation only; UI tests and builds skipped.'

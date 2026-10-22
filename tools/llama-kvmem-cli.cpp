@@ -50,7 +50,7 @@ static void print_usage(const char * argv0) {
             "  --kvmem-lrfu / --no-kvmem-lrfu  Query history (default on only for cosine)\n"
             "  --kvmem-lrfu-lambda X        history decay in [0,1] (default 0.5)\n"
             "  --kvmem-lrfu-top-frac X      history hit fraction in (0,1] (default 0.9)\n"
-            "  --kvmem-graph-alpha X        page-softmax propagation in [0,1] (default 0.2; cosine 0)\n"
+            "  --kvmem-graph-alpha X        Query propagation in [0,1] (default: page-softmax 0.2; cosine 0)\n"
             "  --kvmem-query-max-tokens N cap raw Query capture (default 512)\n"
             "  --kvmem-query-replay-max-tokens N bound full replay suffix (default 2048)\n"
             "  --kvmem-query-last N       last N prompt tokens are the retrieval query (default 64)\n"

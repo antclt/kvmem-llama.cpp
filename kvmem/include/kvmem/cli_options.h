@@ -39,7 +39,7 @@ struct CliOptions {
         if (!score_agg_set) score_agg = cosine ? 1 : 0;
         if (!lrfu_set) lrfu = cosine;
         if (!graph_alpha_set) graph_alpha = cosine ? 0.0 : 0.2;
-        validate_query_scoring(query_scorer, score_agg, lrfu, graph_alpha);
+        validate_query_scoring(query_scorer, score_agg, graph_alpha);
         if (lrfu_tuning_set && !lrfu)
             throw std::invalid_argument("LRFU tuning requires enabled LRFU");
     }

@@ -90,7 +90,7 @@ Models and inference workers must be included separately; the console does not d
 Put ninfer-kvmem-server.exe, ninfer-serve.exe or llama-kvmem-server.exe beside START-HERE-CN.bat,
 or in bin or workers/<backend>, with their runtime dependencies and chat UI.
 Leave Backend executable empty for detection. Manual paths and worker-paths.json take
-precedence. Detection does not execute files or check binary compatibility.
+precedence. Configuration checks query the selected worker's model-free launch contract.
 If no default worker is found, choose its executable in Engine-specific settings.
 Use Find models to scan nearby model libraries, or choose/paste a model folder.
 Explicitly scanned folders are remembered locally, including across console port changes.
@@ -130,7 +130,7 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllText((Join-Path $output 'START-HERE.txt'), $readme, $utf8)
 $hashes = @{}
 foreach ($relative in $files) { $hashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $output $relative)).Hash.ToLowerInvariant() }
-$manifest = @{ schema_version=1; python_version=[string]$version[-1];
+$manifest = @{ schema_version=1; launch_contract_version=2; python_version=[string]$version[-1];
     python_archive_sha256=$PythonSha256.ToLowerInvariant(); offline_console=$true;
     models_included=$false; controller_files=$hashes }
 [IO.File]::WriteAllText((Join-Path $output 'console-build.json'), ($manifest | ConvertTo-Json -Depth 5), $utf8)

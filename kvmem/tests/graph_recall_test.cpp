@@ -1,10 +1,12 @@
 #include "kvmem/graph_recall.hpp"
 #include "kvmem/raw_kv_store.hpp"
 #include "kvmem/kvmem_store.hpp"
+#include "kvmem/cli_options.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <numeric>
+#include <limits>
 #include <stdexcept>
 
 namespace {
@@ -162,6 +164,66 @@ void feedback_and_pressure() {
     require(recency==std::vector<uint32_t>({0,3}),"pressure recency fill mismatch");
     rejects([] { kvmem::pressure_selection({0},{1},{0,1},1); });
 }
+void orthogonal_query_scoring() {
+    kvmem::GraphSnapshot graph; graph.block_tokens=1;
+    // Three adjacent pages; the final page also has an accepted attention edge to page 0.
+    graph=kvmem::prepare_graph_accept(graph,0,3,{{2,{{0,1}}}},1u<<20);
+    const auto frame=kvmem::query_score_frame(3,1,2,0,0,{});
+    const std::vector<double> raw{.8,-.2,.4};
+    auto actual=kvmem::propagate_query_scores(raw,frame,graph,.4);
+    // Explicit independent transport matrix (columns = sources):
+    // [ .9 .1 .2; .1 .8 .1; 0 .1 .7 ] applied to [.8,0,.4], plus [0,-.2,0].
+    const std::vector<double> expected{.8,-.08,.28};
+    for (size_t i=0;i<3;++i) close(actual[i],expected[i]);
+    close(std::accumulate(actual.begin(),actual.end(),0.),1.);
+    require(kvmem::propagate_query_scores(raw,frame,graph,0)==raw,"alpha zero changed signed scores");
+    const std::vector<double> negative{-.8,-.2,-.4};
+    require(kvmem::propagate_query_scores(negative,frame,graph,1)==negative,
+        "negative scores generated transport evidence");
+    auto masked=frame; masked.transport_mask[2]=0;
+    actual=kvmem::propagate_query_scores(raw,masked,graph,.4);
+    close(actual[0],.72);close(actual[1],-.12);close(actual[2],.4);
+    rejects([&]{kvmem::propagate_query_scores({0,std::numeric_limits<double>::quiet_NaN(),0},frame,graph,0);});
+    rejects([&]{kvmem::propagate_query_scores({0,std::numeric_limits<double>::infinity(),0},frame,graph,.4);});
+
+    kvmem::RawKvStore keys({1,1,0,1});
+    const float a[]{1},b[]{-1},c[]{.5},q[]{1};const uint32_t count[]{1};
+    keys.write_layer_mean_sum(0,1,0,a);keys.write_layer_mean_sum(1,1,0,b);keys.write_layer_mean_sum(2,1,0,c);
+    const kvmem::PageQueryView view{q,count,1,1,1,1,1};
+    for (const auto* scorer : {"page-softmax","meanq-cosine"})
+        for (const auto* agg : {"mean","max"}) for (bool history : {false,true})
+            for (const auto* alpha : {"0","0.4","1"}) {
+                kvmem::CliOptions options;
+                auto parse=[&](const char* flag,const char* value="") {
+                    require(options.parse(flag,[&](const char*){return value;}),"unknown Query option");
+                };
+                // Explicit overrides before scorer selection must survive resolution.
+                parse("--kvmem");parse(history ? "--kvmem-lrfu" : "--no-kvmem-lrfu");
+                parse("--kvmem-graph-alpha",alpha);parse("--kvmem-score-agg",agg);
+                parse("--kvmem-query-scorer",scorer);options.resolve();
+                require(options.lrfu==history && options.graph_alpha==std::stod(alpha),"Query controls coupled");
+                const auto aggregation=options.score_agg ? kvmem::GqaScoreAggregation::Max : kvmem::GqaScoreAggregation::Mean;
+                const auto scores=options.query_scorer==kvmem::QueryScorer::MeanQCosine ?
+                    kvmem::mean_query_cosine_scores(keys,view,3,aggregation) :
+                    kvmem::page_softmax_scores(keys,view,frame,aggregation);
+                const auto propagated=kvmem::propagate_query_scores(scores,frame,graph,options.graph_alpha);
+                kvmem::KvMemStoreConfig cfg;cfg.block_tokens=1;cfg.select_budget=2;cfg.sink_blocks=0;cfg.recent_blocks=0;
+                cfg.lrfu=history;cfg.lrfu_lambda=.5;cfg.lrfu_top_fraction=1;
+                kvmem::KvMemStore store(cfg);store.register_append(3);store.begin_retrieval_round();
+                store.set_retrieval_scores(propagated);
+                for(size_t i=0;i<3;++i) close(store.selection_score(uint32_t(i)),propagated[i]);
+                if(!history) continue;
+                require(store.commit_retrieval_round(),"accepted Query failed to commit");
+                const auto checkpoint=store.retrieval_checkpoint();
+                store.begin_retrieval_round();
+                // The next query has no positive evidence: old positive history must not diffuse again.
+                store.set_retrieval_scores(negative);store.set_retrieval_scores(negative);
+                for(size_t i=0;i<3;++i) close(store.selection_score(uint32_t(i)),.5*propagated[i]+negative[i]);
+                require(store.commit_retrieval_round() && !store.commit_retrieval_round(),"Query rewarded twice");
+                store.restore_retrieval(checkpoint);
+                for(size_t i=0;i<3;++i) close(store.selection_score(uint32_t(i)),propagated[i]);
+            }
+}
 void accepted_sampling() {
     std::vector<int32_t> tokens(35,42);
     tokens[0]=10; tokens[9]=11; tokens[26]=10; tokens[30]=11;
@@ -220,7 +282,7 @@ void message_locality() {
 } // namespace
 int main() {
     try {
-        frames_and_scores(); gqa_and_large_domain(); scorer_variants(); graph_lifecycle(); feedback_and_pressure(); accepted_sampling(); fixed_picker(); statistics_budget(); message_locality();
+        frames_and_scores(); gqa_and_large_domain(); scorer_variants(); graph_lifecycle(); orthogonal_query_scoring(); feedback_and_pressure(); accepted_sampling(); fixed_picker(); statistics_budget(); message_locality();
         std::cout << "graph recall numerical and accepted-state checks passed\n";
         return 0;
     } catch (const std::exception& e) {

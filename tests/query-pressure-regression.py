@@ -29,6 +29,7 @@ def main():
     if isinstance(command, dict):
         command = command['argv']
     command = list(command)
+    scorer = command[command.index('--kvmem-query-scorer') + 1] if '--kvmem-query-scorer' in command else 'page-softmax'
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
@@ -167,7 +168,7 @@ def main():
             follow+=[response['choices'][0]['message'],{'role':'user','content':'What color is the river in the latest observation?'}]
             _,trace=ask('new-query-after-resident',follow,16,session='policy-fits')
             if not a.reject_replay:
-                check('new Query captures fresh features','KVMEM_QUERY scorer=page-softmax' in trace)
+                check('new Query captures fresh features','KVMEM_QUERY scorer='+scorer in trace)
             report['status']='passed'
             save()
         finally:

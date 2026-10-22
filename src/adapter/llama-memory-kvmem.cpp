@@ -542,7 +542,7 @@ static kvmem::KvMemRuntimeConfig make_runtime_cfg(
     kvmem::KvMemRuntimeConfig cfg;
     const auto& params = kvmem_current_execution().params;
     kvmem::validate_query_scoring(params.query_meanq_cosine ? kvmem::QueryScorer::MeanQCosine : kvmem::QueryScorer::PageSoftmax,
-        params.score_agg,params.lrfu,params.graph_alpha);
+        params.score_agg,params.graph_alpha);
     cfg.store.lrfu = kvmem_current_execution().params.lrfu;
     cfg.store.lrfu_lambda = kvmem_current_execution().params.lrfu_lambda;
     cfg.store.lrfu_top_fraction = kvmem_current_execution().params.lrfu_top_fraction;
@@ -4387,8 +4387,9 @@ void llama_memory_kvmem::score_retrieval(const llama_kvmem_tail_mean_state* pref
 #else
             scores=kvmem::page_softmax_scores(*raw_,query,frame,aggregation);
 #endif
-            scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : graph_,graph_alpha_);
         }
+        if (graph_alpha_ > 0)
+            scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : graph_,graph_alpha_);
     } catch (...) {
         if (prefix) raw_->restore_mean_checkpoint(frontier,previous);
         throw;

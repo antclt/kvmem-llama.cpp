@@ -139,8 +139,11 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.deepEqual((await api('info')).body.draft,originalDraft,'preset must not save');
  assert.equal((await api('status')).body.state,'stopped','preset must not launch');
  await page.getByRole('tab',{name:'缓存与历史'}).click();
- assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('图传播召回 C'));
- for(const key of ['NoLrfu','LrfuLambda','LrfuTopFraction','ScoreAggregation'])assert.equal(await page.locator('[data-param='+key+']').count(),0,'C has no legacy ranking control: '+key);
+ assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('历史检索'));
+ assert.equal(await page.locator('[data-param=NoLrfu]').count(),0,'legacy switch is migrated');
+ assert.equal(await page.locator('[data-param=QueryScorer]').inputValue(),'page-softmax');
+ assert.equal(await page.locator('[data-param=GraphAlpha]').inputValue(),'0.2');
+ assert.equal(await page.locator('[data-param=Lrfu]').isChecked(),false);
  const expected={Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,DraftTokens:4,SpeculativeMode:'mtp',DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,DeviceProfile:'off'};
  for(const [key,value] of Object.entries(expected))assert.equal(await page.locator('[data-param='+key+']').inputValue(),String(value),key);
  for(const key of ['Vision'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),true,key);
@@ -160,7 +163,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.reload();await page.getByRole('tab',{name:'缓存与历史'}).click();
  assert.equal(await page.locator('[data-param=ListenHost]').inputValue(),'0.0.0.0','listen address survives reload');
  await page.locator('[data-language-select]').selectOption('en');
- assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('Graph recall C'));
+ assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('History retrieval'));
  await page.locator('[data-language-select]').selectOption('zh-CN');
  await page.locator('[data-theme-select]').selectOption('blue');
  await page.getByRole('tab',{name:'硬件与加速'}).click();
@@ -232,11 +235,17 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
   assert.ok((await page.locator('[data-dialog=check]').textContent()).includes('已占用'));
   assert.equal(await page.locator('[data-dialog=check] .l-check-command').getAttribute('open'),null);
   await page.locator('[data-dialog=check] [data-dialog-close]').click();
-  for(const key of ['NoLrfu','LrfuLambda','LrfuTopFraction','ScoreAggregation'])assert.equal(Object.hasOwn(recallRequests[0],key),false,'legacy ranking omitted: '+key);
+  for(const key of ['NoLrfu','LrfuLambda','LrfuTopFraction'])assert.equal(Object.hasOwn(recallRequests[0],key),false,'inactive history omitted: '+key);
+  assert.equal(recallRequests[0].QueryScorer,'page-softmax');assert.equal(recallRequests[0].Lrfu,false);assert.equal(recallRequests[0].ScoreAggregation,'mean');
   await page.unroute('**/api/launcher/preview');
  }
  assert.equal((await api('status')).body.state,'stopped','editing/templates/checks never start a service');
  // Model-free lifecycle feedback: pending request, loading, ready and failure.
+ const lifecycleGpu={uuid:'GPU-browser-lifecycle-fixture',name:'Browser lifecycle fixture'};
+ const lifecycleInfo=async route=>route.fulfill({json:{...info,gpus:[lifecycleGpu]}});
+ await page.route('**/api/launcher/info',lifecycleInfo);
+ await page.reload();await page.locator('[data-param=Backend]').waitFor();
+ await page.locator('[data-param=Backend]').selectOption('llamacpp');
  const navBefore=await page.locator('.s-nav').boundingBox();
  const chat=page.locator('[data-chat-link]');
  assert.equal(await chat.isVisible(),true);
@@ -245,7 +254,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  let lifecycle={state:'stopped',url:null};
  await page.route('**/api/launcher/status',route=>route.fulfill({json:lifecycle}));
  await page.locator('[data-param=Model]').fill('C:/models/test.gguf');
- if(info.gpus.length)for(const check of await page.locator('[data-gpu-choice]').all())await check.setChecked(await check.getAttribute('data-gpu-choice')===info.gpus[0].uuid);
+ await page.locator(`[data-gpu-choice="${lifecycleGpu.uuid}"]`).check();
  let releaseStart;
  await page.route('**/api/launcher/start',async route=>{await new Promise(resolve=>releaseStart=resolve);lifecycle={state:'starting',url:'http://127.0.0.1:18200',pid:123};await route.fulfill({json:lifecycle});});
  await page.locator('[data-action=start]').click();
@@ -273,6 +282,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.ok((await page.locator('[data-launch-help]').textContent()).includes('端口已占用'));
  await page.locator('[data-dialog=error] [data-dialog-close]').click();
  await page.unroute('**/api/launcher/start');await page.unroute('**/api/launcher/status');
+ await page.unroute('**/api/launcher/info',lifecycleInfo);
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  await page.locator('[data-template-tab=builtin]').click();
  assert.deepEqual(await page.locator('.s-nav [data-page]').evaluateAll(items=>items.map(el=>el.dataset.page)),['config','monitor','about']);
@@ -294,13 +304,16 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.setViewportSize({width:1920,height:1080});
  if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'launch-desktop.png'),fullPage:true});}
  await require('./test-launcher-settings.cjs')({browser,base,info});
+ await require('./test-query-scoring.cjs')({browser,base,info});
  if(process.env.TEST_MODEL&&process.env.TEST_WORKER&&process.env.TEST_GPU){
-  const config={schema_version:1,parameters:{Backend:'llamacpp',Model:process.env.TEST_MODEL,Worker:'',Gpu:process.env.TEST_GPU,Context:4096,Budget:2048,Reserve:512,HostMiB:256,Prefill:128,MaxTokens:128,Port:port+1,ListenHost:'127.0.0.1',SinkTokens:512,RecentTokens:64,WorkerArgs:['--n-gpu-layers','99']}};
+  const config={schema_version:1,parameters:{Backend:'llamacpp',Model:process.env.TEST_MODEL,Worker:'',Gpu:process.env.TEST_GPU,Context:4096,Budget:2048,Reserve:512,HostMiB:256,Prefill:128,MaxTokens:128,Port:port+1,ListenHost:'127.0.0.1',SinkTokens:512,RecentTokens:64,QueryScorer:'meanq-cosine',ScoreAggregation:'mean',GraphAlpha:.2,Lrfu:false,QueryMaxTokens:128,QueryReplayMaxTokens:512,WorkerArgs:['--n-gpu-layers','99']}};
   const preview=await api('preview',config);assert.equal(preview.code,200,JSON.stringify(preview.body));assert.ok(preview.body.argv.includes('--kvmem'));
   await page.waitForFunction(()=>document.querySelector('[data-draft-state]').textContent.includes('已自动保存'));
   await page.evaluate(()=>localStorage.removeItem('kvmem-launch-draft-v2'));assert.equal((await api('save',config)).code,200);await page.reload();await page.locator('[data-param=Model]').waitFor();
   await page.getByRole('button',{name:'启动服务',exact:true}).click();
   await until(async()=>{const s=(await api('status')).body;if(s.state==='exited')throw Error((await api('log')).body.text);return s.state==='ready';},90000);
+  await until(async()=>{const s=(await api('status')).body;return s.scoring_confirmed;},15000);
+  const observed=(await api('status')).body.effective_scoring;assert.equal(observed.scorer,'meanq-cosine');assert.equal(observed.lrfu,false);assert.equal(observed.graph_alpha,.2);assert.equal(observed.query_max_tokens,128);assert.equal(observed.query_replay_max_tokens,512);
   await until(async()=>page.locator('[data-action=stop]').isEnabled());
   assert.equal((await api('start',config)).code,400,'duplicate start');
   const snapshot=await fetch(base+'/api/monitor/snapshot');assert.equal(snapshot.status,200);assert.equal((await snapshot.json()).backend,'llamacpp');

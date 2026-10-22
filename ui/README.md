@@ -283,10 +283,29 @@ authenticates to the owned service; external clients supply the same key themsel
 
 The primary resource row contains context, GPU history budget B and generation reserve R;
 RAM history budget H is under Cache & history. R is append KV workspace per active request,
-not an output-length setting. The current llama.cpp implementation still limits output to
-R, while NInfer can reuse that workspace. Retained sessions counts idle histories only.
+not an output-length setting. Both backends reuse that workspace with resident-only
+Pressure. Retained sessions counts idle histories only.
 Help appears from the small information buttons on hover or keyboard focus. Click to pin,
 press Escape or click elsewhere to dismiss; opening help does not move the form.
+
+Cache & history → Advanced exposes the Query scorer (page-softmax or Mean-Q
+cosine), GQA mean/max aggregation, graph strength, LRFU, and the Query/replay
+token limits. These controls are independent; selecting a scorer does not toggle
+graph propagation or history. Alpha zero disables propagation. The default C
+recipe uses page-softmax/mean, alpha 0.2 and no LRFU. Legacy signed-cosine
+templates migrate to explicit controls; disabled LRFU remains explicitly false.
+History decay and reward fraction retain their draft values when inactive.
+
+Check configuration queries the selected worker's model-free
+`--kvmem-capabilities` contract with GPU visibility disabled. Older workers or
+launch scripts produce an update message before model startup. An offline
+package checks its controller, script and page hashes together on startup, so
+partial file replacement cannot silently mix console versions.
+
+Runtime details and monitoring show the native startup report and whether it
+matches the launch plan, including the actual scorer, graph strength, LRFU and
+Query/replay limits. Editing a draft cannot change this report. When native
+logging is disabled or the report is incomplete, the UI waits for confirmation.
 
 Feature switches disable only dependent controls. Disabled values stay in browser drafts
 and personal templates but are omitted from preview/start payloads. SSD controls its path
@@ -299,16 +318,16 @@ thinking switch. These two controls are currently NInfer-only. The JSON bridge p
 typed native arrays; its native-option allowlist is unchanged by the direct script's
 `WorkerArgsFile` support.
 
-The MTP switch controls draft length, adaptive MTP and N-gram overrides;
-turning it off preserves all of their values while omitting them from preview/start payloads.
-It is browser state only (`MtpEnabled`), so no new worker argument is needed. Existing
-drafts/templates without the switch infer its state from a positive `MtpDrafts` value.
-The draft length is required when enabled (1–15); a first enable from zero/empty uses 4.
-Re-enabling restores a saved positive length, adaptive choice and N-gram values. N-gram
-zero disables minimum match. Fast prefill depends on KV format, and layer allocation needs
+Draft method selects Off, MTP or DFlash2 according to the backend capability
+profile. Disabled draft settings retain their values while being omitted from
+preview/start payloads. Existing `MtpDrafts`/`AdaptiveMtp` templates migrate to
+`SpeculativeMode`/`DraftTokens`/`DraftPolicy`. The profile controls draft limits,
+fixed/adaptive support, concurrency and required companion assets; a compatible
+model is still required. N-gram zero disables minimum match. Fast prefill depends
+on KV format, and layer allocation needs
 at least two GPUs. llama.cpp concurrency above one disables SSD while keeping its saved
 values. Controls unsupported by a backend remain unavailable when other switches change.
-The SSD and MTP switches are browser state only; workers keep their existing parameters.
+The SSD enable switch is browser state only; draft controls map to native worker options.
 
 Checks: `python tests/test_local_console.py`, `python tests/test_webui_builder.py`,
 `node ui/test-monitor.cjs`, and `node ui/test-launcher.cjs`. The launcher browser check
@@ -323,6 +342,15 @@ selects its adapter checkout, and `CONSOLE_TEST_PORT` defaults to 18431 (worker 
 `CHROMIUM` and `PLAYWRIGHT_MODULE` select the locally installed browser/runtime.
 
 ## Chat regression checks
+
+After a lightweight build, `node ui/test-chat-props.cjs` checks the built page
+against both native `/props` contracts without loading a model. `UI_DIST` may
+select another built directory. NInfer uses the standard model alias and generation
+settings when llama.cpp extensions are absent; unreported thinking defaults remain
+server-owned. This browser check also runs in the lightweight CI job.
+Chat throughput uses the native `predicted_per_second` value. Single-token replies
+and missing or nonpositive rates display only the output token count, since a
+clamped duration cannot establish a valid decode rate.
 
 Run against a disposable test service, not an active conversation. The HTTP check needs a model that can answer simple arithmetic, with a generation reserve of at least 128. The browser check uses up to 512 generated tokens and requires Playwright's Chromium or `CHROMIUM` pointing to a compatible installation.
 
