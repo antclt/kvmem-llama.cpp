@@ -409,3 +409,34 @@ correctness is qualified separately at smallR; its throughput is not measured
 here. This work does not restart RULER or add broad quality, media, vendor or
 multi-GPU qualification. The optional idle pair holds at most293.6MiB on this
 IQ3 Program, appears in checkpoint_bytes and is released with the Program.
+
+### NInfer assistant-prefill regression
+
+Run `tests/ninfer-assistant-prefill-regression.py --argv-json <server-command.json>
+--output <new-results-directory> --gpu <CUDA-device-UUID>` with an existing local
+model. The JSON contains the server argv array, optionally under `argv`. Use
+KVMem B=1024, R=1024, prefill chunks of 256, max-context at least 8192 and one
+concurrent request. The runner starts a private loopback server, enables
+`--assistant-prefill`, disables thinking, and records requests, responses and
+per-request native traces. It always shuts down its own server.
+
+The test first evaluates an assistant prefix, then submits the same user question
+with a longer assistant prefix. It requires an exact cached restore that includes
+the old assistant text, `same_query=1`, no Query rescoring/replay, new prefill
+attention samples strictly within the uncached accepted suffix, and a real
+prefill Pressure boundary. EOS is a valid completion: this checks cache and
+attention-feedback behavior, not answer quality or decode throughput. Models
+with different tokenizers may need a separately adapted workload; failures to
+reach the required restore, sampling or Pressure boundaries are not passes.
+
+On 2026-10-22, RTX 5060 Ti with the existing Qwen3.8 27B IQ3 model, INT8 KV,
+MTP4 and C defaults passed twice: 46 cached tokens, 2471 input tokens, three
+prefill batches totaling 24 attention samples, and Pressure at token 2048.
+A temporary build restoring only the old `query_replayed` sampling guard failed
+specifically on missing samples (zero), confirming that the regression detects
+the defect. The fixed source and executable were restored afterwards.
+This diagnostic uses transfer verification and a small window: extended-request
+wall times were 8.92 and 9.61 seconds with the fix versus 4.70 seconds in the
+single negative-control run. The extra cost is unresolved; these are not warmed
+throughput measurements or evidence of unchanged performance. The model returned
+EOS for these supplied assistant prefixes, so answer quality is not qualified.
