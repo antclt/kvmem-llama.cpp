@@ -187,8 +187,13 @@ global clamp or offset. A negative page can receive positive evidence from
 neighbors. Alpha zero returns `s` exactly; an all-nonpositive vector also remains
 unchanged. Nonnegative page-softmax scores use the existing propagation formula.
 Mandatory pages remain excluded from transport. LRFU consumes `r` using its
-existing hit-fraction and decay rules: history represents relevance to previous
-queries, not just the current one. Page-softmax still sums Query tokens, so
+hit-fraction and decay rules. The fraction gates positive reinforcement only;
+negative evidence is retained for every page, including non-hits. In symbols,
+`H_t = lambda * H_(t-1) + min(r,0) + hit(r) * max(r,0)`.
+Threshold ties are included. This avoids promoting an unselected negative page
+above a selected less-negative page solely by replacing its increment with zero.
+History represents relevance to previous queries, not just the current one.
+Page-softmax still sums Query tokens, so
 longer queries can contribute more history mass; enabling LRFU does not add a
 new per-query normalization or make scores comparable between scorers.
 
