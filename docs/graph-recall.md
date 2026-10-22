@@ -1,6 +1,6 @@
 # Graph recall C
 
-Current source builds use C for KVMem retrieval in both llama.cpp and NInfer.
+Current source builds default to C for KVMem retrieval in both llama.cpp and NInfer; the scoring options below also expose Mean-Q cosine and normalized GQA max.
 The resource recipe in `start-ninfer.ps1` still follows 0.18: context 204800,
 B=36864, R=16384, host KV=12288 MiB, prefill=256, sink/recent=12288/1024,
 adaptive MTP4 and ngram31/minimum12. Published 0.18 binaries retain their old
@@ -17,8 +17,8 @@ For every actual query token, active full-attention layer and query head,
 compute scaled dot products against the corresponding KV head's Mean-K pages,
 then softmax over the eligible page domain. Average layers/heads and sum token
 scores. Q and Mean-K have an explicit FP16 operand boundary. Recurrent layers
-are absent, not zero-valued attention layers. Averaging Q before softmax, taking
-the maximum GQA head, and adding LRFU history would change the algorithm.
+are absent, not zero-valued attention layers. This is the default mean-head
+configuration; optional scoring variants are defined under Startup scoring options.
 
 The denominator mask and graph transport mask are separate. The latter removes
 the exact fixed set reserved by the picker, including mandatory media groups.
@@ -151,11 +151,47 @@ retains its explicit exemption from that full-history reset.
   requires its mandatory set to be resident/incoming and cannot fetch cold KV
   to satisfy a ranking accident.
 
-`--kvmem-lrfu` and `--kvmem-score-agg max` conflict with C and are rejected by
-workers/launchers. `--no-kvmem-lrfu` and mean remain accepted compatibility
-spellings. The launcher UI describes C and omits obsolete ranking values from
-old drafts/templates. Existing published performance tables describe their
-original release, not C.
+### Startup scoring options
+
+Both native servers accept the same options. They affect Query scoring only;
+Pressure, bounded replay, tool append, accepted-token accounting and rollback use
+the shared execution policy described above. Options are fixed for the engine's
+lifetime; histories are engine-local and llama lane transfer checks the scorer,
+aggregation, graph alpha and LRFU configuration before attaching a conversation.
+
+| Option | Values and default |
+| --- | --- |
+| `--kvmem-query-scorer` | `page-softmax` (default), `meanq-cosine` |
+| `--kvmem-score-agg` | `mean`, `max`; omitted: page-softmax mean, meanq-cosine max |
+| `--kvmem-lrfu` / `--no-kvmem-lrfu` | omitted: enabled only for meanq-cosine; explicit override wins regardless of scorer argument order |
+| `--kvmem-lrfu-lambda` | [0,1], default 0.5; requires enabled LRFU |
+| `--kvmem-lrfu-top-frac` | (0,1], default 0.9; requires enabled LRFU |
+| `--kvmem-graph-alpha` | [0,1]; omitted: page-softmax 0.2, meanq-cosine 0; zero bypasses propagation |
+
+Page-softmax max takes each head's page probabilities, the maximum within each
+KV head's GQA group, then renormalizes that group over eligible pages. It averages
+KV groups/layers and sums Query tokens. Mean-Q cosine first sums Query rows and
+uses the existing cosine scorer: max compares individual Query heads; mean folds
+heads within a GQA group before cosine. Its signed scores retain their ordering;
+no clipping or offset enters LRFU. History is committed once at accepted prefill,
+not on probes, tool continuations or speculative rejected rows.
+
+Page-softmax plus LRFU and meanq-cosine plus nonzero graph alpha are rejected.
+Selecting a scorer alone does not enable KVMem; use `--kvmem` or a positive budget.
+Startup diagnostics print the resolved configuration.
+
+```text
+--kvmem-query-scorer meanq-cosine --kvmem-score-agg max --kvmem-lrfu
+--kvmem-query-scorer meanq-cosine --kvmem-score-agg max --no-kvmem-lrfu
+--kvmem-query-scorer page-softmax --kvmem-score-agg mean --kvmem-graph-alpha 0.2
+--kvmem-query-scorer page-softmax --kvmem-score-agg max --kvmem-graph-alpha 0.2
+```
+
+Windows launchers expose `-QueryScorer`, `-ScoreAggregation`, `-GraphAlpha`,
+`-Lrfu`/`-NoLrfu`, `-LrfuLambda` and `-LrfuTopFraction` with the same defaults.
+The graphical launcher retains the default C recipe; these variants are CLI
+options, not new UI controls. Published performance tables describe their
+original release, not these variants.
 
 ## Focused qualification
 

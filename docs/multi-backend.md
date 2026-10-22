@@ -30,7 +30,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\start-ninf
 
 `-Worker` 可指定本地构建的 `ninfer-serve.exe` 或 `llama-kvmem-server.exe`；省略时使用包内 `workers/<backend>/` 的程序。`-DryRun` 输出启动参数，`-Describe` 查询静态能力。默认监听 `127.0.0.1:18200`，前台运行，Ctrl+C 结束本次启动的 worker。安装 NVIDIA 驱动及 Microsoft Visual C++ 2015–2022 x64 Runtime；包内保留各引擎的 DLL，模型另行提供。
 
-当前源码的两个后端默认使用 [图召回 C](graph-recall.md)：Query 按 token/head 做 Mean-K page softmax 后执行一次图传播；prefill/decode pressure 按累计 accepted attention 对驻留工作集重选，不做图传播或冷页召回。LRFU 与 max 聚合会被拒绝。资源配方仍保留 0.18 的 B/R/H、sink=12288、recent=1024 等参数，`-DryRun` 可查看。已发布旧 ZIP 继续采用其原有算法；新脚本需要与新 worker 配套。
+当前源码的两个后端默认使用 [图召回 C](graph-recall.md)：Query 按 token/head 做 Mean-K page softmax 后执行一次图传播；prefill/decode pressure 按累计 accepted attention 对驻留工作集重选，不做图传播或冷页召回。原生命令行与 Windows 启动脚本支持 meanq-cosine/page-softmax、GQA mean/max 和图传播比例；LRFU 仅支持 meanq-cosine。资源配方仍保留 0.18 的 B/R/H、sink=12288、recent=1024 等参数，`-DryRun` 可查看。已发布旧 ZIP 继续采用其原有算法；新脚本需要与新 worker 配套。
 
 当前源码的 KVMem CLI v1 由两个 worker 共用解析和默认定义。两个 EXE 都支持 `--kvmem` / `--no-kvmem`，不传 KVMem 配置默认关闭；旧命令传正的 `--kvmem-budget` 仍会启用。启用后的默认 B/R/H 为 32768/1024/16384 MiB，sessions=4；B/R/H 显式 0 会报错，需配置能容纳 B+R 的原生上下文。`--kvmem-sessions` 和脚本 `-RetainedSessions` 在两个后端都只限制非活动历史，活动请求不计入；旧 llama `--kvmem-conversations` 是总数兼容模式，不是同值别名。SSD 额度 0 表示关闭且必须省略目录。C 接受 `--no-kvmem-lrfu` 兼容写法，拒绝启用 LRFU。新脚本必须与本轮新编译的 worker 配套；已有发布包不会被自动更新。完整定义见 [参数规范](native-cli-configuration-spec.md)。
 

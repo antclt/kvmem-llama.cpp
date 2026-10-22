@@ -14,6 +14,7 @@ int main() {
         std::cout<<"functional qualification: "<<props.name<<'\n';
         kvmem::PageSoftmaxCuda scorer(0);
         struct Shape { uint32_t blocks,rows,dim,qheads,kvheads; };
+        for(const auto aggregation : {kvmem::GqaScoreAggregation::Mean,kvmem::GqaScoreAggregation::Max})
         for(const auto shape:{Shape{7,129,256,8,2},Shape{8192,2,64,4,1},
             Shape{8193,2,64,4,1},Shape{32769,1,64,2,1}}) {
             constexpr uint32_t layers=2;
@@ -29,15 +30,15 @@ int main() {
             const uint32_t counts[]{shape.rows,shape.rows};
             auto frame=kvmem::query_score_frame(uint64_t(shape.blocks)*4,4,3,1,1,{0,shape.blocks-1});
             kvmem::PageQueryView view{query.data(),counts,layers,shape.rows,shape.qheads,shape.kvheads,shape.dim};
-            const auto expected=kvmem::page_softmax_scores(keys,view,frame);
-            const auto actual=scorer.score(keys,view,frame);
+            const auto expected=kvmem::page_softmax_scores(keys,view,frame,aggregation);
+            const auto actual=scorer.score(keys,view,frame,aggregation);
             if(shape.blocks==7) {
                 const auto bytes=kvmem::PageSoftmaxCuda::workspace_bytes(shape.blocks,shape.qheads,shape.kvheads,shape.dim);
                 void* workspace=nullptr;
                 if(cudaMalloc(&workspace,bytes)!=cudaSuccess) throw std::runtime_error("planned test workspace unavailable");
                 {
                     kvmem::PageSoftmaxCuda borrowed(0,workspace,bytes,shape.blocks,shape.qheads,shape.kvheads,shape.dim);
-                    const auto planned=borrowed.score(keys,view,frame);
+                    const auto planned=borrowed.score(keys,view,frame,aggregation);
                     for(size_t i=0;i<planned.size();++i)
                         if(std::abs(planned[i]-expected[i])>2e-6+expected[i]*3e-5)
                             throw std::runtime_error("planned workspace differs from FP64 oracle");
@@ -53,7 +54,7 @@ int main() {
             }
             const auto mass=std::accumulate(actual.begin(),actual.end(),0.);
             if(std::abs(mass-shape.rows)>shape.rows*2e-5) throw std::runtime_error("CUDA softmax mass was lost");
-            std::cout<<"pages="<<shape.blocks<<" rows="<<shape.rows<<" D="<<shape.dim
+            std::cout<<"agg="<<int(aggregation)<<" pages="<<shape.blocks<<" rows="<<shape.rows<<" D="<<shape.dim
                 <<" worst_abs="<<worst<<" workspace="<<scorer.device_bytes()<<'\n';
         }
         return 0;

@@ -222,7 +222,9 @@ float recall_fp16(float value) {
 }
 
 std::vector<double> page_softmax_scores(const RawKvStore& keys, PageQueryView q,
-                                      const QueryScoreFrame& frame) {
+                                      const QueryScoreFrame& frame, GqaScoreAggregation aggregation) {
+    check(aggregation == GqaScoreAggregation::Mean || aggregation == GqaScoreAggregation::Max,
+          "invalid page softmax GQA aggregation");
     const size_t n = frame.starts.size();
     check((q.data || q.layer_data) && q.layer_rows && q.layers && q.rows && q.head_dim && q.kv_heads &&
           q.query_heads && q.query_heads % q.kv_heads == 0 &&
@@ -248,6 +250,7 @@ std::vector<double> page_softmax_scores(const RawKvStore& keys, PageQueryView q,
     const size_t kw = size_t(q.kv_heads)*q.head_dim, qw = size_t(q.query_heads)*q.head_dim;
     std::vector<float> means(enabled.size()*kw), key(kw), query(q.head_dim);
     std::vector<double> logits(enabled.size());
+    std::vector<double> group_max(aggregation == GqaScoreAggregation::Max ? enabled.size() : 0);
     const double scale = 1/std::sqrt(double(q.head_dim));
     for (uint32_t l = 0; l < q.layers; ++l) {
         if (!q.layer_rows[l]) continue;
@@ -258,6 +261,9 @@ std::vector<double> page_softmax_scores(const RawKvStore& keys, PageQueryView q,
             for (size_t d = 0; d < kw; ++d) means[j*kw+d] = recall_fp16(key[d]);
         }
         for (uint32_t t = 0; t < q.layer_rows[l]; ++t) for (uint32_t h = 0; h < q.query_heads; ++h) {
+            const auto group = q.query_heads/q.kv_heads;
+            if (aggregation == GqaScoreAggregation::Max && h%group == 0)
+                std::fill(group_max.begin(),group_max.end(),0.0);
             const auto* base = q.layer_data ? q.layer_data[l] : q.data+size_t(l)*q.rows*qw;
             check(base != nullptr, "missing active Query layer storage");
             const auto* row = base + size_t(t)*qw + size_t(h)*q.head_dim;
@@ -271,11 +277,42 @@ std::vector<double> page_softmax_scores(const RawKvStore& keys, PageQueryView q,
             }
             double denominator = 0;
             for (auto& value : logits) denominator += value = std::exp(value-maximum);
-            for (size_t j = 0; j < enabled.size(); ++j)
-                result[enabled[j]] += logits[j]/denominator/(double(active_layers)*q.query_heads);
+            if (aggregation == GqaScoreAggregation::Mean) {
+                for (size_t j = 0; j < enabled.size(); ++j)
+                    result[enabled[j]] += logits[j]/denominator/(double(active_layers)*q.query_heads);
+            } else {
+                for (size_t j = 0; j < enabled.size(); ++j)
+                    group_max[j] = std::max(group_max[j],logits[j]/denominator);
+                if (h%group == group-1) {
+                    double mass = 0;
+                    for (auto value : group_max) mass += value;
+                    for (size_t j = 0; j < enabled.size(); ++j)
+                        result[enabled[j]] += group_max[j]/mass/(double(active_layers)*q.kv_heads);
+                }
+            }
         }
     }
     return result;
+}
+
+std::vector<double> mean_query_cosine_scores(const RawKvStore& keys, PageQueryView q,
+                                           uint32_t blocks, GqaScoreAggregation aggregation) {
+    check((q.data || q.layer_data) && q.layer_rows && q.layers && q.rows && q.query_heads &&
+          q.kv_heads && q.head_dim && q.query_heads%q.kv_heads == 0 &&
+          q.layers == keys.config().n_layer && uint64_t(q.kv_heads)*q.head_dim == keys.config().n_embd_k,
+          "mean Query geometry mismatch");
+    const size_t width = size_t(q.query_heads)*q.head_dim;
+    std::vector<float> sums(size_t(q.layers)*width,0);
+    for (uint32_t l=0;l<q.layers;++l) {
+        check(q.layer_rows[l] <= q.rows,"mean Query row coverage mismatch");
+        if (!q.layer_rows[l]) continue;
+        const auto* base = q.layer_data ? q.layer_data[l] : q.data+size_t(l)*q.rows*width;
+        check(base != nullptr,"missing active Query layer storage");
+        for (uint32_t t=0;t<q.layer_rows[l];++t) for (size_t d=0;d<width;++d)
+            sums[size_t(l)*width+d] += base[size_t(t)*width+d];
+    }
+    return mean_key_retrieval_scores(keys,blocks,{sums.data(),q.layer_rows,q.layers,q.head_dim,
+        q.query_heads,q.kv_heads,aggregation});
 }
 
 size_t GraphSnapshot::bytes() const {

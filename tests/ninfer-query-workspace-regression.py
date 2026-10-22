@@ -31,7 +31,7 @@ with (out/'server.log').open('w') as log:
    assert r['usage']['prompt_tokens']<896, 'test must remain below B+R'
    assert 'KVMEM_PRESSURE ' in before, 'test must create an already compressed prefix'
    assert r['usage']['prompt_tokens_details']['cached_tokens']>0, 'test must restore the prefix'
-   assert 'KVMEM_QUERY scorer=page_softmax' in trace, 'new Query skipped on compressed prefix'
+   assert 'KVMEM_QUERY scorer=page-softmax' in trace, 'new Query skipped on compressed prefix'
    assert 'KVMEM_QUERY_REPLAY from=' in trace, 'test must exercise admitted replay'
    assert not re.search(r'FATAL|CUDA error|has no GPU slot',trace)
    (out/'result.json').write_text(json.dumps({'status':'passed','gpu':options.gpu,'argv':a,'usage':r['usage']}))

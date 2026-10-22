@@ -4,7 +4,7 @@
 
 当前实现以 [图召回 C 规范及验证](graph-recall.md) 覆盖本文件早期设计/验收记录中的以下部分：
 
-- Query 使用逐 token/head 的 Mean-K page softmax 与一次图传播。LRFU 开启和 max 聚合与 C 冲突，worker/启动脚本明确报错；UI 移除这些旧设置，旧草稿/模板中的值不导出。
+- Query 默认使用逐 token/head 的 Mean-K page softmax 与一次图传播。原生命令行和 Windows 启动脚本可切换 `--kvmem-query-scorer meanq-cosine|page-softmax`、GQA mean/max、LRFU 和 graph alpha；组合限制与默认值见 [评分参数](graph-recall.md#startup-scoring-options)。UI 继续使用默认 C，旧草稿/模板的历史设置不自动导出。
 - PrefillPressure 和 DecodePressure 仅在 accepted 驻留集合中按累计注意力重选；R 是可重复使用的追加空间。两个后端都允许输出超过 R，仍受 context、请求输出预算和结束条件限制。
 - UI 内置配置保留 0.18 资源参数并标为“0.18 资源配置 + C”。发布的 0.18 二进制和下文带日期的历史验证不因此改变。
 

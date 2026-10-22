@@ -45,7 +45,12 @@ static void print_usage(const char * argv0) {
             "  --kvmem-sink-tokens N      always-kept prefix; 0 = one block\n"
             "  --kvmem-recent-tokens N    always-kept suffix blocks (default 0)\n"
             "  --kvmem-method NAME        recency | retrieval (default retrieval)\n"
-            "  --kvmem-lrfu               rank by decayed retrieval history\n"
+            "  --kvmem-query-scorer NAME    page-softmax (default) | meanq-cosine\n"
+            "  --kvmem-score-agg MODE       mean | max (default: page-softmax mean, cosine max)\n"
+            "  --kvmem-lrfu / --no-kvmem-lrfu  Query history (default on only for cosine)\n"
+            "  --kvmem-lrfu-lambda X        history decay in [0,1] (default 0.5)\n"
+            "  --kvmem-lrfu-top-frac X      history hit fraction in (0,1] (default 0.9)\n"
+            "  --kvmem-graph-alpha X        page-softmax propagation in [0,1] (default 0.2; cosine 0)\n"
             "  --kvmem-query-max-tokens N cap raw Query capture (default 512)\n"
             "  --kvmem-query-replay-max-tokens N bound full replay suffix (default 2048)\n"
             "  --kvmem-query-last N       last N prompt tokens are the retrieval query (default 64)\n"
@@ -98,6 +103,7 @@ int main(int argc, char ** argv) {
         llama_kvmem_execution_create(), llama_kvmem_execution_free};
     kvmem_execution_scope execution_scope(execution.get());
     llama_kvmem_params kparams = {};
+    kvmem::CliOptions scoring_options;
     kparams.block_tokens = 32;
     kparams.gen_reserve = 256;
     kparams.method = 1;  // retrieval
@@ -196,14 +202,11 @@ int main(int argc, char ** argv) {
             } else {
                 kparams.method = 0;
             }
-        } else if (eq(arg, "--kvmem-lrfu")) {
-            kparams.lrfu = true;
-        } else if (eq(arg, "--kvmem-lrfu-lambda")) {
-            kparams.lrfu_lambda = kvmem::parse_lrfu_real(need(arg), true);
-        } else if (eq(arg, "--kvmem-lrfu-top-frac")) {
-            kparams.lrfu_top_fraction = kvmem::parse_lrfu_real(need(arg), false);
-        } else if (eq(arg, "--kvmem-score-agg")) {
-            kparams.score_agg = kvmem::parse_score_aggregation(need(arg));
+        } else if (eq(arg,"--kvmem-query-scorer") || eq(arg,"--kvmem-graph-alpha") ||
+                   eq(arg,"--kvmem-lrfu") || eq(arg,"--no-kvmem-lrfu") ||
+                   eq(arg,"--kvmem-lrfu-lambda") || eq(arg,"--kvmem-lrfu-top-frac") || eq(arg,"--kvmem-score-agg")) {
+            try { scoring_options.parse(arg,need); }
+            catch (const std::exception& e) { fprintf(stderr,"%s\n",e.what()); return 1; }
         } else if (eq(arg,"--kvmem-query-max-tokens")) {
             try { query_max_tokens=kvmem::CliOptions::integer(arg,need(arg),1); }
             catch(const std::invalid_argument& error) {fprintf(stderr,"%s\n",error.what());return 1;}
@@ -331,6 +334,17 @@ int main(int argc, char ** argv) {
         print_usage(argv[0]);
         return 1;
     }
+    try {
+        if (!kparams.enabled && (scoring_options.auxiliary_set || scoring_options.lrfu))
+            throw std::invalid_argument("KVMem scoring settings require --kvmem");
+        scoring_options.resolve_query_scoring();
+        kparams.query_meanq_cosine = scoring_options.query_scorer == kvmem::QueryScorer::MeanQCosine;
+        kparams.graph_alpha = scoring_options.graph_alpha;
+        kparams.score_agg = scoring_options.score_agg;
+        kparams.lrfu = scoring_options.lrfu;
+        kparams.lrfu_lambda = scoring_options.lrfu_lambda;
+        kparams.lrfu_top_fraction = scoring_options.lrfu_top_fraction;
+    } catch (const std::exception& e) { fprintf(stderr,"%s\n",e.what()); return 1; }
     if (!prompt_file.empty()) {
         std::ifstream in(prompt_file);
         if (!in) {

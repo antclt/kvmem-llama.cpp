@@ -285,6 +285,15 @@ def main():
     ap.add_argument('--budget', type=int, required=True)
     ap.add_argument('--reserve', type=int, required=True)
     ap.add_argument('--kvmem-block-tokens', type=int, help='override retrieval block size (server default 128)')
+    ap.add_argument('--kvmem-query-scorer', choices=('meanq-cosine', 'page-softmax'))
+    ap.add_argument('--kvmem-score-agg', choices=('mean', 'max'))
+    ap.add_argument('--kvmem-graph-alpha', type=float)
+    ap.add_argument('--kvmem-lrfu-lambda', type=float)
+    ap.add_argument('--kvmem-lrfu-top-frac', type=float)
+    history = ap.add_mutually_exclusive_group()
+    history.add_argument('--kvmem-lrfu', dest='kvmem_lrfu', action='store_true')
+    history.add_argument('--no-kvmem-lrfu', dest='kvmem_lrfu', action='store_false')
+    ap.set_defaults(kvmem_lrfu=None)
     templates = ap.add_mutually_exclusive_group()
     templates.add_argument('--chat-template', help='Jinja template text')
     templates.add_argument('--chat-template-file', type=Path, help='custom Jinja template file')
@@ -348,6 +357,14 @@ def main():
             '--kvmem-budget', str(args.budget), '--kvmem-gen-reserve', str(args.reserve),
             '--kv-dtype', args.kv, '--spec-type', 'draft-mtp',
             '--enable-thinking', '--reasoning-budget', '4096']
+    for flag, value in (
+        ('--kvmem-query-scorer', args.kvmem_query_scorer), ('--kvmem-score-agg', args.kvmem_score_agg),
+        ('--kvmem-graph-alpha', args.kvmem_graph_alpha), ('--kvmem-lrfu-lambda', args.kvmem_lrfu_lambda),
+        ('--kvmem-lrfu-top-frac', args.kvmem_lrfu_top_frac)):
+        if value is not None:
+            argv += [flag, str(value)]
+    if args.kvmem_lrfu is not None:
+        argv += ['--kvmem-lrfu' if args.kvmem_lrfu else '--no-kvmem-lrfu']
     for flag, value in (('--cache-type-k', args.cache_type_k), ('--cache-type-v', args.cache_type_v)):
         if value is not None:
             argv += [flag, value]

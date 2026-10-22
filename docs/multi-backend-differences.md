@@ -8,7 +8,7 @@ llama.cpp 与 ninfer 共用 KVMem 策略和内存契约，并共用 KVMem 公共
 
 除“统一启动入口”一节外，默认值均指直接启动 worker 且未显式覆盖的配置。旧预编译包的功能以随包说明和验收报告为准；当前源码的参数不能自动用于旧包。运行方法见 [多后端运行](multi-backend.md)，源码准备方法见 [仓库工作流](multi-backend-repository.md)。
 
-公共参数的精确定义、迁移规则与默认值见 [原生 CLI 与公共配置规范](native-cli-configuration-spec.md)。SSD 额度显式 0 在两个 EXE 中均为关闭，此时不得携带 SSD 目录；当前 C 拒绝启用 LRFU/max 聚合；旧版本的正反开关只作为兼容解析保留，见 [C 算法与验证](graph-recall.md)。
+公共参数的精确定义、迁移规则与默认值见 [原生 CLI 与公共配置规范](native-cli-configuration-spec.md)。SSD 额度显式 0 在两个 EXE 中均为关闭，此时不得携带 SSD 目录；当前支持两种 Query scorer、mean/max 聚合及 LRFU 正反开关（仅 meanq-cosine 支持历史加权），见 [C 算法与验证](graph-recall.md)。
 
 ## ninfer 保留的粒度约定
 

@@ -412,17 +412,17 @@ std::vector<uint32_t> KvMemStore::pick_graph_blocks(const std::vector<uint32_t>&
     std::iota(candidates.begin(),candidates.end(),0u);
     std::vector<double> scores;
     for(auto id:candidates) scores.push_back(selection_score(id));
-    return pick_scored_blocks(candidates,scores,query_fixed_blocks(mandatory),budget_blocks());
+    return pick_scored_blocks(candidates,scores,query_fixed_blocks(mandatory),budget_blocks(),true);
 }
 
 std::vector<uint32_t> KvMemStore::pick_scored_blocks(const std::vector<uint32_t>& candidates,
-    const std::vector<double>& scores,const std::vector<uint32_t>& mandatory,uint32_t budget) const {
+    const std::vector<double>& scores,const std::vector<uint32_t>& mandatory,uint32_t budget, bool signed_scores) const {
     if(candidates.size()!=scores.size() || !budget) throw std::invalid_argument("invalid scored selection frame");
     const auto n=block_count();
     std::vector<uint8_t> allowed(n),kept(n);
     for(size_t i=0;i<candidates.size();++i) {
         const auto id=candidates[i];
-        if(id>=n || allowed[id] || !std::isfinite(scores[i]) || scores[i]<0)
+        if(id>=n || allowed[id] || !std::isfinite(scores[i]) || (!signed_scores && scores[i]<0))
             throw std::invalid_argument("invalid scored candidate");
         allowed[id]=1;
     }

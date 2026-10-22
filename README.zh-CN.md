@@ -124,7 +124,7 @@ NInfer KVMem KV 格式：`bf16`、`int8`、`fp8`、`nvfp4`、`k8v4`、`rk8v4`、
 
 ### 检索与 SSD
 
-当前源码默认 C：Query 按 token/head 做 Mean-K page softmax 后执行一次图传播；PrefillPressure/DecodePressure 根据累计 accepted attention 在驻留集合内重选，不做图传播或冷页召回。sink、recent 和媒体必选块仍占用 B。启用 LRFU 或 max 聚合会报冲突。算法、成本与验证范围见 [图召回 C](docs/graph-recall.md)。
+当前源码默认 C：Query 按 token/head 做 Mean-K page softmax 后执行一次图传播；PrefillPressure/DecodePressure 根据累计 accepted attention 在驻留集合内重选，不做图传播或冷页召回。sink、recent 和媒体必选块仍占用 B。命令行也可选择 Mean-Q cosine（可开关 LRFU）和归一化 GQA max；page-softmax 与 LRFU 的组合仍拒绝。算法、成本与验证范围见 [图召回 C](docs/graph-recall.md)。
 
 以下示例配合**从当前源码构建的 worker** 运行：
 

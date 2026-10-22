@@ -89,6 +89,43 @@ __global__ void accumulate_pages(const float* logits, const float* norms, float*
         sum+=expf(logits[size_t(row)*blocks+b]-norms[2*row])*norms[2*row+1];
     output[b]+=sum*weight;
 }
+// Independent groups own disjoint original head rows. All head probabilities
+// are read before their group's first row is overwritten with max probabilities.
+// This reuses the existing logits workspace without a second full tensor.
+__global__ void collapse_gqa_max(float* logits, float* norms, int blocks, int group) {
+    const int base = int(blockIdx.x) * group;
+    const int tid = int(threadIdx.x);
+    __shared__ float reduction[128];
+    float sum = 0;
+    for (int page = tid; page < blocks; page += 128) {
+        float maximum = 0;
+        for (int h = 0; h < group; ++h) {
+            const int row = base + h;
+            maximum = fmaxf(maximum, expf(logits[size_t(row)*blocks+page]-norms[2*row])*norms[2*row+1]);
+        }
+        logits[size_t(base)*blocks+page] = maximum;
+        sum += maximum;
+    }
+    reduction[tid] = sum;
+    __syncthreads();
+    for (int s=64; s; s/=2) {
+        if (tid<s) reduction[tid] += reduction[tid+s];
+        __syncthreads();
+    }
+    // All reads of the old softmax norms in this group have now completed.
+    if (tid==0) norms[2*base] = 1/reduction[0];
+}
+__global__ void accumulate_gqa_max(const float* logits, const float* norms, float* output,
+                                  int blocks, int groups, int group, float weight) {
+    const int page = int(blockIdx.x)*128+int(threadIdx.x);
+    if (page>=blocks) return;
+    float sum = 0;
+    for (int g=0; g<groups; ++g) {
+        const int base = g*group;
+        sum += logits[size_t(base)*blocks+page]*norms[2*base];
+    }
+    output[page] += sum*weight;
+}
 } // namespace
 
 struct PageSoftmaxCuda::Impl {
@@ -138,7 +175,9 @@ size_t PageSoftmaxCuda::device_bytes() const {
 }
 
 std::vector<double> PageSoftmaxCuda::score(const RawKvStore& keys, PageQueryView q,
-                                         const QueryScoreFrame& frame) {
+                                         const QueryScoreFrame& frame, GqaScoreAggregation aggregation) {
+    if (aggregation != GqaScoreAggregation::Mean && aggregation != GqaScoreAggregation::Max)
+        throw std::invalid_argument("invalid page softmax CUDA aggregation");
     if ((!q.data && !q.layer_data) || !q.layer_rows || !q.rows || !q.layers || !q.head_dim || !q.kv_heads ||
         !q.query_heads || q.query_heads%q.kv_heads || q.layers!=keys.config().n_layer ||
         uint64_t(q.kv_heads)*q.head_dim!=keys.config().n_embd_k ||
@@ -194,8 +233,16 @@ std::vector<double> PageSoftmaxCuda::score(const RawKvStore& keys, PageQueryView
                 static_cast<half*>(w.queries.data),static_cast<half*>(w.means.data),
                 static_cast<float*>(w.logits.data),int(blocks),int(q.query_heads),int(q.kv_heads),int(q.head_dim));
             normalize_pages<<<distributions,128,0,w.stream>>>(static_cast<float*>(w.logits.data),static_cast<float*>(w.norms.data),int(blocks));
-            accumulate_pages<<<unsigned((blocks+127)/128),128,0,w.stream>>>(static_cast<float*>(w.logits.data),
-                static_cast<float*>(w.norms.data),static_cast<float*>(w.output.data),int(blocks),distributions,1.f/(active*q.query_heads));
+            if (aggregation == GqaScoreAggregation::Mean) {
+                accumulate_pages<<<unsigned((blocks+127)/128),128,0,w.stream>>>(static_cast<float*>(w.logits.data),
+                    static_cast<float*>(w.norms.data),static_cast<float*>(w.output.data),int(blocks),distributions,1.f/(active*q.query_heads));
+            } else {
+                const int groups=int(rows*q.kv_heads),group=int(q.query_heads/q.kv_heads);
+                collapse_gqa_max<<<groups,128,0,w.stream>>>(static_cast<float*>(w.logits.data),
+                    static_cast<float*>(w.norms.data),int(blocks),group);
+                accumulate_gqa_max<<<unsigned((blocks+127)/128),128,0,w.stream>>>(static_cast<float*>(w.logits.data),
+                    static_cast<float*>(w.norms.data),static_cast<float*>(w.output.data),int(blocks),groups,group,1.f/(active*q.kv_heads));
+            }
             checked(cudaGetLastError());
             // Staging arrays are reused only after their asynchronous reads finish.
             checked(cudaStreamSynchronize(w.stream));

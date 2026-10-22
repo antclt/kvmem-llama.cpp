@@ -80,6 +80,28 @@ void gqa_and_large_domain() {
         close(std::accumulate(scores.begin(),scores.end(),0.),1,2e-12);
     }
 }
+void scorer_variants() {
+    kvmem::RawKvStore keys({1,2,0,1});
+    const float k0[]{1,0},k1[]{0,1},k2[]{-1,-1};
+    keys.write_layer_mean_sum(0,1,0,k0); keys.write_layer_mean_sum(1,1,0,k1); keys.write_layer_mean_sum(2,1,0,k2);
+    const float q[]{2,0,0,2, 2,0,0,2}; const uint32_t counts[]{2};
+    kvmem::PageQueryView view{q,counts,1,2,2,1,2};
+    const auto frame=kvmem::query_score_frame(3,1,2,0,0,{});
+    // Independent normalized-max oracle: two heads have mirrored distributions.
+    const double a=std::exp(std::sqrt(2.)),b=1,c=std::exp(-std::sqrt(2.));
+    const double maximum=a/(a+b+c),negative=c/(a+b+c),mass=2*maximum+negative;
+    auto scores=kvmem::page_softmax_scores(keys,view,frame,kvmem::GqaScoreAggregation::Max);
+    close(scores[0],2*maximum/mass);close(scores[1],2*maximum/mass);close(scores[2],2*negative/mass);
+    scores=kvmem::mean_query_cosine_scores(keys,view,3,kvmem::GqaScoreAggregation::Max);
+    close(scores[0],1,1e-6);close(scores[1],1,1e-6);close(scores[2],-1/std::sqrt(2.),1e-6);
+    const auto mean=kvmem::mean_query_cosine_scores(keys,view,3,kvmem::GqaScoreAggregation::Mean);
+    close(mean[0],1/std::sqrt(2.),1e-6);close(mean[2],-1,1e-6);
+    kvmem::KvMemStoreConfig cfg;cfg.block_tokens=1;cfg.select_budget=2;cfg.sink_blocks=0;cfg.recent_blocks=0;
+    kvmem::KvMemStore store(cfg);store.register_append(3);
+    require(store.pick_scored_blocks({0,1,2},{-.8,-.2,-.5},{},2,true)==std::vector<uint32_t>({1,2}),
+        "signed Query order lost");
+    rejects([&] {store.pick_scored_blocks({0,1,2},{-.8,-.2,-.5},{},2);});
+}
 void graph_lifecycle() {
     constexpr size_t limit=1u<<20;
     kvmem::GraphSnapshot graph; graph.block_tokens=64;
@@ -198,7 +220,7 @@ void message_locality() {
 } // namespace
 int main() {
     try {
-        frames_and_scores(); gqa_and_large_domain(); graph_lifecycle(); feedback_and_pressure(); accepted_sampling(); fixed_picker(); statistics_budget(); message_locality();
+        frames_and_scores(); gqa_and_large_domain(); scorer_variants(); graph_lifecycle(); feedback_and_pressure(); accepted_sampling(); fixed_picker(); statistics_budget(); message_locality();
         std::cout << "graph recall numerical and accepted-state checks passed\n";
         return 0;
     } catch (const std::exception& e) {

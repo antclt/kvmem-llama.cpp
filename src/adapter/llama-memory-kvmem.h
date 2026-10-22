@@ -428,6 +428,8 @@ private:
     // another conversation is configured identically.
     kvmem::KvMemRuntimeConfig rt_cfg_{};
     int score_agg_ = 0;
+    bool query_meanq_cosine_ = false;
+    double graph_alpha_ = 0.2;
     kvmem::RawKvStoreConfig raw_cfg_{};
     std::unique_ptr<kvmem::KvMemRuntime> runtime_;
     std::unique_ptr<kvmem::RawKvStore> raw_;

@@ -135,6 +135,12 @@ static void print_usage(const char * argv0) {
             "  --kvmem-recent-tokens N    always-kept newest suffix in B (default 64; rounds down to blocks)\n"
             "  --kvmem-method NAME        recency | retrieval (default retrieval)\n"
             "  --kvmem-query-last N       fallback query-last if last-user span missing (default 64)\n"
+            "  --kvmem-query-scorer NAME    page-softmax (default) | meanq-cosine\n"
+            "  --kvmem-score-agg MODE       mean | max (default: page-softmax mean, cosine max)\n"
+            "  --kvmem-lrfu / --no-kvmem-lrfu  Query history (default on only for cosine)\n"
+            "  --kvmem-lrfu-lambda X        history decay in [0,1] (default 0.5)\n"
+            "  --kvmem-lrfu-top-frac X      history hit fraction in (0,1] (default 0.9)\n"
+            "  --kvmem-graph-alpha X        page-softmax propagation in [0,1] (default 0.2; cosine 0)\n"
             "  --kvmem-query-max-tokens N cap last-user retrieval query to this many tokens\n"
             "  --kvmem-query-replay-max-tokens N bound the complete Query replay suffix (default 2048)\n"
             "                            from the end of the span (default 512; qw3-style)\n"
@@ -1092,6 +1098,11 @@ int main(int argc, char ** argv) {
     st.kparams.lrfu_lambda = options.lrfu_lambda;
     st.kparams.lrfu_top_fraction = options.lrfu_top_fraction;
     st.kparams.score_agg = options.score_agg;
+    st.kparams.query_meanq_cosine = options.query_scorer == kvmem::QueryScorer::MeanQCosine;
+    st.kparams.graph_alpha = options.graph_alpha;
+    if (options.enabled) fprintf(stderr,"KVMEM_SCORING scorer=%s agg=%s lrfu=%d lambda=%.6g top_frac=%.6g graph_alpha=%.6g\n",
+        kvmem::query_scorer_name(options.query_scorer), options.score_agg ? "max" : "mean",
+        int(options.lrfu),options.lrfu_lambda,options.lrfu_top_fraction,options.graph_alpha);
     if (options.sessions_set && options.legacy_conversations)
         throw std::invalid_argument("--kvmem-sessions counts inactive histories; do not combine it with legacy --kvmem-conversations");
     if (options.legacy_conversations)

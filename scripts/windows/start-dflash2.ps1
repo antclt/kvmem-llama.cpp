@@ -11,6 +11,13 @@ param(
     [string]$ModelAlias,
     [ValidateSet('off', 'error', 'warning', 'info', 'trace', 'debug')][string]$LogLevel,
     [ValidateRange(256, 2147483647)][int]$Context = 262144,
+    [ValidateSet('page-softmax', 'meanq-cosine')][string]$QueryScorer = 'page-softmax',
+    [ValidateSet('mean', 'max')][string]$ScoreAggregation,
+    [ValidateRange(0.0, 1.0)][double]$GraphAlpha,
+    [switch]$Lrfu,
+    [switch]$NoLrfu,
+    [ValidateRange(0.0, 1.0)][double]$LrfuLambda,
+    [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction,
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
@@ -23,7 +30,6 @@ $forward = @{
     Vision = $true; VisionResidency = 'cpu'; VisionTokens = 1024
     DeviceProfile = 'off'; ThinkingBudget = 8192
     SinkTokens = 12288; RecentTokens = 1024
-    LrfuLambda = 0.5; LrfuTopFraction = 0.9; ScoreAggregation = 'mean'
     WorkerArgs = @('--gdn-state-fp16', '--cuda-graph-allowance-mib', '64')
 }
 foreach ($entry in $PSBoundParameters.GetEnumerator()) { $forward[$entry.Key] = $entry.Value }

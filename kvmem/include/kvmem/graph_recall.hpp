@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mean_key_retrieval.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <atomic>
@@ -38,7 +39,9 @@ struct PageQueryView {
 // Explicit FP16 operand boundary shared by CPU qualification and CUDA staging.
 float recall_fp16(float value);
 std::vector<double> page_softmax_scores(const RawKvStore&, PageQueryView,
-                                      const QueryScoreFrame&);
+                                      const QueryScoreFrame&, GqaScoreAggregation = GqaScoreAggregation::Mean);
+std::vector<double> mean_query_cosine_scores(const RawKvStore&, PageQueryView,
+                                           uint32_t blocks, GqaScoreAggregation);
 
 struct GraphEdge { uint64_t target = 0; double mass = 0; };
 struct GraphRow {

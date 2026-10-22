@@ -43,6 +43,9 @@ param(
     [ValidateRange(0, 2147483647)][int]$ThinkingBudget = 8192,
     [ValidateRange(0, 2147483647)][int]$SinkTokens = 12288,
     [ValidateRange(64, 2147483647)][int]$RecentTokens = 1024,
+    [ValidateSet('page-softmax', 'meanq-cosine')][string]$QueryScorer = 'page-softmax',
+    [ValidateRange(0.0, 1.0)][double]$GraphAlpha,
+    [switch]$Lrfu,
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,
     [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction = 0.9,
@@ -63,7 +66,7 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) { $forward[$entry.Key] = 
 foreach ($name in @('WorkerArgs', 'WorkerArgsFile', 'WorkerArgsTail')) { $null = $forward.Remove($name) }
 $forward['WorkerArgs'] = $resolvedArgs
 $forward['Backend'] = 'ninfer'
-foreach ($parameterName in @('Gpu', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'KvType', 'MtpDrafts', 'AdaptiveMtp', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions', 'Vision', 'VisionResidency', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'LrfuLambda', 'LrfuTopFraction', 'ScoreAggregation')) {
+foreach ($parameterName in @('Gpu', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'KvType', 'MtpDrafts', 'AdaptiveMtp', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions', 'Vision', 'VisionResidency', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'SinkTokens', 'RecentTokens')) {
     if (!$forward.ContainsKey($parameterName)) { $forward[$parameterName] = Get-Variable -Name $parameterName -ValueOnly }
 }
 $null = $forward.Remove('NoVision')

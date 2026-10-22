@@ -167,7 +167,7 @@ def main():
             follow+=[response['choices'][0]['message'],{'role':'user','content':'What color is the river in the latest observation?'}]
             _,trace=ask('new-query-after-resident',follow,16,session='policy-fits')
             if not a.reject_replay:
-                check('new Query captures fresh features','KVMEM_QUERY scorer=page_softmax' in trace)
+                check('new Query captures fresh features','KVMEM_QUERY scorer=page-softmax' in trace)
             report['status']='passed'
             save()
         finally:

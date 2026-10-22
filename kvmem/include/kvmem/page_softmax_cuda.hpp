@@ -17,7 +17,7 @@ public:
     ~PageSoftmaxCuda();
     PageSoftmaxCuda(const PageSoftmaxCuda&) = delete;
     PageSoftmaxCuda& operator=(const PageSoftmaxCuda&) = delete;
-    std::vector<double> score(const RawKvStore&, PageQueryView, const QueryScoreFrame&);
+    std::vector<double> score(const RawKvStore&, PageQueryView, const QueryScoreFrame&, GqaScoreAggregation = GqaScoreAggregation::Mean);
     size_t device_bytes() const;
 private:
     struct Impl;

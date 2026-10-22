@@ -31,11 +31,19 @@ try {
             if ($levels.argv[[array]::IndexOf($levels.argv, $flag) + 1] -ne $expected) { throw 'Log level mapping changed native levels' }
         }
         $defaults = & $launcher @common -Backend $backend -Model $model -ThinkingMode default | ConvertFrom-Json
-        if ($defaults.argv -contains '--kvmem-lrfu' -or $defaults.argv -contains '--kvmem-score-agg') { throw 'C must use native page-softmax defaults' }
-        foreach ($conflict in @(@{NoLrfu=$false}, @{ScoreAggregation='max'})) {
+        if ($defaults.argv -contains '--kvmem-lrfu' -or $defaults.argv[[array]::IndexOf($defaults.argv,'--kvmem-query-scorer')+1] -ne 'page-softmax') { throw 'Default scorer changed' }
+        foreach ($variant in @(@{QueryScorer='meanq-cosine'},@{QueryScorer='meanq-cosine';NoLrfu=$true},@{ScoreAggregation='max'},@{GraphAlpha=0})) {
+            $chosen = & $launcher @common -Backend $backend -Model $model @variant | ConvertFrom-Json
+            $cosine = $variant['QueryScorer'] -eq 'meanq-cosine'
+            $expectedHistory = $cosine -and !$variant['NoLrfu']
+            if (($chosen.argv -contains '--kvmem-lrfu') -ne $expectedHistory) { throw 'Scorer history default or override lost' }
+            $agg = if ($cosine -or $variant['ScoreAggregation'] -eq 'max') { 'max' } else { 'mean' }
+            if ($chosen.argv[[array]::IndexOf($chosen.argv,'--kvmem-score-agg')+1] -ne $agg) { throw 'GQA aggregation default lost' }
+        }
+        foreach ($conflict in @(@{NoLrfu=$false}, @{QueryScorer='meanq-cosine';GraphAlpha=0.2}, @{LrfuLambda=0.3})) {
             $rejected = $false
             try { $null = & $launcher @common -Backend $backend -Model $model @conflict } catch { $rejected = $true }
-            if (!$rejected) { throw 'C accepted an incompatible LRFU/max override' }
+            if (!$rejected) { throw 'Accepted an incompatible scoring combination' }
         }
         if (@($defaults.argv | Where-Object { $_ -match '^--(enable-thinking|no-think(ing)?)$' }).Count) { throw 'Default thinking must inherit the native default' }
         foreach ($case in @(@{Concurrency=9}, @{ApiKey='two,keys'}, @{ChatTemplateFile=(Join-Path $testDir 'missing.jinja')},

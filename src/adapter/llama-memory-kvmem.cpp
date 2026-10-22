@@ -1,6 +1,7 @@
 #include "kvmem/query_policy.hpp"
 #include "llama-kvmem-diag.h"
 #include "llama-memory-kvmem.h"
+#include "kvmem/retrieval_options.hpp"
 #include "llama-memory-kvmem-hybrid.h"
 #include "llama-memory-kvmem-mtp.h"
 
@@ -538,8 +539,9 @@ static kvmem::KvMemRuntimeConfig make_runtime_cfg(
         uint32_t recent_tokens,
         uint64_t block_bytes) {
     kvmem::KvMemRuntimeConfig cfg;
-    if(kvmem_current_execution().params.lrfu || kvmem_current_execution().params.score_agg!=0)
-        throw std::invalid_argument("KVMem C cannot combine LRFU or max GQA aggregation with page softmax");
+    const auto& params = kvmem_current_execution().params;
+    kvmem::validate_query_scoring(params.query_meanq_cosine ? kvmem::QueryScorer::MeanQCosine : kvmem::QueryScorer::PageSoftmax,
+        params.score_agg,params.lrfu,params.graph_alpha);
     cfg.store.lrfu = kvmem_current_execution().params.lrfu;
     cfg.store.lrfu_lambda = kvmem_current_execution().params.lrfu_lambda;
     cfg.store.lrfu_top_fraction = kvmem_current_execution().params.lrfu_top_fraction;
@@ -915,6 +917,8 @@ llama_memory_kvmem::llama_memory_kvmem(
     graph_.block_tokens=block_tokens_;
     graph_.set_budget(std::make_shared<kvmem::GraphStatisticsBudget>(32u<<20,kvmem_current_execution().graph_budget));
     score_agg_ = kvmem_current_execution().params.score_agg;
+    query_meanq_cosine_ = kvmem_current_execution().params.query_meanq_cosine;
+    graph_alpha_ = kvmem_current_execution().params.graph_alpha;
     runtime_ = std::make_unique<kvmem::KvMemRuntime>(rt_cfg_, &backend_);
 
     if (ext_kv) {
@@ -1266,6 +1270,7 @@ bool llama_memory_kvmem::conv_compatible(const llama_memory_kvmem & other) const
         rt_cfg_.store.lrfu_lambda == other.rt_cfg_.store.lrfu_lambda &&
         rt_cfg_.store.lrfu_top_fraction == other.rt_cfg_.store.lrfu_top_fraction &&
         score_agg_ == other.score_agg_ &&
+        query_meanq_cosine_ == other.query_meanq_cosine_ && graph_alpha_ == other.graph_alpha_ &&
         rt_cfg_.store.select_budget == other.rt_cfg_.store.select_budget &&
         rt_cfg_.cpu_bytes == other.rt_cfg_.cpu_bytes;
 }
@@ -4366,24 +4371,31 @@ void llama_memory_kvmem::score_retrieval(const llama_kvmem_tail_mean_state* pref
     const auto previous = prefix ? raw_->mean_checkpoint(frontier) : std::vector<float>{};
     if (prefix) raw_->restore_mean_checkpoint(frontier,prefix->values);
     try {
+        const auto aggregation = score_agg_ ? kvmem::GqaScoreAggregation::Max : kvmem::GqaScoreAggregation::Mean;
+        if (query_meanq_cosine_) {
+            scores=kvmem::mean_query_cosine_scores(*raw_,query,uint32_t(frame.starts.size()),aggregation);
+        } else {
 #ifdef KVMEM_PAGE_SOFTMAX_CUDA
-        if(!query_scorer_) {
-            int device=0;
-            if(cudaGetDevice(&device)!=cudaSuccess) throw std::runtime_error("KVMem Query CUDA device unavailable");
-            query_scorer_=std::make_unique<kvmem::PageSoftmaxCuda>(device);
-        }
-        scores=query_scorer_->score(*raw_,query,frame);
+            if(!query_scorer_) {
+                int device=0;
+                if(cudaGetDevice(&device)!=cudaSuccess) throw std::runtime_error("KVMem Query CUDA device unavailable");
+                query_scorer_=std::make_unique<kvmem::PageSoftmaxCuda>(device);
+            }
+            scores=query_scorer_->score(*raw_,query,frame,aggregation);
 #else
-        scores=kvmem::page_softmax_scores(*raw_,query,frame);
+            scores=kvmem::page_softmax_scores(*raw_,query,frame,aggregation);
 #endif
-        scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : graph_);
+            scores=kvmem::propagate_query_scores(scores,frame,prefix ? prefix->graph : graph_,graph_alpha_);
+        }
     } catch (...) {
         if (prefix) raw_->restore_mean_checkpoint(frontier,previous);
         throw;
     }
     if (prefix) raw_->restore_mean_checkpoint(frontier,previous);
     runtime_->store().set_retrieval_scores(scores);
-    kvmem_diag("KVMEM_QUERY scorer=page_softmax rows=%u blocks=%zu\n",rows,scores.size());
+    kvmem_diag("KVMEM_QUERY scorer=%s agg=%s lrfu=%d graph_alpha=%.6g rows=%u blocks=%zu\n",
+        query_meanq_cosine_ ? "meanq-cosine" : "page-softmax",score_agg_ ? "max" : "mean",
+        int(config.lrfu),graph_alpha_,rows,scores.size());
 }
 
 void llama_memory_kvmem::accept_retrieval_round() {
@@ -4575,7 +4587,7 @@ llama_kvmem_selection llama_memory_kvmem::preview_retrieval(const llama_kvmem_ta
         std::vector<uint32_t> candidates;
         std::vector<double> scores;
         for(uint32_t id=0;id<pages;++id) {candidates.push_back(id);scores.push_back(policy.selection_score(id));}
-        selection.blocks=policy.pick_scored_blocks(candidates,scores,required,policy.budget_blocks());
+        selection.blocks=policy.pick_scored_blocks(candidates,scores,required,policy.budget_blocks(),true);
         // These rows are append workspace, not additional historical recall.
         for(auto id=prefix->row/block_tokens_; id<(selection.rows+block_tokens_-1)/block_tokens_; ++id)
             selection.blocks.push_back(id);

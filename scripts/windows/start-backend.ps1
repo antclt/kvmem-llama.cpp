@@ -42,6 +42,9 @@ param(
     [ValidateRange(0, 2147483647)][int]$ThinkingBudget = 0,
     [ValidateRange(0, 2147483647)][int]$SinkTokens = 12288,
     [ValidateRange(0, 2147483647)][int]$RecentTokens = 1024,
+    [ValidateSet('page-softmax', 'meanq-cosine')][string]$QueryScorer = 'page-softmax',
+    [ValidateRange(0.0, 1.0)][double]$GraphAlpha,
+    [switch]$Lrfu,
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,
     [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction = 0.9,
@@ -55,9 +58,9 @@ param(
     [Parameter(ValueFromRemainingArguments=$true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$WorkerArgsTail = @()
 )
 $ErrorActionPreference = 'Stop'
-if ($PSBoundParameters.ContainsKey('NoLrfu') -and !$NoLrfu) { throw 'KVMem C has no LRFU ranking; remove the explicit NoLrfu:false override' }
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-process.ps1')
+. (Join-Path $PSScriptRoot 'query-scoring.ps1')
 $WorkerArgs = Resolve-KVMemWorkerArgs $PSBoundParameters $WorkerArgsTail
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $specProfiles = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../speculative-capabilities.json') -Raw | ConvertFrom-Json
@@ -156,7 +159,7 @@ if ($Backend -eq 'ninfer' -and $ThinkingMode -eq 'off' -and
     ($ReasoningEffort -or @($WorkerArgs | Where-Object { $_ -match '^--default-reasoning-effort(=|$)' }).Count)) {
     throw 'ReasoningEffort conflicts with ThinkingMode off'
 }
-if (@($WorkerArgs | Where-Object { $_ -match '^--(no-)?kvmem($|-(budget|gen-reserve|host-mib|sessions|sink-tokens|recent-tokens|lrfu|lrfu-lambda|lrfu-top-frac|score-agg)(=|$))' }).Count) {
+if (@($WorkerArgs | Where-Object { $_ -match '^--(no-)?kvmem($|-(budget|gen-reserve|host-mib|sessions|sink-tokens|recent-tokens|lrfu|lrfu-lambda|lrfu-top-frac|score-agg|query-scorer|graph-alpha)(=|$))' }).Count) {
     throw 'KVMem common options are owned by the launcher; use its named parameters instead of WorkerArgs'
 }
 if (!$Worker) {
@@ -284,12 +287,7 @@ if ($ThinkingMode -eq 'on') { $nativeArgs += '--enable-thinking' }
 $nativeArgs += '--kvmem'
 if ($Backend -eq 'llamacpp') { $nativeArgs += $nativeArgsSpec }
 if ($DiskPath) { $nativeArgs += @('--kvmem-disk-path', $DiskPath, '--kvmem-disk-mib', "$DiskMiB") }
-# Default C has no retrieval-history or independent attention quota.
-if (($ScoreAggregation -ne 'mean') -or
-    ($PSBoundParameters.ContainsKey('LrfuLambda') -and ($LrfuLambda -ne 0.5)) -or
-    ($PSBoundParameters.ContainsKey('LrfuTopFraction') -and ($LrfuTopFraction -ne 0.9))) {
-    throw 'KVMem C uses mean page softmax and no LRFU; remove conflicting legacy ranking options'
-}
+$nativeArgs += @(Get-KVMemQueryScoringArgs $PSBoundParameters)
 $nativeArgs += $WorkerArgs
 if ($DryRun) {
     $displayArgs = @($nativeArgs)

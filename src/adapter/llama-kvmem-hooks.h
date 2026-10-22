@@ -29,7 +29,9 @@ struct llama_kvmem_params {
     bool     lrfu = false;
     double   lrfu_lambda = 0.5;
     double   lrfu_top_fraction = 0.9;
-    int32_t  score_agg = 0; // 0 folded mean, 1 max within a GQA group
+    int32_t  score_agg = 0; // mean or max within a GQA group
+    bool     query_meanq_cosine = false;
+    double   graph_alpha = 0.2;
     int32_t  query_begin;   // original token pos, -1 = unset
     int32_t  query_end;     // exclusive, -1 = end of prompt
     int32_t  force_pos;     // include block containing this orig pos; -1 = none

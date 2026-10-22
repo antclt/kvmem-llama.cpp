@@ -18,6 +18,9 @@ param(
     [ValidateSet('f16', 'f32', 'q8_0', 'q5_0', 'q4_0')][string]$CacheTypeV,
     [ValidateRange(0, 2147483647)][int]$ReasoningBudget = 4096,
     [ValidateRange(1, 5)][int]$Mtp = 3,
+    [ValidateSet('page-softmax', 'meanq-cosine')][string]$QueryScorer = 'page-softmax',
+    [ValidateRange(0.0, 1.0)][double]$GraphAlpha,
+    [switch]$Lrfu,
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,
     [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction = 0.9,
@@ -30,9 +33,9 @@ param(
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
-if ($PSBoundParameters.ContainsKey('NoLrfu') -and !$NoLrfu) { throw 'KVMem C has no LRFU ranking; remove the explicit NoLrfu:false override' }
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-process.ps1')
+. (Join-Path $PSScriptRoot 'query-scoring.ps1')
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 if (!$BuildDir) {
     if (Test-Path -LiteralPath (Join-Path $root 'bin/llama-kvmem-server.exe')) { $BuildDir = $root }
@@ -70,7 +73,7 @@ $serverArgs = @('-m', $Model, '--mmproj', $Mmproj, $visionFlag,
     '--kvmem-block-tokens', "$BlockTokens", '--kvmem-query-policy', 'user',
     '--kvmem-sink-tokens', "$SinkTokens", '--kvmem-recent-tokens', "$RecentTokens",
     '--enable-thinking', '--reasoning-budget', "$ReasoningBudget")
-if ($ScoreAggregation -ne 'mean') { throw 'KVMem C requires mean page softmax; max aggregation is unsupported' }
+$serverArgs += @(Get-KVMemQueryScoringArgs $PSBoundParameters)
 if ($CacheTypeK) { $serverArgs += @('--cache-type-k', $CacheTypeK) }
 if ($CacheTypeV) { $serverArgs += @('--cache-type-v', $CacheTypeV) }
 if ($ApiKey) { $serverArgs += @('--api-key', $ApiKey) }
