@@ -54,7 +54,6 @@ public:
             held.lane = (int)lane;
             kvmem_execution_scope execution(lanes[lane]->execution.get());
             held.bytes = llama_kvmem_store_active_bytes();
-            if (lane == 0) has_recurrent_ = llama_kvmem_has_recurrent();
             if (lane == 0) {
                 disk_ = kvmem_execution_spill_file(lanes[lane]->execution.get());
                 if (disk_) {
@@ -331,7 +330,7 @@ private:
     uint64_t payload_budget_ = 0, snapshot_generation_ = 0;
     int max_, next_id_ = 0;
     bool inactive_limit_ = false;
-    bool warned_bytes_ = false, has_recurrent_ = false;
+    bool warned_bytes_ = false;
     uint64_t bytes_max_, clock_ = 0, switches_ = 0, evictions_ = 0, extends_ = 0, forks_ = 0;
     uint64_t retained_bytes_locked(int exclude = -1) const {
         uint64_t bytes = 0;
@@ -368,7 +367,6 @@ private:
                 { std::lock_guard<std::mutex> lock(mu_); generation = ++snapshot_generation_; }
                 try { conv.payload = std::make_unique<kvmem_session_payload>(id, generation, buffers); }
                 catch (...) { llama_kvmem_store_bundle_thaw(held.parked.get()); throw; }
-                conv.disk_gen = !conv.gdn_ckpt.empty(); conv.disk_query = !conv.gdn_ckpt_query.empty();
                 conv.cold = true;
             }
             if (!held.files) held.files = std::make_unique<kvmem_session_files>(disk_path_, disk_);
@@ -402,8 +400,6 @@ private:
             match.bytes = item.second.bytes;
             match.client_id = item.second.client_id;
             match.lcp = item.second.committed.prompt ? (int)prompt.common_prefix(*item.second.committed.prompt) : 0;
-            if (!has_recurrent_ && !lanes_[0]->vision && !lanes_[0]->query_policy_user)
-                match.ckpt_rows.push_back(match.lcp);
             matches.push_back(std::move(match));
         }
         kvmem_store_limits limits;
@@ -422,17 +418,13 @@ private:
         result.prompt = source.cached_prompt;
         result.match.rows = (int)source.cached_tokens.size();
         result.match.last_n_gen = source.last_n_gen;
-        // The legacy text prefill uses GDN checkpoints, not mm_live_row.
+        // The committed native store bounds the live reusable prefix.
         result.match.live_row = (int)stored;
         for (const auto & checkpoint : source.mm_checkpoints) result.match.ckpt_rows.push_back(checkpoint.row);
-        if (source.gdn_ckpt_pos >= 0 && !source.gdn_ckpt.empty()) result.match.ckpt_rows.push_back(source.gdn_ckpt_pos + 1);
-        if (source.gdn_ckpt_query_pos >= 0 && !source.gdn_ckpt_query.empty()) result.match.ckpt_rows.push_back(source.gdn_ckpt_query_pos + 1);
         return result;
     }
     template<class Source> static uint64_t payload_bytes(const Source & source) {
         uint64_t bytes = source.cached_tokens.capacity()*sizeof(llama_token);
-        bytes += source.gdn_ckpt.capacity() + source.gdn_carry.capacity() + source.gdn_query_carry.capacity();
-        bytes += source.gdn_ckpt_query.capacity() + source.last_user_text.capacity();
         bytes += source.mm_checkpoints.capacity()*sizeof(MultimodalCheckpoint);
         std::set<const MultimodalCheckpointData *> unique;
         for (const auto & checkpoint : source.mm_checkpoints) {
@@ -443,7 +435,7 @@ private:
         if (source.mm_query) {
             bytes += sizeof(MultimodalQuery) + source.mm_query->user.capacity();
             bytes += source.mm_query->state.count.capacity()*sizeof(uint32_t);
-            for (const auto & sum : source.mm_query->state.sum) bytes += sizeof(sum) + sum.capacity()*sizeof(float);
+            for (const auto & sum : source.mm_query->state.rows) bytes += sizeof(sum) + sum.capacity()*sizeof(float);
             if (source.mm_query->prefix) bytes += source.mm_query->prefix->index_bytes();
         }
         return bytes;

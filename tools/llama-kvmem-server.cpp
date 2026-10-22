@@ -131,18 +131,15 @@ static void print_usage(const char * argv0) {
             "  --kvmem-budget N           positive selected-history budget B (default 32768)\n"
             "  --kvmem-block-tokens N     block size (default 128)\n"
             "  --kvmem-sink-tokens N      always-kept prefix; default 0 = one block; rounds down, minimum one block\n"
-            "  --kvmem-gen-reserve N      positive append workspace R (default 1024; current output cap <= R)\n"
+            "  --kvmem-gen-reserve N      positive append workspace R (default 1024; not an output limit)\n"
             "  --kvmem-recent-tokens N    always-kept newest suffix in B (default 64; rounds down to blocks)\n"
             "  --kvmem-method NAME        recency | retrieval (default retrieval)\n"
-            "  --kvmem-lrfu / --no-kvmem-lrfu enable/disable retrieval history ranking (default off)\n"
-            "  --kvmem-lrfu-lambda X      history decay [0,1] (default 0.5)\n"
-            "  --kvmem-lrfu-top-frac X    hit fraction (0,1] (default 0.9)\n"
-            "  --kvmem-score-agg MODE     mean | max across GQA heads (default mean)\n"
             "  --kvmem-query-last N       fallback query-last if last-user span missing (default 64)\n"
             "  --kvmem-query-max-tokens N cap last-user retrieval query to this many tokens\n"
+            "  --kvmem-query-replay-max-tokens N bound the complete Query replay suffix (default 2048)\n"
             "                            from the end of the span (default 512; qw3-style)\n"
             "  --kvmem-query-replay MODE  legacy or auto (default auto)\n"
-            "  --kvmem-query-policy MODE  legacy or user (default user)\n"
+            "  --kvmem-query-policy MODE  user only (compatibility option; default user)\n"
             "  --kvmem-mtp-state MODE     snapshots, auto or replay (default replay with MTP)\n"
             "  --kvmem-gpu-ratio R        cap slot pool at this fraction of GPU VRAM (default 0.50)\n"
             "  --kvmem-cpu-gb GB          CPU spill arena in GiB (0 = off)\n"
@@ -964,8 +961,11 @@ int main(int argc, char ** argv) {
             st.query_replay_auto = mode == "auto";
         } else if (eq(arg, "--kvmem-query-policy")) {
             const std::string mode = need(arg);
-            if (mode != "legacy" && mode != "user") { fprintf(stderr, "invalid query policy\n"); return 1; }
-            st.query_policy_user = mode == "user";
+            if (mode == "legacy") {
+                fprintf(stderr, "--kvmem-query-policy legacy has been removed; remove this option or use user\n");
+                return 1;
+            }
+            if (mode != "user") { fprintf(stderr, "invalid query policy: only user is supported\n"); return 1; }
         } else if (eq(arg, "--kvmem-mtp-state")) {
             const std::string mode = need(arg);
             if (mode != "snapshots" && mode != "auto" && mode != "replay") {
@@ -973,6 +973,9 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             st.kparams.mtp_state = mode == "replay" ? 2 : mode == "auto" ? 1 : 0;
+        } else if (eq(arg, "--kvmem-query-replay-max-tokens")) {
+            st.query_replay_max_tokens = kvmem_cli_int(arg, need(arg));
+            if (st.query_replay_max_tokens <= 0) throw std::invalid_argument("--kvmem-query-replay-max-tokens must be positive");
         } else if (eq(arg, "--kvmem-query-max-tokens")) {
             st.query_max_tokens = kvmem_cli_int(arg, need(arg));
             if (st.query_max_tokens <= 0) {
@@ -1322,9 +1325,11 @@ int main(int argc, char ** argv) {
         cparams.n_rs_seq = (uint32_t) std::max(0, st.spec_n_max);
     }
     std::shared_ptr<kvmem::HostKvStorage> shared_payload_storage;
+    auto shared_graph_budget=std::make_shared<kvmem::GraphStatisticsBudget>(256u<<20);
     std::shared_ptr<llama_model> shared_draft_model;
     auto initialize_lane = [&](ServerState & st) {
         kvmem_execution_scope scope(st.execution.get());
+        st.execution->graph_budget=shared_graph_budget;
         llama_kvmem_set_params(&st.kparams);
         if (options.payload_disk_bytes) {
             st.execution->payload_domains = options.parallel;
@@ -1384,8 +1389,8 @@ int main(int argc, char ** argv) {
         next->sampling_overrides = st.sampling_overrides;
         next->query_last_fallback = st.query_last_fallback;
         next->query_max_tokens = st.query_max_tokens;
+        next->query_replay_max_tokens = st.query_replay_max_tokens;
         next->query_replay_auto = st.query_replay_auto;
-        next->query_policy_user = st.query_policy_user;
         next->model_name = st.model_name;
         next->cache_type_k = st.cache_type_k;
         next->cache_type_v = st.cache_type_v;
@@ -1514,8 +1519,7 @@ int main(int argc, char ** argv) {
     std::unordered_set<std::string> ui_paths;
     if (!kvmem_mount_ui(svr, ui_dir, no_ui, argv[0], &ui_paths)) return 1;
     kvmem_install_auth(svr, options.api_keys, std::move(ui_paths));
-    const int generation_limit = st.kparams.enabled && st.kparams.gen_reserve > 0 ?
-        std::min(n_ctx, (int) st.kparams.gen_reserve) : n_ctx;
+    const int generation_limit = n_ctx;
     startup["context_actual"] = llama_n_ctx(st.ctx);
     startup["batch_actual"] = llama_n_batch(st.ctx);
     startup["ubatch_actual"] = llama_n_ubatch(st.ctx);
@@ -1912,7 +1916,7 @@ int main(int argc, char ** argv) {
                 use_spec = false;
             }
         }
-        if ((st.vision || st.query_policy_user) && st.spec.ok && !use_spec) {
+        if (st.spec.ok && !use_spec) {
             res.status = 400;
             res.set_content("{\"error\":\"MTP sampler could not initialize for this request\"}", "application/json");
             return;
@@ -1981,6 +1985,9 @@ int main(int argc, char ** argv) {
             res.set_content(json{{"error", e.what()}}.dump(), "application/json"); return;
         }
         st.active_prompt = parsed_prompt;
+        const auto graph_messages=llama_driver_graph_messages(st,inputs,formatted,*parsed_prompt);
+        kvmem_diag("KVMEM_TRACE graph_messages spans=%zu structured=%zu\n",graph_messages.size(),inputs.messages.size());
+        llama_kvmem_set_graph_messages(graph_messages);
         st.history_input_end = uint32_t(toks.size());
         if (st.kparams.lrfu && !formatted.generation_prompt.empty() &&
             prompt.size() >= formatted.generation_prompt.size() &&
@@ -1991,20 +1998,21 @@ int main(int argc, char ** argv) {
                 std::equal(header.rbegin(), header.rend(), toks.rbegin()))
                 st.history_input_end -= uint32_t(header.size());
         }
-        st.turn_generation_rows = (uint32_t) std::min<uint64_t>(UINT32_MAX,
-                (uint64_t) std::max(0, cr.max_tokens) + (st.spec.ok ? std::max(0, st.spec_n_max) + 1u : 0u));
         int qbegin = cr.query_begin;
         int qend = cr.query_end;
         st.turn_query_exact = false;
         st.turn_last_user = cr.last_user;
+        st.turn_tool_continuation = false;
+        for (auto it = cr.msgs.rbegin(); it != cr.msgs.rend(); ++it) {
+            if (it->role == "user") break;
+            if (it->role == "tool") st.turn_tool_continuation = true;
+        }
         if (qbegin < 0 || qend < 0) {
             llama_driver_query_span(st, prompt, cr.last_user, toks, qbegin, qend);
         }
-        if (st.query_policy_user) {
-            st.turn_query_exact = cr.query_begin >= 0 && cr.query_end > cr.query_begin && cr.query_end <= (int) toks.size();
-            if (cr.query_begin < 0 && cr.query_end < 0) {
-                st.turn_query_exact = llama_driver_native_query_span(st, prompt, inputs, *parsed_prompt, qbegin, qend);
-            }
+        st.turn_query_exact = cr.query_begin >= 0 && cr.query_end > cr.query_begin && cr.query_end <= (int) toks.size();
+        if (cr.query_begin < 0 && cr.query_end < 0) {
+            st.turn_query_exact = llama_driver_native_query_span(st, prompt, inputs, *parsed_prompt, qbegin, qend);
         }
         if (parsed_prompt->has_media() && cr.query_begin < 0 && !st.turn_query_exact) {
             // The final text question follows native visual chunks and their boundaries.
@@ -2297,6 +2305,7 @@ int main(int argc, char ** argv) {
                     kvmem_diag("KVMEM_CHAT_PREFILL ms=%.2f n_prompt=%d\n",
                             prefill_ms, (int) toks.size());
                     llama_kvmem_end_prefill_capture();
+                    llama_kvmem_attention_begin(toks.data(),uint32_t(toks.size()));
                     st.mm_live_checkpoint.reset();
                     auto emit_gen_wall = make_emit_gen_wall(t_turn0, t_pf1, prefill_ms, n_cache_hit);
 
@@ -2538,7 +2547,7 @@ int main(int argc, char ** argv) {
                         (int) toks.size());
                 return;
             }
-            res.status = (st.vision || st.query_policy_user) ? st.mm_error_status : 500;
+            res.status = st.mm_error_status;
             res.set_content(json{{"error", st.mm_error.empty() ? "prefill/retrieval failed" : st.mm_error}}.dump(), "application/json");
             return;
         }
@@ -2548,6 +2557,7 @@ int main(int argc, char ** argv) {
         kvmem_diag("KVMEM_CHAT_PREFILL ms=%.2f n_prompt=%d\n",
                 prefill_ms, (int) toks.size());
         llama_kvmem_end_prefill_capture();
+                    llama_kvmem_attention_begin(toks.data(),uint32_t(toks.size()));
         st.mm_live_checkpoint.reset();
         auto emit_gen_wall = make_emit_gen_wall(t_turn0, t_pf1, prefill_ms, n_cache_hit);
 

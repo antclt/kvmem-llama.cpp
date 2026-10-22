@@ -92,6 +92,8 @@ struct CliOptions {
         if (payload_disk_dir.empty() != (payload_disk_bytes == 0))
             throw std::invalid_argument("KVMem SSD requires a positive --kvmem-disk-mib and --kvmem-disk-path together; omit the path when disabled");
         if (!enabled) return;
+        if(lrfu || score_agg!=0)
+            throw std::invalid_argument("KVMem C uses page-softmax averaged over query heads; LRFU and max GQA aggregation cannot be combined with it");
         if (!budget) budget = default_budget;
         if (!gen_reserve) gen_reserve = default_reserve;
         if (!payload_host_bytes) payload_host_bytes = default_host_bytes;

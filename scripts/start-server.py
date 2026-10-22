@@ -324,8 +324,10 @@ def main():
     draft_kv = env.get('SPEC_KV_DTYPE', 'f16')
     draft_max = int(env.get('SPEC_DRAFT_N_MAX', '3'))
     mtp_state = env.get('KVMEM_MTP_STATE', 'replay')
-    if vision not in ('cpu', 'gpu') or replay not in ('auto', 'legacy') or policy not in ('user', 'legacy'):
-        raise ValueError('invalid MMPROJ_DEVICE, KVMEM_QUERY_REPLAY or KVMEM_QUERY_POLICY')
+    if policy != 'user':
+        raise ValueError('KVMEM_QUERY_POLICY only supports user; legacy has been removed. Unset KVMEM_QUERY_POLICY or use user.')
+    if vision not in ('cpu', 'gpu') or replay not in ('auto', 'legacy'):
+        raise ValueError('invalid MMPROJ_DEVICE or KVMEM_QUERY_REPLAY')
     if draft_kv not in ('f16', 'q8_0', 'q5_0', 'q4_0'):
         raise ValueError('SPEC_KV_DTYPE must be f16, q8_0, q5_0 or q4_0')
     if draft_max < 1 or mtp_state not in ('snapshots', 'auto', 'replay'):

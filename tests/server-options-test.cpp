@@ -23,6 +23,12 @@ int main() {
         parse_memory(defaults, "--kvmem"); defaults.resolve();
         check(defaults.enabled && defaults.budget == 32768 && defaults.gen_reserve == 1024 &&
               defaults.payload_host_bytes == (16384ULL << 20) && defaults.sessions == 4);
+        for (const char * flag : {"--kvmem-lrfu", "--kvmem-score-agg"}) {
+            kvmem::CliOptions conflict;
+            parse_memory(conflict, "--kvmem");
+            parse_memory(conflict, flag, "max");
+            rejects([&] { conflict.resolve(); });
+        }
         for (const char * flag : {"--kvmem-budget", "--kvmem-gen-reserve", "--kvmem-host-mib", "--kvmem-sessions"})
             for (const char * value : {"0", "-1", "1.5", "1x", " 1", "9999999999999999999999999"})
                 rejects([&] { kvmem::CliOptions c; parse_memory(c, flag, value); });

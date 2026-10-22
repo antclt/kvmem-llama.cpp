@@ -21,7 +21,7 @@ param(
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,
     [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction = 0.9,
-    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'max',
+    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'mean',
     [ValidateSet('cpu', 'gpu')][string]$VisionDevice,
     [string]$ChatTemplateFile,
     [string]$ChatTemplateKwargs,
@@ -30,6 +30,7 @@ param(
     [switch]$DryRun
 )
 $ErrorActionPreference = 'Stop'
+if ($PSBoundParameters.ContainsKey('NoLrfu') -and !$NoLrfu) { throw 'KVMem C has no LRFU ranking; remove the explicit NoLrfu:false override' }
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-process.ps1')
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -69,12 +70,7 @@ $serverArgs = @('-m', $Model, '--mmproj', $Mmproj, $visionFlag,
     '--kvmem-block-tokens', "$BlockTokens", '--kvmem-query-policy', 'user',
     '--kvmem-sink-tokens', "$SinkTokens", '--kvmem-recent-tokens', "$RecentTokens",
     '--enable-thinking', '--reasoning-budget', "$ReasoningBudget")
-if (!$NoLrfu) {
-    $serverArgs += @('--kvmem-lrfu',
-        '--kvmem-lrfu-lambda', $LrfuLambda.ToString('R', [Globalization.CultureInfo]::InvariantCulture),
-        '--kvmem-lrfu-top-frac', $LrfuTopFraction.ToString('R', [Globalization.CultureInfo]::InvariantCulture))
-}
-$serverArgs += @('--kvmem-score-agg', $ScoreAggregation)
+if ($ScoreAggregation -ne 'mean') { throw 'KVMem C requires mean page softmax; max aggregation is unsupported' }
 if ($CacheTypeK) { $serverArgs += @('--cache-type-k', $CacheTypeK) }
 if ($CacheTypeV) { $serverArgs += @('--cache-type-v', $CacheTypeV) }
 if ($ApiKey) { $serverArgs += @('--api-key', $ApiKey) }

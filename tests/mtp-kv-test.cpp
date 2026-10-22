@@ -468,7 +468,7 @@ static void check_replay_logits(llama_model * model, ggml_type type, int mtp_sta
         repeated.push_back(logits());
         llama_kvmem_query_state replay_query;
         require(llama_kvmem_get_query(replay_query), "query capture missing after replay");
-        require(replay_query.count == q.count && replay_query.sum == q.sum,
+        require(replay_query.count == q.count && replay_query.rows == q.rows,
                 "replay changed first-pass query statistics");
         require(llama_kvmem_tail_mean_valid(end, tail), "execution replay revoked logical prefix");
         std::printf("QUERY_REPLAY repeat=%d rows=%u original_rows=%u\n", repeat + 1,

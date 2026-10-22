@@ -1,5 +1,16 @@
 # KVMem 原生命令行与公共配置规范
 
+## 当前源码修订：图召回 C
+
+当前实现以 [图召回 C 规范及验证](graph-recall.md) 覆盖本文件早期设计/验收记录中的以下部分：
+
+- Query 使用逐 token/head 的 Mean-K page softmax 与一次图传播。LRFU 开启和 max 聚合与 C 冲突，worker/启动脚本明确报错；UI 移除这些旧设置，旧草稿/模板中的值不导出。
+- PrefillPressure 和 DecodePressure 仅在 accepted 驻留集合中按累计注意力重选；R 是可重复使用的追加空间。两个后端都允许输出超过 R，仍受 context、请求输出预算和结束条件限制。
+- UI 内置配置保留 0.18 资源参数并标为“0.18 资源配置 + C”。发布的 0.18 二进制和下文带日期的历史验证不因此改变。
+
+下文保留原有命名收敛、原生参数映射与历史验收依据；其 LRFU/max 控件和 llama R 上限描述属于本次修订前的行为。
+
+
 > Device identifiers and private paths have been anonymized; reported measurements are unchanged.
 
 本规范以当前 `llama-kvmem-server.exe` 和 `ninfer-serve.exe` 的命令行接口为基础，覆盖原生参数、KVMem 自有接口、公共配置映射和组合校验。llama.cpp/NInfer 原生参数名称和含义保持不变；KVMem 自己增加的接口统一名称、定义和配置来源，必要时修改两个适配层。启动脚本的现有参数不限制本规范的范围。
@@ -126,7 +137,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | 独立 K/V 格式 | 后端枚举 | `--cache-type-k` / `--cache-type-v` | 无对应项 | 公共高级项，仅 llama 开放；不把 NInfer 组合格式拆成任意 K/V |
 | 历史保留数量 | 整数 | `--kvmem-sessions` | 同名 | 只计非活动历史；旧 conversations 不是同值别名，不进入 UI 或新模板 |
 | 检索块大小 | tokens | `--kvmem-block-tokens`，默认 128 | 固定 64，无对应参数 | llama 可编辑，NInfer 显示固定值 |
-| 检索与 query 策略 | 能力相关选项 | `--kvmem-method`、`--kvmem-query-*` | 无同等配置入口 | 归属 KVMem 适配高级扩展，统一定义、按能力开放 |
+| 检索与 query 策略 | 能力相关选项 | `--kvmem-method`、`--kvmem-query-*` | 两个长度参数同名：`--kvmem-query-max-tokens` / `--kvmem-query-replay-max-tokens` | 默认 512/2048；评分窗口和完整回放后缀独立限制 |
 
 ### 采样与思考
 
@@ -228,7 +239,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--kvmem-budget` | 正整数 tokens；启用后默认 32768，显式 0 拒绝 |
 | `--kvmem-block-tokens` | 开启 KVMem 时必须为正；默认 128 |
 | `--kvmem-sink-tokens` | 默认 0 表示一块；正数向下取整且至少一块 |
-| `--kvmem-gen-reserve` | 正整数 tokens，启用后默认 1024；当前 llama 服务的输出能力仍受 R 限制 |
+| `--kvmem-gen-reserve` | 正整数 tokens，启用后默认 1024；R 是可复用追加空间；持续输出按 DecodePressure 腾空间 |
 | `--kvmem-recent-tokens` | 非负 tokens，默认 64；按 block 向下取整，占用 B；默认 block=128 时有效后缀为 0 |
 | `--kvmem-method` | 文档化选项 recency/retrieval；默认 retrieval；解析还接受 retrieve |
 | `--kvmem-lrfu` / `--no-kvmem-lrfu` | 开启/关闭历史衰减排序；默认关，后出现的开关覆盖前者 |
@@ -237,8 +248,9 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--kvmem-score-agg` | mean/max，默认 mean |
 | `--kvmem-query-last` | 缺少最后用户 span 时的 query 回退长度；默认 64 tokens |
 | `--kvmem-query-max-tokens` | 正整数；从最后用户 span 尾部取 query 的最大长度，默认 512 |
-| `--kvmem-query-replay` | legacy/auto，默认 auto |
-| `--kvmem-query-policy` | legacy/user，默认 user |
+| `--kvmem-query-replay-max-tokens` | 两个 worker 均接受正整数；默认 2048，限制完整依赖后缀；还须满足实际页容量与 MTP 工作区检查 |
+| `--kvmem-query-replay` | llama 专用 legacy/auto，默认 auto；legacy 仅强制尝试有界回放，仍须通过准入 |
+| `--kvmem-query-policy` | 仅接受 user，作为兼容参数；省略时使用同一流程。legacy 已删除，显式传入会报错 |
 | `--kvmem-mtp-state` | snapshots/auto/replay；MTP 默认 replay，受切分组合限制 |
 | `--kvmem-gpu-ratio` | [0,1]，默认 0.50；限制槽池显存比例，不是整个进程的显存百分比 |
 | `--kvmem-host-mib` | 正整数 MiB；启用后默认 16384；原生 KV payload 全局硬上限 |

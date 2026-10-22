@@ -46,7 +46,7 @@ param(
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,
     [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction = 0.9,
-    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'max',
+    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'mean',
     [string]$DiskPath,
     [ValidateRange(0, 1048576)][int]$DiskMiB = 4096,
     [AllowEmptyCollection()][AllowEmptyString()][string[]]$WorkerArgs = @(),

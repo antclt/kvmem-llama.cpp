@@ -45,7 +45,7 @@ param(
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,
     [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction = 0.9,
-    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'max',
+    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'mean',
     [string]$DiskPath,
     [ValidateRange(0, 1048576)][int]$DiskMiB = 4096,
     [AllowEmptyCollection()][AllowEmptyString()][string[]]$WorkerArgs = @(),
@@ -55,6 +55,7 @@ param(
     [Parameter(ValueFromRemainingArguments=$true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$WorkerArgsTail = @()
 )
 $ErrorActionPreference = 'Stop'
+if ($PSBoundParameters.ContainsKey('NoLrfu') -and !$NoLrfu) { throw 'KVMem C has no LRFU ranking; remove the explicit NoLrfu:false override' }
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-process.ps1')
 $WorkerArgs = Resolve-KVMemWorkerArgs $PSBoundParameters $WorkerArgsTail
@@ -283,14 +284,12 @@ if ($ThinkingMode -eq 'on') { $nativeArgs += '--enable-thinking' }
 $nativeArgs += '--kvmem'
 if ($Backend -eq 'llamacpp') { $nativeArgs += $nativeArgsSpec }
 if ($DiskPath) { $nativeArgs += @('--kvmem-disk-path', $DiskPath, '--kvmem-disk-mib', "$DiskMiB") }
-# Use invariant decimals because both native parsers expect a dot.
-if (!$NoLrfu) {
-    $nativeArgs += @('--kvmem-lrfu',
-        '--kvmem-lrfu-lambda', $LrfuLambda.ToString('R', [Globalization.CultureInfo]::InvariantCulture),
-        '--kvmem-lrfu-top-frac', $LrfuTopFraction.ToString('R', [Globalization.CultureInfo]::InvariantCulture))
+# Default C has no retrieval-history or independent attention quota.
+if (($ScoreAggregation -ne 'mean') -or
+    ($PSBoundParameters.ContainsKey('LrfuLambda') -and ($LrfuLambda -ne 0.5)) -or
+    ($PSBoundParameters.ContainsKey('LrfuTopFraction') -and ($LrfuTopFraction -ne 0.9))) {
+    throw 'KVMem C uses mean page softmax and no LRFU; remove conflicting legacy ranking options'
 }
-if ($NoLrfu) { $nativeArgs += '--no-kvmem-lrfu' }
-$nativeArgs += @('--kvmem-score-agg', $ScoreAggregation)
 $nativeArgs += $WorkerArgs
 if ($DryRun) {
     $displayArgs = @($nativeArgs)

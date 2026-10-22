@@ -23,7 +23,7 @@ $forward = @{
     Vision = $true; VisionResidency = 'cpu'; VisionTokens = 1024
     DeviceProfile = 'off'; ThinkingBudget = 8192
     SinkTokens = 12288; RecentTokens = 1024
-    LrfuLambda = 0.5; LrfuTopFraction = 0.9; ScoreAggregation = 'max'
+    LrfuLambda = 0.5; LrfuTopFraction = 0.9; ScoreAggregation = 'mean'
     WorkerArgs = @('--gdn-state-fp16', '--cuda-graph-allowance-mib', '64')
 }
 foreach ($entry in $PSBoundParameters.GetEnumerator()) { $forward[$entry.Key] = $entry.Value }

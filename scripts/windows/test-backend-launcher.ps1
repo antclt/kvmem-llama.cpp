@@ -31,6 +31,12 @@ try {
             if ($levels.argv[[array]::IndexOf($levels.argv, $flag) + 1] -ne $expected) { throw 'Log level mapping changed native levels' }
         }
         $defaults = & $launcher @common -Backend $backend -Model $model -ThinkingMode default | ConvertFrom-Json
+        if ($defaults.argv -contains '--kvmem-lrfu' -or $defaults.argv -contains '--kvmem-score-agg') { throw 'C must use native page-softmax defaults' }
+        foreach ($conflict in @(@{NoLrfu=$false}, @{ScoreAggregation='max'})) {
+            $rejected = $false
+            try { $null = & $launcher @common -Backend $backend -Model $model @conflict } catch { $rejected = $true }
+            if (!$rejected) { throw 'C accepted an incompatible LRFU/max override' }
+        }
         if (@($defaults.argv | Where-Object { $_ -match '^--(enable-thinking|no-think(ing)?)$' }).Count) { throw 'Default thinking must inherit the native default' }
         foreach ($case in @(@{Concurrency=9}, @{ApiKey='two,keys'}, @{ChatTemplateFile=(Join-Path $testDir 'missing.jinja')},
             @{ModelAlias='name'; WorkerArgs=@($aliasFlag, 'duplicate')})) {
@@ -262,7 +268,7 @@ try {
         $model = if ($backend -eq 'ninfer') { 'model with spaces.ninfer' } else { 'model.gguf' }
         $disabled = & $launcher @common -Backend $backend -Model (Join-Path $testDir $model) `
             -RetainedSessions 2 -NoLrfu -DiskMiB 0 | ConvertFrom-Json
-        if ($disabled.argv -notcontains '--kvmem' -or $disabled.argv -notcontains '--no-kvmem-lrfu' -or
+        if ($disabled.argv -notcontains '--kvmem' -or
             $disabled.argv -contains '--kvmem-lrfu' -or $disabled.argv -contains '--kvmem-disk-path' -or
             $disabled.argv[[array]::IndexOf($disabled.argv, '--kvmem-sessions') + 1] -ne '2') {
             throw 'Common KVMem enablement, sessions or off switches were not exported consistently'
