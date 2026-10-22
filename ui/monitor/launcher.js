@@ -23,14 +23,14 @@
   // v0.18.0 Windows NInfer recipe, including the fd77613 release launcher update.
   // Machine-specific paths and GPU placement are selected locally.
   const presets = [
-    {id:'ninfer-v018', title:['NInfer · 0.18.0 默认','NInfer · 0.18.0 default'], note:['200K 上下文 · 36K 历史 KV · 12 GiB RAM · 图像 / MTP','200K context · 36K history KV · 12 GiB RAM · Vision / MTP'], parameters:{Backend:'ninfer',Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,MtpDrafts:4,AdaptiveMtp:true,NgramDrafts:31,NgramMinMatch:12,Vision:true,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,NoLrfu:false,LrfuLambda:0.5,LrfuTopFraction:0.9,ScoreAggregation:'max',DeviceProfile:'off',FastPrefill:false}},
+    {id:'ninfer-v018', title:['NInfer · 0.18 资源配置 + C','NInfer · 0.18 resources + C'], note:['200K 上下文 · 36K 历史 KV · 12 GiB RAM · 图像 / MTP','200K context · 36K history KV · 12 GiB RAM · Vision / MTP'], parameters:{Backend:'ninfer',Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,MtpDrafts:4,AdaptiveMtp:true,NgramDrafts:31,NgramMinMatch:12,Vision:true,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,NoLrfu:true,ScoreAggregation:'mean',DeviceProfile:'off',FastPrefill:false}},
   ];
   const defaults={Backend:'ninfer',Model:'',Worker:'',Gpu:'',Context:262144,Budget:32768,HostMiB:16384,Reserve:1024,Prefill:128,MaxTokens:1024,Port:18200,ListenHost:'127.0.0.1',SinkTokens:12288,RecentTokens:1024};
   // Switching engines keeps the current common settings. Model assets, native
   // formats, feature overrides and raw arguments retain each backend's draft.
   const sharedSettings=['Gpu','Context','Budget','Reserve','HostMiB','Prefill','MaxTokens',
     'Port','ListenHost','SinkTokens','RecentTokens','RetainedSessions','Concurrency',
-    'DiskEnabled','DiskPath','DiskMiB','NoLrfu','LrfuLambda','LrfuTopFraction','ScoreAggregation',
+    'DiskEnabled','DiskPath','DiskMiB',
     'ModelAlias','LogLevel'];
   const names={llamacpp:'llama.cpp',ninfer:'NInfer'};
   const groups=[['缓存与历史','Cache & history'],['硬件与加速','Hardware & acceleration'],['生成与思考','Generation & thinking'],['模板与图像','Templates & vision'],['服务与并发','Service & concurrency']];
@@ -183,7 +183,7 @@
       row(tr('对外模型名','Served model name'),p.ModelAlias||tr('沿用模型名称','Use model name'),'ModelAlias');
       row(tr('API 访问密钥','API access key'),p.ApiKey?tr('已设置 · 预览隐藏密钥','Configured · Hidden in preview'):tr('未设置','Not configured'),'ApiKey');
       const reserveAt=result.argv.indexOf('--kvmem-gen-reserve'),outputAt=result.argv.indexOf(p.Backend==='ninfer'?'--default-max-tokens':'-n');
-      if(reserveAt>=0&&outputAt>=0){const reserve=Number(result.argv[reserveAt+1]),requested=Number(result.argv[outputAt+1]),effective=p.Backend==='llamacpp'?Math.min(requested,reserve):requested;row(tr('默认输出预算 / 追加空间','Default output budget / append workspace'),`${effective} / ${reserve} tokens · `+(p.Backend==='llamacpp'?tr('当前 llama.cpp 的输出预算受 R 限制','Current llama.cpp output budget is limited by R'):tr('NInfer 可复用追加空间，输出预算可超过 R','NInfer can reuse append workspace; output budget may exceed R')),'Reserve');}
+      if(reserveAt>=0&&outputAt>=0){const reserve=Number(result.argv[reserveAt+1]),requested=Number(result.argv[outputAt+1]);row(tr('默认输出预算 / 追加空间','Default output budget / append workspace'),`${requested} / ${reserve} tokens · `+tr('追加空间可循环复用，输出预算可超过 R','Append workspace is reusable; output budget may exceed R'),'Reserve');}
       const port=result.preflight?.port??p.Port??18200,available=result.preflight?.port_available;
       row(tr('服务端口','Service port'),`${result.preflight?.listen_host||p.ListenHost||'127.0.0.1'}:${port} · `+(available===true?tr('可用','Available'):available===false?tr('已占用或无法绑定；启动前需释放或更换','In use or unavailable; release or change before starting'):tr('启动时检查','Checked on start')),'Port',available!==false);
       summary.textContent=errors.length?tr('配置需要调整','Configuration needs attention'):tr('启动前检查通过','Preflight checks passed');
@@ -233,10 +233,9 @@
     const get=key=>root.querySelector(`[data-param=${key}]`);
     if(!get('Backend'))return;
     dependency('DiskEnabled',true,'');
-    const disk=!!get('DiskEnabled')?.checked&&!get('DiskEnabled').disabled,lrfu=!!get('NoLrfu')?.checked,vision=!!get('Vision')?.checked;
+    const disk=!!get('DiskEnabled')?.checked&&!get('DiskEnabled').disabled,vision=!!get('Vision')?.checked;
     for(const key of ['DiskPath','DiskMiB'])dependency(key,disk,tr('先开启 SSD 缓存。','Enable SSD cache first.'));
     if(get('DiskPath'))get('DiskPath').required=disk;
-    for(const key of ['LrfuLambda','LrfuTopFraction'])dependency(key,lrfu,tr('先开启 LRFU。','Enable LRFU first.'));
     for(const key of ['VisionTokens','VisionResidency'])dependency(key,vision,tr('先开启图像输入。','Enable vision input first.'));
     dependency('ThinkingBudget',get('ThinkingMode')?.value!=='off',tr('默认思考模式已关闭；重新开启或选择默认后可设置预算。','Default thinking is off. Select on or default to set a budget.'));
     dependency('ReasoningEffort',get('ThinkingMode')?.value!=='off',tr('默认思考模式已关闭；选择默认后可设置思考强度。','Default thinking is off. Select default to set reasoning effort.'));
@@ -587,7 +586,7 @@
     }
     field(fields,p,'Context','最大上下文 · tokens','Context limit · tokens','number');
     field(fields,p,'Budget','GPU 历史 KV 预算 · tokens','GPU history KV budget · tokens','number',null,['每条活动请求选中的历史 KV，不含生成预留空间；不是整卡显存上限','Selected history KV per active request, excluding append workspace; not a device VRAM limit']);
-    field(fields,p,'Reserve','生成预留空间 · tokens','Generation reserve · tokens','number',null,n?['每条活动请求的追加 KV 工作空间；可循环复用，输出预算可以超过此值','Append KV workspace per active request; reusable, so output budget may exceed this value']:['每条活动请求的追加 KV 工作空间；当前 llama.cpp 的单次输出预算受此容量限制','Append KV workspace per active request; current llama.cpp output budget is limited by this capacity']);
+    field(fields,p,'Reserve','生成预留空间 · tokens','Generation reserve · tokens','number',null,['每条活动请求的追加 KV 工作空间；可循环复用，输出预算可以超过此值','Append KV workspace per active request; reusable, so output budget may exceed this value']);
     for(const key of ['Context','Budget','Reserve'])fields.querySelector(`[data-param=${key}]`).closest('label').classList.add('l-resource-field');
     const section=make('section',{class:'s-card'}),tabs=make('div',{class:'l-tabs',role:'tablist','aria-label':tr('共性参数分组','Common settings groups')});section.append(tabs);form.append(section);const panels=[];
     groups.forEach((g,i)=>{const tab=make('button',{type:'button',class:'l-tab',role:'tab',id:'launch-tab-'+i,'aria-selected':String(activeTab===i),'aria-controls':'launch-panel-'+i},tr(...g));tabs.append(tab);const panel=make('div',{class:'l-panel',id:'launch-panel-'+i,role:'tabpanel','aria-labelledby':tab.id});panel.hidden=activeTab!==i;const grid=make('div',{class:'l-fields'});panel.append(grid);panels.push(grid);section.append(panel);tab.onclick=()=>{activeTab=i;tabs.querySelectorAll('button').forEach((x,j)=>x.setAttribute('aria-selected',String(i===j)));section.querySelectorAll('.l-panel').forEach((x,j)=>x.hidden=i!==j);};});
@@ -617,15 +616,10 @@
     field(panels[0],p,'SinkTokens','保留开头 · tokens','Keep prefix · tokens','number');field(panels[0],p,'RecentTokens','保留最近 · tokens','Keep recent · tokens','number');
     field(panels[0],p,'RetainedSessions','保留会话数量（可选）','Retained sessions (optional)','number',null,['保留的空闲会话数量，不含正在使用的会话','Idle sessions to retain; excludes active sessions']);
     const advanced=make('details',{class:'l-advanced'});advanced.append(make('summary',{},tr('高级 · 历史检索与保留策略','Advanced · History retrieval & retention')));const ag=make('div',{class:'l-fields'});advanced.append(ag);['SinkTokens','RecentTokens','RetainedSessions'].forEach(k=>{const el=panels[0].querySelector(`[data-param="${k}"]`);if(el)ag.append(el.closest('label'));});panels[0].append(advanced);
-    const retrieval=make('section',{class:'l-retrieval l-wide','data-lrfu-settings':''});
-    retrieval.append(make('h3',{class:'s-title'},tr('LRFU 与检索评分','LRFU & retrieval scoring')));
-    const retrievalFields=make('div',{class:'l-fields'});retrieval.append(retrievalFields);panels[0].append(retrieval);
-    // Keep persisted/native NoLrfu semantics; only the UI uses a positive toggle.
-    const lrfu=field(retrievalFields,p,'NoLrfu','启用 LRFU','Enable LRFU','checkbox');lrfu.dataset.inverted='true';lrfu.checked=!p.NoLrfu;
-    for(const [key,zh,en,fallback] of [['LrfuLambda','LRFU 衰减系数 λ','LRFU decay λ','0.5'],['LrfuTopFraction','LRFU 候选比例','LRFU candidate fraction','0.9']]){
-      const input=field(retrievalFields,p,key,zh,en,'number',null,['开启 LRFU 时生效；关闭后保留填写的值。','Applies when LRFU is enabled; values are retained when off.']);input.step='any';input.max='1';input.placeholder=tr('默认 '+fallback,'Default '+fallback);
-    }
-    field(retrievalFields,{ScoreAggregation:'max',...p},'ScoreAggregation','注意力分数组合方式','Attention score aggregation','text',[['max',tr('最大值','Maximum')],['mean',tr('平均值','Mean')]]);
+    const retrieval=make('section',{class:'l-retrieval l-wide','data-graph-recall':''});
+    retrieval.append(make('h3',{class:'s-title'},tr('图传播召回 C','Graph recall C')));
+    retrieval.append(make('p',{},tr('按当前问题召回相关历史；空间不足时按累计注意力保留驻留内容。','Recall relevant history for the current query; retain resident content by accumulated attention when space is needed.')));
+    panels[0].append(retrieval);
     field(panels[1],p,'Prefill','预填充块大小 · tokens','Prefill chunk · tokens','number');
     const layerSplit=field(panels[1],{...p,StageLayers:(p.StageLayers||[]).join(',')},'StageLayers','多卡层数分配（可选）','Layer split (optional)','text',null,[n?'依次对应上方第 1、2…张显卡，用逗号分隔；留空由后端分配':'当前接入暂不支持设置多卡层数',n?'Comma-separated counts for GPU 1, 2, … above; empty uses backend allocation':'Layer assignment is unavailable in this integration'],!n);
     layerSplit.addEventListener('input',refreshGpuOrder);refreshGpuOrder();

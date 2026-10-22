@@ -3,6 +3,10 @@
 > Device identifiers and private paths have been anonymized; reported measurements are unchanged.
 
 
+Current source builds use [graph recall C](../../docs/graph-recall.md) in both backends. The 0.18 resource recipe remains. Use `-QueryScorer meanq-cosine|page-softmax`, `-ScoreAggregation mean|max`, `-GraphAlpha`, and `-Lrfu`/`-NoLrfu` for the documented scoring variants. Rebuild workers with the versioned backend patches. Published old packages keep their original behavior.
+
+当前源码的两个后端默认采用图召回 C，保留 0.18 资源配方。可用 `-QueryScorer`、`-ScoreAggregation`、`-GraphAlpha`、`-Lrfu`/`-NoLrfu` 切换已支持的评分组合；新脚本须配合本源码重编译的 worker。旧发布包保持其原有行为。
+
 ## Multi-backend launchers / 多后端启动入口
 
 The current launch UI calls `start-backend.ps1` internally with typed JSON settings.

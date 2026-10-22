@@ -15,7 +15,7 @@ module.exports = async function settingsChecks({browser,base,info}) {
   Backend:'ninfer',Model:'C:/models/ui fixture.ninfer',Gpu:gpus[0].uuid,Context:8192,Budget:2048,Reserve:1024,
   HostMiB:256,Prefill:128,MaxTokens:128,Port:18499,ListenHost:'127.0.0.1',SinkTokens:128,RecentTokens:64,
   RetainedSessions:1,KvType:'int8',DiskEnabled:true,DiskPath:'C:/cache/ui fixture',DiskMiB:512,
-  NoLrfu:false,LrfuLambda:0.4,LrfuTopFraction:0.8,ScoreAggregation:'max',MtpDrafts:4,AdaptiveMtp:true,
+  NoLrfu:false,ScoreAggregation:'max',MtpDrafts:4,AdaptiveMtp:true,
   NgramDrafts:8,NgramMinMatch:6,Vision:true,VisionTokens:512,VisionResidency:'cpu',ThinkingMode:'default',ThinkingBudget:512,ReasoningEffort:'medium',PreserveThinking:true,
  }}};
  await page.route('**/api/launcher/info',route=>route.fulfill({json:fixture}));
@@ -59,10 +59,8 @@ module.exports = async function settingsChecks({browser,base,info}) {
   await group(0);await field('DiskEnabled').uncheck();
   await disabled(['DiskPath','DiskMiB']);assert.equal(await field('DiskPath').inputValue(),'C:/cache/ui fixture');
   assert.equal(await field('DiskPath').getAttribute('required'),null,'disabled SSD does not require a path');
-  await field('NoLrfu').uncheck();await disabled(['LrfuLambda','LrfuTopFraction']);await disabled(['ScoreAggregation'],false);
-  const lrfuHelp=field('LrfuLambda').locator('..').locator('.l-help');await lrfuHelp.focus();
-  assert.ok((await page.locator('#'+await lrfuHelp.getAttribute('aria-describedby')).textContent()).includes('先开启 LRFU'),'disabled reason is accessible');
-  await page.keyboard.press('Escape');
+  assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('图传播召回 C'));
+  for(const key of ['NoLrfu','ScoreAggregation'])assert.equal(await field(key).count(),0,'legacy draft cannot expose '+key);
   await group(1);await field('FastPrefill').check();await disabled(['StageLayers']);
   await page.locator('[data-gpu-choice]').nth(1).check();await disabled(['StageLayers'],false);
   await field('StageLayers').fill('40,24');await page.locator('[data-gpu-choice]').nth(1).uncheck();
@@ -94,13 +92,13 @@ module.exports = async function settingsChecks({browser,base,info}) {
   const draft=await page.evaluate(()=>JSON.parse(localStorage.getItem('kvmem-launch-draft-v2')));
   assert.equal(Object.hasOwn(draft.parameters,'ApiKey'),false,'secret excluded from browser draft');
   assert.equal(draft.parameters.DiskEnabled,false);assert.equal(draft.parameters.DiskMiB,512);
-  assert.equal(draft.parameters.LrfuLambda,0.4);assert.equal(draft.parameters.VisionTokens,512);
+  assert.equal(Object.hasOwn(draft.parameters),false);assert.equal(draft.parameters.VisionTokens,512);
   assert.equal(draft.parameters.DraftPolicy,'adaptive');assert.equal(draft.parameters.NgramDrafts,8);assert.equal(draft.parameters.FastPrefill,true);
   assert.equal(draft.parameters.SpeculativeMode,'none');assert.equal(draft.parameters.DraftTokens,4);
   const inactive=await preview();
-  for(const key of ['DiskEnabled','DiskPath','DiskMiB','LrfuLambda','LrfuTopFraction','VisionTokens','VisionResidency','ThinkingBudget','ReasoningEffort','MtpEnabled','DraftTokens','DraftPolicy','NgramDrafts','NgramMinMatch','FastPrefill','StageLayers'])assert.equal(Object.hasOwn(inactive,key),false,'inactive override omitted: '+key);
+  for(const key of ['DiskEnabled','DiskPath','DiskMiB','VisionTokens','VisionResidency','ThinkingBudget','ReasoningEffort','MtpEnabled','DraftTokens','DraftPolicy','NgramDrafts','NgramMinMatch','FastPrefill','StageLayers'])assert.equal(Object.hasOwn(inactive,key),false,'inactive override omitted: '+key);
   assert.equal(inactive.PreserveThinking,true,'preserving past reasoning is independent of the current thinking switch');
-  assert.equal(inactive.NoLrfu,true);assert.equal(inactive.ScoreAggregation,'max');assert.equal(inactive.ThinkingMode,'off');
+  for(const key of ['NoLrfu','ScoreAggregation'])assert.equal(Object.hasOwn(inactive,key),false);assert.equal(inactive.ThinkingMode,'off');
   assert.equal(inactive.ApiKey,secret);assert.equal(inactive.ModelAlias,'UI friendly model');assert.equal(inactive.LogLevel,'debug');
   assert.equal(inactive.ChatTemplateFile,'C:/templates/ui fixture.jinja');assert.equal(inactive.RetainedSessions,1);
 
@@ -112,13 +110,13 @@ module.exports = async function settingsChecks({browser,base,info}) {
   assert.equal(template.draft.parameters.SpeculativeMode,'none');assert.equal(template.draft.parameters.DraftTokens,4);
   await page.reload();await field('Backend').waitFor();
   assert.equal(await field('ApiKey').inputValue(),'','secret does not survive reload');
-  await disabled(['DiskPath','DiskMiB','LrfuLambda','LrfuTopFraction','VisionTokens','VisionResidency','ThinkingBudget','DraftTokens','DraftPolicy','NgramDrafts','NgramMinMatch','FastPrefill','StageLayers']);
+  await disabled(['DiskPath','DiskMiB','VisionTokens','VisionResidency','ThinkingBudget','DraftTokens','DraftPolicy','NgramDrafts','NgramMinMatch','FastPrefill','StageLayers']);
   assert.equal(await field('SpeculativeMode').inputValue(),'none','off remains off after reload despite a retained positive draft length');
   assert.equal(await field('VisionResidency').inputValue(),'cpu');assert.equal(await field('ThinkingBudget').inputValue(),'512');
-  await group(0);await field('DiskEnabled').check();await field('NoLrfu').check();
+  await group(0);await field('DiskEnabled').check();
   await page.locator('[data-template-tab=mine]').click();await page.locator('[data-apply-template]').click();
-  assert.equal(await field('DiskEnabled').isChecked(),false);assert.equal(await field('NoLrfu').isChecked(),false);
-  await disabled(['DiskPath','LrfuLambda']);assert.equal(await field('DiskMiB').inputValue(),'512');
+  assert.equal(await field('DiskEnabled').isChecked(),false);
+  await disabled(['DiskPath']);assert.equal(await field('DiskMiB').inputValue(),'512');
 
   await field('Backend').selectOption('llamacpp');
   await field('Model').fill('C:/models/ui fixture.gguf');await page.locator('[data-gpu-choice]').first().check();
@@ -131,8 +129,8 @@ module.exports = async function settingsChecks({browser,base,info}) {
   assert.equal(Object.hasOwn(parallel,'ReasoningEffort'),false);assert.equal(Object.hasOwn(parallel,'PreserveThinking'),false);
   await field('Concurrency').fill('1');await disabled(['DiskEnabled','DiskPath','DiskMiB'],false);
   const serial=await preview();assert.equal(serial.DiskPath,'C:/cache/llama fixture');assert.equal(serial.DiskMiB,512);assert.equal(Object.hasOwn(serial,'DiskEnabled'),false);
-  await field('Backend').selectOption('ninfer');await disabled(['DiskPath'],false);await disabled(['LrfuLambda','VisionTokens','ThinkingBudget','DraftPolicy']);
-  await group(0);await field('DiskEnabled').check();await field('NoLrfu').check();await field('KvType').selectOption('int8');
+  await field('Backend').selectOption('ninfer');await disabled(['DiskPath'],false);await disabled(['VisionTokens','ThinkingBudget','DraftPolicy']);
+  await group(0);await field('DiskEnabled').check();await field('KvType').selectOption('int8');
   await group(1);await field('SpeculativeMode').selectOption('mtp');await field('DraftTokens').fill('4');await disabled(['DraftPolicy','NgramDrafts','NgramMinMatch','FastPrefill'],false);
   assert.equal(await field('DraftPolicy').inputValue(),'adaptive');assert.equal(await field('FastPrefill').isChecked(),true);
   await group(2);await field('ThinkingMode').selectOption('default');
@@ -140,8 +138,8 @@ module.exports = async function settingsChecks({browser,base,info}) {
   const active=await preview();
   assert.equal(active.ReasoningEffort,'medium');assert.equal(active.PreserveThinking,true);
   assert.equal(active.DraftTokens,4);assert.equal(active.SpeculativeMode,'mtp');assert.equal(Object.hasOwn(active,'MtpEnabled'),false,'the switch is browser state, not a new backend argument');
-  for(const [key,value] of Object.entries({DiskMiB:512,LrfuLambda:0.4,LrfuTopFraction:0.8,VisionTokens:512,VisionResidency:'cpu',ThinkingBudget:512,DraftPolicy:'adaptive',NgramDrafts:8,NgramMinMatch:6,FastPrefill:true}))assert.equal(active[key],value,'reactivated '+key);
-  assert.equal(Object.hasOwn(active,'NoLrfu'),false,'enabled LRFU uses the positive default');
+  for(const [key,value] of Object.entries({DiskMiB:512,VisionTokens:512,VisionResidency:'cpu',ThinkingBudget:512,DraftPolicy:'adaptive',NgramDrafts:8,NgramMinMatch:6,FastPrefill:true}))assert.equal(active[key],value,'reactivated '+key);
+  assert.equal(Object.hasOwn(active,'NoLrfu'),false,'C omits the obsolete ranking switch');
   assert.equal(Object.hasOwn(active,'ApiKey'),false);
   await group(1);await field('SpeculativeMode').selectOption('dflash2');
   assert.equal(await field('DraftTokens').inputValue(),'5');await disabled(['DraftPolicy','DraftModel']);

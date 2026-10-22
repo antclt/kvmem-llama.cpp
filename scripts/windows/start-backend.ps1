@@ -42,10 +42,13 @@ param(
     [ValidateRange(0, 2147483647)][int]$ThinkingBudget = 0,
     [ValidateRange(0, 2147483647)][int]$SinkTokens = 12288,
     [ValidateRange(0, 2147483647)][int]$RecentTokens = 1024,
+    [ValidateSet('page-softmax', 'meanq-cosine')][string]$QueryScorer = 'page-softmax',
+    [ValidateRange(0.0, 1.0)][double]$GraphAlpha,
+    [switch]$Lrfu,
     [switch]$NoLrfu,
     [ValidateRange(0.0, 1.0)][double]$LrfuLambda = 0.5,
     [ValidateScript({ $_ -gt 0 -and $_ -le 1 })][double]$LrfuTopFraction = 0.9,
-    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'max',
+    [ValidateSet('mean', 'max')][string]$ScoreAggregation = 'mean',
     [string]$DiskPath,
     [ValidateRange(0, 1048576)][int]$DiskMiB = 4096,
     [AllowEmptyCollection()][AllowEmptyString()][string[]]$WorkerArgs = @(),
@@ -57,6 +60,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-process.ps1')
+. (Join-Path $PSScriptRoot 'query-scoring.ps1')
 $WorkerArgs = Resolve-KVMemWorkerArgs $PSBoundParameters $WorkerArgsTail
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $specProfiles = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../speculative-capabilities.json') -Raw | ConvertFrom-Json
@@ -155,7 +159,7 @@ if ($Backend -eq 'ninfer' -and $ThinkingMode -eq 'off' -and
     ($ReasoningEffort -or @($WorkerArgs | Where-Object { $_ -match '^--default-reasoning-effort(=|$)' }).Count)) {
     throw 'ReasoningEffort conflicts with ThinkingMode off'
 }
-if (@($WorkerArgs | Where-Object { $_ -match '^--(no-)?kvmem($|-(budget|gen-reserve|host-mib|sessions|sink-tokens|recent-tokens|lrfu|lrfu-lambda|lrfu-top-frac|score-agg)(=|$))' }).Count) {
+if (@($WorkerArgs | Where-Object { $_ -match '^--(no-)?kvmem($|-(budget|gen-reserve|host-mib|sessions|sink-tokens|recent-tokens|lrfu|lrfu-lambda|lrfu-top-frac|score-agg|query-scorer|graph-alpha)(=|$))' }).Count) {
     throw 'KVMem common options are owned by the launcher; use its named parameters instead of WorkerArgs'
 }
 if (!$Worker) {
@@ -283,14 +287,7 @@ if ($ThinkingMode -eq 'on') { $nativeArgs += '--enable-thinking' }
 $nativeArgs += '--kvmem'
 if ($Backend -eq 'llamacpp') { $nativeArgs += $nativeArgsSpec }
 if ($DiskPath) { $nativeArgs += @('--kvmem-disk-path', $DiskPath, '--kvmem-disk-mib', "$DiskMiB") }
-# Use invariant decimals because both native parsers expect a dot.
-if (!$NoLrfu) {
-    $nativeArgs += @('--kvmem-lrfu',
-        '--kvmem-lrfu-lambda', $LrfuLambda.ToString('R', [Globalization.CultureInfo]::InvariantCulture),
-        '--kvmem-lrfu-top-frac', $LrfuTopFraction.ToString('R', [Globalization.CultureInfo]::InvariantCulture))
-}
-if ($NoLrfu) { $nativeArgs += '--no-kvmem-lrfu' }
-$nativeArgs += @('--kvmem-score-agg', $ScoreAggregation)
+$nativeArgs += @(Get-KVMemQueryScoringArgs $PSBoundParameters)
 $nativeArgs += $WorkerArgs
 if ($DryRun) {
     $displayArgs = @($nativeArgs)

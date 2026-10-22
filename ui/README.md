@@ -107,13 +107,13 @@ window width, with process state and lifecycle actions in a right-hand column.
 Low-frequency history controls are collapsed. The monitor uses the same theme and
 language controls. Small windows stack the columns; expanded details may scroll.
 
-The right sidebar has one built-in template: **NInfer · 0.18.0 default**, matching
+The right sidebar has one built-in template: **NInfer · 0.18 resources + C**, retaining the resource settings of
 `scripts/windows/start-ninfer.ps1` after release update `fd77613` (2026-10-13).
 It uses context 204800, GPU history 36864, reserve 16384, RAM history 12288 MiB,
 prefill 256, output limit 16384, INT8 KV, one concurrent request and one retained session.
 It enables adaptive MTP with 4 drafts, N-gram with 31 drafts/minimum match 12,
 CPU-resident vision with 1024 tokens, and thinking budget 8192. Sink/recent are
-12288/1024; LRFU uses lambda 0.5/top fraction 0.9 and max score aggregation.
+12288/1024. Current source builds use graph recall C (Mean-K page softmax plus query graph propagation, accumulated attention under pressure). Legacy LRFU/max controls are removed; old draft/template ranking values are omitted from launch requests. Published 0.18 binaries retain their original ranking.
 The original `v0.18.0` Git tag predates the sink/recent release update.
 The recipe requires a model with Vision/MTP support. Other built-in recipes were removed;
 personal templates are unaffected. Model/worker paths are retained per backend;

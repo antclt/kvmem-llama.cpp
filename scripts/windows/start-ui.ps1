@@ -12,7 +12,7 @@ Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 try {
     foreach ($relative in 'scripts/local-console.py', 'scripts/windows/start-backend.ps1',
-                          'scripts/windows/describe-launch-json.ps1', 'scripts/windows/native-process.ps1',
+                          'scripts/windows/describe-launch-json.ps1', 'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1',
                           'scripts/windows/select-model.ps1',
                           'ui/monitor/index.html', 'ui/monitor/launcher.js', 'ui/monitor/monitor.js') {
         if (!(Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) {

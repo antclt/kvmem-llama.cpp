@@ -54,6 +54,8 @@ These packages retain their own feature and parameter scope; mainline updates do
 
 </details>
 
+Current source builds use [graph recall C](docs/graph-recall.md). Published 0.18 binaries retain their original LRFU/GQA ranking; rebuilding this source changes the recall algorithm.
+
 ## What's in 0.18.0
 
 - **Multi-backend source**: Shared KVMem memory, retrieval and storage contracts, with separate native inference and serving implementations for llama.cpp and NInfer. Upstream versions, integration patches and full provenance are pinned in the [backend manifest](backends/versions.json).
@@ -88,7 +90,7 @@ CPU vision and MTP are enabled by default, so the model needs the corresponding 
 
 ## Default recipe and budgets
 
-These are the defaults of **`start-ninfer.ps1` in the 0.18.0 package**, with 1K=1024 tokens. The unified `start-backend.ps1` launcher and direct worker have different defaults.
+These are the current source defaults of **`start-ninfer.ps1`**, retaining the 0.18 resource recipe with graph recall C. Published 0.18 binaries keep their original ranking. Here 1K=1024 tokens. The unified `start-backend.ps1` launcher and direct worker have different defaults.
 
 | Setting | Default |
 |---|---|
@@ -103,7 +105,7 @@ These are the defaults of **`start-ninfer.ps1` in the 0.18.0 package**, with 1K=
 | Prefill chunk | 256 tokens |
 | Sink / recent | **12288 / 1024 tokens (12K / 1K)** |
 | Retained idle sessions / concurrency | 1 / 1 |
-| LRFU / GQA | Enabled, lambda=0.5, top-frac=0.9 / max |
+| Recall / pressure | Mean-K page softmax + one-hop graph / accumulated accepted attention |
 | SSD / device profile | Disabled / off |
 | Listen | 127.0.0.1:18200 |
 
@@ -112,7 +114,7 @@ This recipe was checked for model loading and text requests on an RTX 5060 Ti 16
 | Budget | Meaning |
 |---|---|
 | B | Selected GPU history tokens per active request, including sink, recent and mandatory image regions. |
-| R | GPU append workspace. NInfer can archive KV, refresh its selection and continue generating when space runs out, so output need not fit within R. The current llama.cpp serving path caps per-turn output, including reasoning, at R. |
+| R | GPU append workspace. Both backends shrink the accepted resident working set under decode pressure and continue generating. R is append workspace, not the output limit; the configured context/output limits still apply. |
 | H / HostMiB | The process's RAM quota for managed native KV, including Main/MTP. This is not a limit on total process memory. |
 | D / DiskMiB | Shared SSD quota for active KV and idle state attachments. |
 
@@ -122,13 +124,13 @@ NInfer KVMem KV formats: `bf16`, `int8`, `fp8`, `nvfp4`, `k8v4`, `rk8v4`, `rk4v4
 
 ### Retrieval and SSD
 
-LRFU updates historical scores from the current query once per request. `top-frac` controls which hits may accumulate scores; **it is not a fraction of KV retained**. GQA max takes the maximum relevance across query heads sharing a KV head. Sink, recent and retained media still consume B.
+Source builds default to C: each query token/head computes softmax over eligible Mean-K pages, followed by one-hop local/attention propagation. Prefill and decode pressure use accumulated accepted attention over resident candidates, without graph propagation or cold recall. Sink, recent and retained media still consume B. Startup options also support Mean-Q cosine (with optional LRFU) and normalized GQA max; page-softmax plus LRFU is rejected. See [algorithm, limits and validation](docs/graph-recall.md).
 
-Run these examples in the **extracted release package**:
+Run these examples with workers **built from this source**:
 
 ```powershell
-# Disable history weighting and use mean aggregation
-& .\scripts\windows\start-ninfer.ps1 -Gpu '0' -NoLrfu -ScoreAggregation mean
+# Current source default: graph recall C
+& .\scripts\windows\start-ninfer.ps1 -Gpu '0'
 
 # Optional SSD tiering; use an English directory path
 & .\scripts\windows\start-ninfer.ps1 -Gpu '0' `
@@ -258,7 +260,7 @@ Source unified launcher examples:
     -Model 'D:/models/model.gguf' -Gpu '0'
 ```
 
-The unified launcher defaults to context=262144, B=32768, R=1024, prefill=128 and output limit=1024. NInfer uses INT8 with MTP/ngram/vision disabled; LRFU is enabled with sink=12288 and recent=1024. Enable NInfer vision/MTP explicitly with options such as `-Vision` and `-MtpDrafts`; pass llama.cpp-specific native options through `-WorkerArgs`.
+The unified launcher defaults to context=262144, B=32768, R=1024, prefill=128 and output limit=1024. NInfer uses INT8 with MTP/ngram/vision disabled; graph recall C is enabled with sink=12288 and recent=1024. Enable NInfer vision/MTP explicitly with options such as `-Vision` and `-MtpDrafts`; pass llama.cpp-specific native options through `-WorkerArgs`.
 
 The source-tree and newly built packages use the same `start-ninfer.ps1` shortcut. It accepts `-Model`, `-NoVision`, thinking settings and extra native arguments while retaining the 0.18 recipe. See the [Windows argument-passing guide](scripts/windows/README.md#multi-backend-launchers--多后端启动入口) for PowerShell arrays, external `-File` calls and exact JSON argument files. Previously published ZIPs retain their original scripts until updated.
 

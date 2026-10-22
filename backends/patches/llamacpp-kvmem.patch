@@ -1281,10 +1281,10 @@ index 3af6e22233efe53bff96ee5857af26fb886c9a04..5f3ad69741e30efecf7127df2ae4f685
                                  struct llama_batch_ext * batch,
                                                 int32_t   idx,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e885645386702f516d1f00ff2c9b121f2..3ebbf66bf2facaabbb37783e7052812a10f9156d 100644
+index 97250c2e885645386702f516d1f00ff2c9b121f2..10cc2e092c7a2f96e13d6e1ef1c9a9c8090c3eeb 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -71,6 +71,43 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+@@ -71,6 +71,45 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
  
  target_link_libraries(llama PUBLIC ggml)
  
@@ -1294,6 +1294,7 @@ index 97250c2e885645386702f516d1f00ff2c9b121f2..3ebbf66bf2facaabbb37783e7052812a
 +    endif()
 +    target_sources(llama PRIVATE
 +        ${LLAMA_KVMEM_ROOT}/src/adapter/llama-memory-kvmem.cpp
++        ${LLAMA_KVMEM_ROOT}/src/adapter/llama-kvmem-attention.cpp
 +        ${LLAMA_KVMEM_ROOT}/src/adapter/llama-memory-kvmem-hybrid.cpp
 +        ${LLAMA_KVMEM_ROOT}/src/adapter/llama-memory-kvmem-mtp.cpp
 +        ${LLAMA_KVMEM_ROOT}/src/adapter/llama-kvmem-batch.cpp
@@ -1302,6 +1303,7 @@ index 97250c2e885645386702f516d1f00ff2c9b121f2..3ebbf66bf2facaabbb37783e7052812a
 +    if (GGML_CUDA)
 +        enable_language(CUDA)
 +        target_sources(llama PRIVATE
++            ${LLAMA_KVMEM_ROOT}/src/adapter/llama-kvmem-attention-cuda.cu
 +            ${LLAMA_KVMEM_ROOT}/src/adapter/llama-kvmem-stagein.cu)
 +        if (DEFINED CMAKE_CUDA_ARCHITECTURES)
 +            set_property(TARGET llama PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
@@ -1689,7 +1691,7 @@ index 6938fb103cdefc5f742c5672bb2627e48fd11740..c006dcfdbcd8dc9af81bb33b3b71eabf
      ggml_backend_buffer_ptr buf_output;
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 6cadda9716ffa84e56ce1b7732f0873d8b86b37d..051bd3591ead38e472a6ee479abbef0f8f234d07 100644
+index 6cadda9716ffa84e56ce1b7732f0873d8b86b37d..3b0b6f5bab37f2655d1eacc133b3a7177801e1c9 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -16,6 +16,9 @@
@@ -1791,6 +1793,31 @@ index 6cadda9716ffa84e56ce1b7732f0873d8b86b37d..051bd3591ead38e472a6ee479abbef0f
  
  
  ggml_tensor * llm_graph_context::build_cvec(
+@@ -2897,6 +2982,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+         }
+ 
++#if defined(LLAMA_KVMEM)
++        if(arch!=LLM_ARCH_DFLASH)
++            llama_kvmem_capture_attention(ctx0,gf,q,k,kq_mask,kq_scale,hparams.f_max_alibi_bias,
++                hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.f,il);
++#endif
++
+         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+         res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
+@@ -2926,6 +3017,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+     } else {
+         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
++#if defined(LLAMA_KVMEM)
++        if(arch!=LLM_ARCH_DFLASH)
++            llama_kvmem_capture_attention(ctx0,gf,q,k,kq_mask,kq_scale,hparams.f_max_alibi_bias,
++                hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.f,il);
++#endif
+         cb(kq, "kq", il);
+ 
+         // note: this op tends to require high floating point range
 diff --git a/src/llama-graph.h b/src/llama-graph.h
 index e853a026955f80e2253bf1eb51f117cabf3e88b9..d6093a5cef56369d2e22bac4f546cc15a6ccc2c0 100644
 --- a/src/llama-graph.h
@@ -1996,7 +2023,7 @@ index 9c0d51e4e066f277d7523f03d56e85b4d1e50c2a..67cc96ee21eed1211846c5a5d5af7747
      bool is_2d_gt(llama_pos ox, llama_pos oy) const {
 diff --git a/src/llama-kvmem-factory.h b/src/llama-kvmem-factory.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..ee86f8c646386e09e404a795a3729536823f65db
+index 0000000000000000000000000000000000000000..8493b3ea6cc8d749d198a003a3d75eded94e85cc
 --- /dev/null
 +++ b/src/llama-kvmem-factory.h
 @@ -0,0 +1,16 @@

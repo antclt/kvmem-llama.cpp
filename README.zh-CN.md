@@ -54,6 +54,8 @@ KVMem 在有限显存中管理长对话与 Agent 工具历史：完整原生 KV 
 
 </details>
 
+当前源码构建默认使用 [图召回 C](docs/graph-recall.md)。已发布 0.18 二进制继续采用原有 LRFU/GQA 排序；需要重编译才能使用 C。
+
 ## 0.18.0 功能
 
 - **多后端源码**：共享 KVMem 内存、检索和存储契约；llama.cpp 与 NInfer 分别保留原生推理和服务实现。上游版本、集成补丁与完整来源由 [后端清单](backends/versions.json) 固定。
@@ -88,7 +90,7 @@ Web UI：`http://127.0.0.1:18200/`；OpenAI API 基础地址：`http://127.0.0.1
 
 ## 默认配方与预算
 
-下表对应 **0.18.0 运行包内 `start-ninfer.ps1`**，1K=1024 tokens。统一 `start-backend.ps1` 和直接运行 worker 使用不同默认值。
+下表对应**当前源码 `start-ninfer.ps1`**：保留 0.18 的资源配方，召回算法改为 C；已发布的旧二进制保持原算法。1K=1024 tokens。统一 `start-backend.ps1` 和直接运行 worker 使用不同默认值。
 
 | 参数 | 默认值 |
 |---|---|
@@ -103,7 +105,7 @@ Web UI：`http://127.0.0.1:18200/`；OpenAI API 基础地址：`http://127.0.0.1
 | Prefill 分块 | 256 tokens |
 | Sink / recent | **12288 / 1024 tokens（12K / 1K）** |
 | 保留的闲置会话数 / 并发数 | 1 / 1 |
-| LRFU / GQA | 开启，lambda=0.5，top-frac=0.9 / max |
+| 召回 / pressure | Mean-K page softmax + 一次图传播 / 累计 accepted attention |
 | SSD / 设备性能分析 | 关闭 / off |
 | 监听 | 127.0.0.1:18200 |
 
@@ -112,7 +114,7 @@ Web UI：`http://127.0.0.1:18200/`；OpenAI API 基础地址：`http://127.0.0.1
 | 预算 | 含义 |
 |---|---|
 | B | 每条活动请求选中的 GPU 历史 tokens；sink、recent 和必选图片区域计入 B。 |
-| R | GPU 追加工作空间；NInfer 可在空间不足时归档、重选并继续生成，输出不必限制在 R 内。llama.cpp 当前服务路径仍以 R 限制单次输出，包含思考。 |
+| R | GPU 追加工作空间；两个后端都可在 DecodePressure 时对 accepted 驻留工作集重选并继续生成。R 不是输出上限；仍遵守请求输出预算和逻辑上下文上限。 |
 | H / HostMiB | 本进程受管理原生 KV 的 RAM 配额；Main/MTP 都计入。不是进程总内存上限。 |
 | D / DiskMiB | 活动 KV 和闲置状态附件共用的 SSD 配额。 |
 
@@ -122,13 +124,13 @@ NInfer KVMem KV 格式：`bf16`、`int8`、`fp8`、`nvfp4`、`k8v4`、`rk8v4`、
 
 ### 检索与 SSD
 
-LRFU 用当前 query 的相关性更新历史分数，每个请求提交一次历史更新。`top-frac` 控制允许累加本轮分数的命中范围，**不是 KV 保留比例**；GQA max 对同一 KV head 对应的 query heads 取最大相关性。sink、recent、媒体保留仍占用 B。
+当前源码默认 C：Query 按 token/head 做 Mean-K page softmax 后执行一次图传播；PrefillPressure/DecodePressure 根据累计 accepted attention 在驻留集合内重选，不做图传播或冷页召回。sink、recent 和媒体必选块仍占用 B。命令行也可选择 Mean-Q cosine（可开关 LRFU）和归一化 GQA max；page-softmax 与 LRFU 的组合仍拒绝。算法、成本与验证范围见 [图召回 C](docs/graph-recall.md)。
 
-以下示例在**正式包解压目录**运行：
+以下示例配合**从当前源码构建的 worker** 运行：
 
 ```powershell
-# 关闭历史加权，使用 mean 聚合
-& .\scripts\windows\start-ninfer.ps1 -Gpu '0' -NoLrfu -ScoreAggregation mean
+# 当前源码默认使用 C
+& .\scripts\windows\start-ninfer.ps1 -Gpu '0'
 
 # 可选 SSD 分层，目录须使用英文路径
 & .\scripts\windows\start-ninfer.ps1 -Gpu '0' `
@@ -256,7 +258,7 @@ ctest --test-dir build-backends/core -C Release --output-on-failure
     -Model 'D:/models/model.gguf' -Gpu '0'
 ```
 
-统一入口默认 context=262144、B=32768、R=1024、prefill=128、输出上限1024；NInfer 默认 INT8、MTP/ngram/视觉关闭，LRFU 开启、sink=12288、recent=1024。需要视觉或 MTP 时显式传 `-Vision`、`-MtpDrafts` 等。llama.cpp 对应能力使用 `-WorkerArgs` 传原生参数。
+统一入口默认 context=262144、B=32768、R=1024、prefill=128、输出上限1024；NInfer 默认 INT8、MTP/ngram/视觉关闭，默认 C、sink=12288、recent=1024。需要视觉或 MTP 时显式传 `-Vision`、`-MtpDrafts` 等。llama.cpp 对应能力使用 `-WorkerArgs` 传原生参数。
 
 源码树和新打包版本使用同一份 `start-ninfer.ps1`，保留 0.18 配方，并接受 `-Model`、`-NoVision`、思考设置和额外原生参数。PowerShell 数组、外部 `-File` 调用及精确保留参数的 JSON 文件用法见 [Windows 参数传递说明](scripts/windows/README.md#multi-backend-launchers--多后端启动入口)。已经发布的旧 ZIP 在更新前仍使用原脚本。
 

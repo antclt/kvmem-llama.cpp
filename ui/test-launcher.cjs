@@ -139,13 +139,11 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.deepEqual((await api('info')).body.draft,originalDraft,'preset must not save');
  assert.equal((await api('status')).body.state,'stopped','preset must not launch');
  await page.getByRole('tab',{name:'缓存与历史'}).click();
- for(const key of ['NoLrfu','LrfuLambda','LrfuTopFraction','ScoreAggregation']){
-  assert.equal(await page.locator('[data-lrfu-settings] [data-param='+key+']').isVisible(),true,'LRFU setting visible: '+key);
-  assert.equal(await page.locator('[data-param='+key+']').count(),1,'no duplicate setting: '+key);
- }
- const expected={Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,DraftTokens:4,SpeculativeMode:'mtp',DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,LrfuLambda:0.5,LrfuTopFraction:0.9,ScoreAggregation:'max',DeviceProfile:'off'};
+ assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('图传播召回 C'));
+ for(const key of ['NoLrfu','LrfuLambda','LrfuTopFraction','ScoreAggregation'])assert.equal(await page.locator('[data-param='+key+']').count(),0,'C has no legacy ranking control: '+key);
+ const expected={Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,DraftTokens:4,SpeculativeMode:'mtp',DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,DeviceProfile:'off'};
  for(const [key,value] of Object.entries(expected))assert.equal(await page.locator('[data-param='+key+']').inputValue(),String(value),key);
- for(const key of ['Vision','NoLrfu'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),true,key);
+ for(const key of ['Vision'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),true,key);
  for(const key of ['FastPrefill'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),false,key);
  await page.waitForFunction(()=>document.querySelector('[data-draft-state]').textContent.includes('已自动保存'));
  const releaseDraft=await page.evaluate(()=>JSON.parse(localStorage.getItem('kvmem-launch-draft-v2')).parameters);
@@ -155,32 +153,15 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.deepEqual(mutations,[],'select/undo must not mutate the server');
  assert.equal(await page.locator('[data-preset]').count(),1,'only the 0.18.0 release recipe');
  await page.locator('[data-preset=ninfer-v018]').click();
- assert.equal(await page.getByRole('switch',{name:'启用 LRFU',exact:true}).isChecked(),true);
- const toggleRow=page.locator('.l-toggle').filter({has:page.locator('[data-param=NoLrfu]')});
- assert.equal(await toggleRow.locator('[data-toggle-on]').isVisible(),true);
- await page.locator('[data-param=NoLrfu]').focus();await page.keyboard.press('Space');
- assert.equal(await toggleRow.locator('[data-toggle-off]').isVisible(),true);
- await page.keyboard.press('Space');
- const toggleGeometry=await toggleRow.evaluate(row=>{const title=row.querySelector('.l-toggle-copy').getBoundingClientRect(),control=row.querySelector('.l-toggle-control').getBoundingClientRect();return {titleRight:title.right,controlLeft:control.left,titleY:title.y,controlBottom:control.bottom};});
- assert.ok(toggleGeometry.titleRight<=toggleGeometry.controlLeft,'switch is to the right of its label');
- assert.ok(toggleGeometry.titleY<toggleGeometry.controlBottom,'label and switch share a row');
- const fieldOffsets=await page.locator('[data-lrfu-settings] .l-row').evaluateAll(rows=>rows.map(row=>{const control=row.querySelector('.l-toggle-control')||row.querySelector('input,select'),label=row.getBoundingClientRect(),box=control.getBoundingClientRect();return box.left-label.left;}));
- assert.ok(fieldOffsets.every(offset=>Math.abs(offset-fieldOffsets[0])<1),'switches and text controls share label-column width');
- assert.equal(await page.getByLabel('启用 LRFU',{exact:true}).isChecked(),true);
  await page.getByRole('tab',{name:'服务与并发'}).click();
  assert.equal(await page.locator('[data-param=ListenHost]').isEnabled(),true);
  await page.locator('[data-param=ListenHost]').selectOption('0.0.0.0');
  await page.getByRole('tab',{name:'缓存与历史'}).click();
- await page.getByLabel('启用 LRFU',{exact:true}).uncheck();
- await page.waitForFunction(()=>JSON.parse(localStorage.getItem('kvmem-launch-draft-v2')).parameters.NoLrfu===true);
  await page.reload();await page.getByRole('tab',{name:'缓存与历史'}).click();
- assert.equal(await page.getByLabel('启用 LRFU',{exact:true}).isChecked(),false,'disabled LRFU survives reload');
  assert.equal(await page.locator('[data-param=ListenHost]').inputValue(),'0.0.0.0','listen address survives reload');
  await page.locator('[data-language-select]').selectOption('en');
- assert.equal(await page.getByLabel('Enable LRFU',{exact:true}).isChecked(),false,'language switch preserves meaning');
+ assert.ok((await page.locator('[data-graph-recall]').textContent()).includes('Graph recall C'));
  await page.locator('[data-language-select]').selectOption('zh-CN');
- await page.getByLabel('启用 LRFU',{exact:true}).check();
- await page.waitForFunction(()=>JSON.parse(localStorage.getItem('kvmem-launch-draft-v2')).parameters.NoLrfu===false);
  await page.locator('[data-theme-select]').selectOption('blue');
  await page.getByRole('tab',{name:'硬件与加速'}).click();
  assert.equal(await page.locator('[data-param=StageLayers]').isEnabled(),await page.locator('[data-gpu-choice]:checked').count()>1);
@@ -244,21 +225,14 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  if(info.gpus.length){
   await page.locator('[data-param=Model]').fill('C:/models/test.gguf');
   for(const check of await page.locator('[data-gpu-choice]').all())await check.setChecked(await check.getAttribute('data-gpu-choice')===info.gpus[0].uuid);
-  const lrfuRequests=[];
-  await page.route('**/api/launcher/preview',route=>{lrfuRequests.push(route.request().postDataJSON().parameters.NoLrfu);return route.fulfill({json:{argv:['C:/worker.exe','C:/models/test.gguf'],environment:{CUDA_VISIBLE_DEVICES:info.gpus[0].uuid},preflight:{port:18200,port_available:false}}});});
+  const recallRequests=[];
+  await page.route('**/api/launcher/preview',route=>{recallRequests.push(route.request().postDataJSON().parameters);return route.fulfill({json:{argv:['C:/worker.exe','C:/models/test.gguf'],environment:{CUDA_VISIBLE_DEVICES:info.gpus[0].uuid},preflight:{port:18200,port_available:false}}});});
   await page.locator('[data-action=preview]').click();
   await page.waitForFunction(()=>document.querySelector('[data-check-summary]').textContent.includes('需要调整'));
   assert.ok((await page.locator('[data-dialog=check]').textContent()).includes('已占用'));
   assert.equal(await page.locator('[data-dialog=check] .l-check-command').getAttribute('open'),null);
   await page.locator('[data-dialog=check] [data-dialog-close]').click();
-  assert.equal(lrfuRequests[0],undefined,'enabled UI omits native disable switch');
-  await page.getByRole('tab',{name:'缓存与历史'}).click();
-  await page.getByLabel('启用 LRFU',{exact:true}).uncheck();
-  await page.locator('[data-action=preview]').click();
-  await page.waitForFunction(()=>document.querySelector('[data-check-summary]').textContent.includes('需要调整'));
-  assert.equal(lrfuRequests[1],true,'unchecked UI sends native disable switch');
-  await page.locator('[data-dialog=check] [data-dialog-close]').click();
-  await page.getByLabel('启用 LRFU',{exact:true}).check();
+  for(const key of ['NoLrfu','LrfuLambda','LrfuTopFraction','ScoreAggregation'])assert.equal(Object.hasOwn(recallRequests[0],key),false,'legacy ranking omitted: '+key);
   await page.unroute('**/api/launcher/preview');
  }
  assert.equal((await api('status')).body.state,'stopped','editing/templates/checks never start a service');

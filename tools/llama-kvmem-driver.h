@@ -29,6 +29,9 @@ struct MultimodalCheckpointAccounting {
         while (peak < live && !peak_bytes.compare_exchange_weak(peak, live)) {}
     }
 };
+struct LlamaEngineState;
+std::vector<kvmem::GraphMessageSpan> llama_driver_graph_messages(const LlamaEngineState&,
+    const common_chat_templates_inputs&,const common_chat_params&,const kvmem_prompt&);
 
 struct MultimodalCheckpointData {
     MultimodalCheckpointData() = default;
@@ -39,7 +42,7 @@ struct MultimodalCheckpointData {
     std::vector<uint8_t> draft_carry;
     llama_kvmem_tail_mean_state tail_mean;
     std::shared_ptr<MultimodalCheckpointAccounting> accounting;
-    size_t bytes() const { return recurrent.size() + draft_carry.size() + tail_mean.values.size()*sizeof(float) + tail_mean.history.scores->size()*sizeof(double); }
+    size_t bytes() const { return recurrent.size() + draft_carry.size() + tail_mean.values.size()*sizeof(float) + tail_mean.history.scores->size()*sizeof(double) + tail_mean.graph.bytes() + tail_mean.feedback.bytes(); }
 };
 
 struct MultimodalCheckpoint {
@@ -71,7 +74,6 @@ struct MultimodalQuery {
 // conversations, so the struct and the swap belong in view of each other.
 struct kvmem_conversation {
     bool cold = false;
-    bool disk_gen = false, disk_query = false;
     std::unique_ptr<kvmem_session_payload> payload; // frozen RAM/disk allocation manifest
     std::string client_id;  // bound kvmem.conversation_id; empty = inferred
     uint32_t stored = 0;    // llama_kvmem_store_n_tokens() at the last commit
@@ -83,15 +85,6 @@ struct kvmem_conversation {
     int mm_live_row = 0;
     std::shared_ptr<const MultimodalCheckpointData> mm_live_checkpoint;
     std::shared_ptr<const MultimodalQuery> mm_query;
-    kvmem::LrfuState gdn_history, gdn_query_history;
-    std::vector<uint8_t> gdn_ckpt;
-    std::vector<uint8_t> gdn_carry, gdn_query_carry;
-    int gdn_ckpt_pos = -1;
-    std::vector<uint8_t> gdn_ckpt_query;
-    int gdn_ckpt_query_pos = -1;
-    int last_query_begin = -1;
-    int last_query_end = -1;
-    std::string last_user_text;
     int last_n_gen = 0;
 };
 
@@ -148,10 +141,9 @@ struct LlamaEngineState {
     int n_batch = 512;
     int query_last_fallback = 64;
     int query_max_tokens = 512;
+    int query_replay_max_tokens = 2048;
+    bool turn_tool_continuation = false;
     bool query_replay_auto = true;
-    bool query_policy_user = true;
-    bool recurrent_cache_valid = true; // Positions alone do not identify a conversation.
-    uint32_t turn_generation_rows = 0;
     bool turn_query_exact = false;
     kvmem_spec_session spec;
     ggml_type cache_type_k = GGML_TYPE_Q8_0;
@@ -189,18 +181,6 @@ struct LlamaEngineState {
     std::string mm_error;
     int mm_error_status = 500;
     bool mm_reset_requested = false;
-    int perf_p_eval = 0;
-    kvmem::LrfuState gdn_history, gdn_query_history;
-    std::vector<uint8_t> gdn_ckpt;
-    std::vector<uint8_t> gdn_carry, gdn_query_carry;
-    int gdn_ckpt_pos = -1; // gen-start (eval_end-1); next-turn suffix rewind
-    std::vector<uint8_t> gdn_ckpt_query;
-    int gdn_ckpt_query_pos = -1; // last query-begin; fallback if LCP < gen-start
-    // Last query span that actually landed query+suffix on GPU (retrieval
-    // replay or a later same-query skip). -1 = nothing to skip against.
-    int last_query_begin = -1;
-    int last_query_end = -1;
-    std::string last_user_text;
     std::string turn_last_user;
     int last_n_gen = 0;
     // Multi-conversation host stores. max_stores <= 1 (the default) keeps conv
