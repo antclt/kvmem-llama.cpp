@@ -8954,10 +8954,10 @@ index 0000000000000000000000000000000000000000..69c10d2db500668b541a288a53ee1bab
 +} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/storage/memory_statistics.cpp b/src/models/qwen3_5/program/storage/memory_statistics.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..2b9f2ee61859ebbf9d8669bb4515aedc0e4cf695
+index 0000000000000000000000000000000000000000..dbe537342ebde519817bc406b80bcdb0c29ff313
 --- /dev/null
 +++ b/src/models/qwen3_5/program/storage/memory_statistics.cpp
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,331 @@
 +#include "models/qwen3_5/program/program_impl.h"
 +#include <cmath>
 +#include <cstdio>
@@ -9197,7 +9197,9 @@ index 0000000000000000000000000000000000000000..2b9f2ee61859ebbf9d8669bb4515aedc
 +            state.think_open,state.think_close);
 +        rows=std::move(plan.rows); next_scope=plan.state;
 +        for(auto& row:rows) row+=output_first;
-+    } else if(prefill && !state.query_replayed) {
++    } else if(prefill && !state.query_replay_active) {
++        // query_replayed also marks an already evaluated user Query on restore.
++        // Its new assistant prefix still needs feedback; suppress only actual replay.
 +        rows=kvmem::prefill_sample_rows(begin,accepted,state.feedback.snapshot().prefill_end,
 +            compact_position(sequence,begin),kvmem_window_tokens);
 +    }
