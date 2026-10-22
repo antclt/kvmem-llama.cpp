@@ -20,9 +20,10 @@ const server=http.createServer((request,response)=>{
    if(backend==='ninfer')Object.assign(props,{model_alias:'native-ninfer',kvmem:{enabled:true,selected_tokens:768}});
    else Object.assign(props,{model_name:'native-llama',kvmem:{generation_limit:8192,defaults:{enable_thinking:false,reasoning_budget_tokens:0,chat_template_kwargs:{}},sampling:{non_thinking:{temperature:.7},thinking:{temperature:.6}}}});
    await page.route('**/props',route=>route.fulfill({json:props}));
+   let timings={predicted_n:1,predicted_ms:.001,predicted_per_second:0};
    await page.route('**/v1/chat/completions',route=>{
     sent.push(route.request().postDataJSON());
-    return route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify({choices:[{delta:{content:'Fixture reply'}}]})+'\n\ndata: [DONE]\n\n'});
+    return route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify({choices:[{delta:{content:'Fixture reply'}}],timings})+'\n\ndata: [DONE]\n\n'});
    });
    try{
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -37,12 +38,28 @@ const server=http.createServer((request,response)=>{
     await page.getByText('Fixture reply',{exact:true}).waitFor();
     assert.equal(sent.length,1);assert.equal(sent[0].model,backend==='ninfer'?'native-ninfer':'native-llama');
     assert.equal(sent[0].max_tokens,16);assert.equal(Object.hasOwn(sent[0],'chat_template_kwargs'),false,'unknown server defaults must remain server-owned');
+    const timing=page.locator('article:not(.user) .timing');
+    assert.equal(await timing.last().textContent(),'1 token','a one-token reply has no decode-step rate');
+    for(const [native,expected] of [
+     [{predicted_n:5,predicted_ms:.001,predicted_per_second:12.5},'12.50 tok/s · 5 token'],
+     [{predicted_n:5,predicted_ms:.001,predicted_per_second:0},'5 token'],
+     [{predicted_n:5,predicted_ms:.001},'5 token'],
+     [{predicted_n:5,predicted_ms:.001,predicted_per_second:-1},'5 token'],
+     [{predicted_n:1,predicted_ms:.001,predicted_per_second:1000000},'1 token'],
+    ]){
+     timings=native;
+     const count=await timing.count();
+     await page.getByLabel('消息输入',{exact:true}).fill('Next timing case');
+     await page.getByRole('button',{name:'发送',exact:true}).click();
+     await timing.nth(count).waitFor();assert.equal((await timing.last().textContent()).replace(/\s*·\s*/g,' · '),expected);
+    }
     await thinking.selectOption('on');
     assert.equal(await page.getByLabel('temperature',{exact:true}).getAttribute('placeholder'),backend==='ninfer'?'':'0.6');
     await page.getByLabel('最大输出',{exact:true}).fill('8193');
     await page.getByLabel('消息输入',{exact:true}).fill('Over the bound');
+    const beforeBound=sent.length;
     await page.getByRole('button',{name:'发送',exact:true}).click();
-    await page.getByRole('alert').filter({hasText:'1..8192'}).waitFor();assert.equal(sent.length,1);
+    await page.getByRole('alert').filter({hasText:'1..8192'}).waitFor();assert.equal(sent.length,beforeBound);
     assert.deepEqual(errors,[]);assert.deepEqual(bad,[]);
     console.log('PASS built chat props:',backend);
    }finally{await context.close();}

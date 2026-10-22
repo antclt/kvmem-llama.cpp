@@ -348,6 +348,9 @@ against both native `/props` contracts without loading a model. `UI_DIST` may
 select another built directory. NInfer uses the standard model alias and generation
 settings when llama.cpp extensions are absent; unreported thinking defaults remain
 server-owned. This browser check also runs in the lightweight CI job.
+Chat throughput uses the native `predicted_per_second` value. Single-token replies
+and missing or nonpositive rates display only the output token count, since a
+clamped duration cannot establish a valid decode rate.
 
 Run against a disposable test service, not an active conversation. The HTTP check needs a model that can answer simple arithmetic, with a generation reserve of at least 128. The browser check uses up to 512 generated tokens and requires Playwright's Chromium or `CHROMIUM` pointing to a compatible installation.
 

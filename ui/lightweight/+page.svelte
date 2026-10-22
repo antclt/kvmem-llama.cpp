@@ -9,7 +9,10 @@
   import { settingsStore } from '$lib/stores/settings/index.svelte';
   import { streamChat } from './api';
 
-  type Message = DatabaseMessage & { uiStatus?: string };
+  type Message = DatabaseMessage & {
+    uiStatus?: string;
+    timings?: DatabaseMessage['timings'] & { predicted_per_second?: number };
+  };
   let props = $state<any>(null);
   let conversations = $state<DatabaseConversation[]>([]);
   let active = $state<DatabaseConversation | null>(null);
@@ -203,7 +206,9 @@
               {#if message.uiStatus==='pending'}<span>{stopping ? '正在停止...' : '正在生成...'}</span>{/if}
               {#if message.uiStatus==='interrupted'}<span>已中止</span>{/if}
               {#if message.uiStatus==='error'}<span>生成失败</span>{/if}
-              {#if message.timings?.predicted_ms && message.timings.predicted_n !== undefined}<span>{(1000*message.timings.predicted_n/message.timings.predicted_ms).toFixed(2)} tok/s · {message.timings.predicted_n} token</span>{/if}
+              {#if message.timings && typeof message.timings.predicted_n === 'number' && Number.isInteger(message.timings.predicted_n) && message.timings.predicted_n >= 0}
+                <span class="timing">{#if message.timings.predicted_n > 1 && typeof message.timings.predicted_per_second === 'number' && Number.isFinite(message.timings.predicted_per_second) && message.timings.predicted_per_second > 0}{message.timings.predicted_per_second.toFixed(2)} tok/s · {/if}{message.timings.predicted_n} token</span>
+              {/if}
               {#if message.content}<button onclick={()=>copy(message.content)}>复制</button><button onclick={()=>download(message.content)}>下载</button>{/if}
             </footer>
           {/if}
