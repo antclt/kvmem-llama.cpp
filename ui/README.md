@@ -343,6 +343,12 @@ selects its adapter checkout, and `CONSOLE_TEST_PORT` defaults to 18431 (worker 
 
 ## Chat regression checks
 
+After a lightweight build, `node ui/test-chat-props.cjs` checks the built page
+against both native `/props` contracts without loading a model. `UI_DIST` may
+select another built directory. NInfer uses the standard model alias and generation
+settings when llama.cpp extensions are absent; unreported thinking defaults remain
+server-owned. This browser check also runs in the lightweight CI job.
+
 Run against a disposable test service, not an active conversation. The HTTP check needs a model that can answer simple arithmetic, with a generation reserve of at least 128. The browser check uses up to 512 generated tokens and requires Playwright's Chromium or `CHROMIUM` pointing to a compatible installation.
 
 ```bash
