@@ -197,9 +197,8 @@ original release, not these variants.
 
 Baseline: KVMem master `61569ff4bddcad60e8fad838e02f77a6190126d1` with its
 pinned backend patches. Candidate and baseline use the same device/settings.
-Windows, CUDA13.2, Release, sm120a; performance uses RTX5060Ti UUID
-`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`. Correctness uses RTX5050 Laptop
-UUID `GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`.
+Windows, CUDA13.2, Release, sm120a; performance uses RTX5060Ti and correctness
+uses RTX5050 Laptop. Exact device UUIDs are retained in the local test records.
 
 Core checks cover numerical softmax/GQA, more than 32768 pages, separate masks,
 message-local edges, sealing/rollback, pending feedback, resident-only pressure,
@@ -365,8 +364,7 @@ test separately checks aliases, snapshot independence, bounded idle storage and
 outstanding-lease lifetime after the pool owner is released.
 
 Performance uses the unchanged master61569ff4bddcad60e8fad838e02f77a6190126d1,
-the existing IQ3/0.18 resource recipes and RTX5060Ti UUID
-GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c. Each backend is compared only to its own
+the existing IQ3/0.18 resource recipes and RTX5060Ti. Each backend is compared only to its own
 baseline. One warmup plus three measured repetitions cover approximately59K
 cold input and512-token output. NInfer long input received one further warmup
 plus two measurements under the predefined near-threshold rule; its fixed master
