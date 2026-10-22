@@ -1,7 +1,8 @@
 // Exercise the built chat page against both native /props contracts, without a model.
 const assert=require('node:assert/strict'),fs=require('node:fs'),http=require('node:http'),path=require('node:path');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
-const directory=path.resolve(process.env.UI_DIST||path.join(__dirname,'../ui-dist'));
+const directory=path.resolve(process.env.UI_DIST||path.join(__dirname,'../build/share/kvmem/ui'));
+assert.ok(fs.existsSync(path.join(directory,'index.html')),'Built chat index is missing: '+directory+' (build the UI or set UI_DIST)');
 const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.woff2':'font/woff2'};
 const server=http.createServer((request,response)=>{
  const filename=path.resolve(directory,'.'+decodeURIComponent(new URL(request.url,'http://localhost').pathname));
