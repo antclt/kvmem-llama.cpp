@@ -872,7 +872,8 @@
     finally{startPending=false;busy=false;root.querySelectorAll('[data-action]').forEach(button=>button.disabled=false);updateStatus(runtime);}
   }
   async function poll(){if(info&&!busy){try{updateStatus(await api('status'));}catch(e){message(e.message,true);}}setTimeout(poll,document.hidden?5000:2000);}
-  window.addEventListener('kvmem-language-change',()=>{if(info){try{restoreDraft(captureDraft());}catch(e){message(e.message,true);}}document.querySelector('[data-page=config]').textContent=tr('启动配置','Launch configuration');});
+  // The shared i18n bindings translate navigation, including its mobile label.
+  window.addEventListener('kvmem-language-change',()=>{if(info){try{restoreDraft(captureDraft());}catch(e){message(e.message,true);}}});
   async function init(){try{info=await api('info');let saved;try{saved=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');}catch{saveError=true;}if(usableDraft(saved))restoreDraft(saved);else render(info.draft.parameters);updateStatus(info.status);if(location.pathname!=='/chat/'&&!location.hash&&!['starting','ready'].includes(info.status.state))document.querySelector('[data-page=config]').click();poll();}catch(e){root.replaceChildren(make('section',{class:'s-card'},tr('启动配置需要独立的本地控制台。请运行 scripts/local-console.py，然后打开它显示的地址；推理服务停止后，这个控制台仍然可用。','Launch settings require the independent local console. Run scripts/local-console.py and open its printed URL; the console remains available when inference stops.')));}}
   init();
 })();

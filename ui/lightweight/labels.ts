@@ -1,5 +1,19 @@
 export const english: Record<string, string> = {
-  "参数超出有效范围，已保留原值": "Value is out of range; the previous setting was kept",
+  今天: "Today",
+  昨天: "Yesterday",
+  近七天: "Previous 7 days",
+  更早: "Earlier",
+  对话操作: "Chat actions",
+  对话会保存在这里: "Your conversations will appear here",
+  思考过程: "Reasoning",
+  "输入消息…": "Message…",
+  "Enter 发送 · Shift+Enter 换行": "Enter to send · Shift+Enter for a new line",
+  "从一个问题、一个想法或一段代码开始。":
+    "Start with a question, an idea, or a piece of code.",
+  "启动本地模型，即可开始聊天。": "Start a local model to begin chatting.",
+
+  "参数超出有效范围，已保留原值":
+    "Value is out of range; the previous setting was kept",
   "不限（-1）": "Unlimited (-1)",
   "思考预算必须为正整数；总输出包含思考和正文。":
     "The thinking budget must be positive. The output limit includes reasoning and answers.",

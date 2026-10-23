@@ -9,14 +9,26 @@ export function errorText(value: unknown): string {
 
 let consoleToken = "";
 export async function context() {
-  {
-    const info = await fetch("/api/launcher/info");
-    if (!info.ok) throw Error("Open chat from the KVMem console");
-    consoleToken = (await info.json()).token;
-  }
+  const info = await fetch("/api/launcher/info");
+  if (!info.ok) throw Error("Open chat from the KVMem console");
+  const launcher = await info.json();
+  consoleToken = launcher.token;
   const response = await fetch("/api/chat/context");
   if (!response.ok) throw Error("Service settings unavailable");
-  return response.json();
+  const result = await response.json();
+  // Display the loaded file, without changing the API model identity or reading
+  // the editable launch draft. A service change must not mix the two snapshots.
+  const running = launcher.status;
+  if (
+    running?.state === "ready" &&
+    result.instance &&
+    running.instance === result.instance
+  ) {
+    const model = running.active_config?.parameters?.Model;
+    if (typeof model === "string" && model)
+      result.display_model = model.split(/[\\/]/).pop();
+  }
+  return result;
 }
 export async function requestRecord(id: string) {
   const response = await fetch("/api/chat/requests/" + encodeURIComponent(id));
