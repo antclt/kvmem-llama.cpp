@@ -53,14 +53,14 @@
     "base_commit": "db8c114802a070a7903f84d01142fda0b00fa7df",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "57edbef0aa8834614a3753efa0b4585dd22df95f",
+    "patched_tree": "0eed1e7ab5a4bfa0b0b41ca9ebd2db54b8942d09",
     "patches": [
       {
         "id": "kvmem",
         "path": "backends/patches/ninfer-kvmem.patch",
-        "sha256": "5c11bb2c4199eb0190e6fde8a2edfb707082101738bb0f9dd03312dfd8f046db",
+        "sha256": "a52f08b10c57c30fc0b29ca0566b8cc2c22f2229dedff57cb900249410056a7b",
         "requires": [],
-        "after_tree": "0dc773abe931df66e6d3a827913bfe3310c39734"
+        "after_tree": "16e95f34780a9f7c4404a63d9e0277a2fccfdc43"
       },
       {
         "id": "ptq1",
@@ -69,7 +69,7 @@
         "requires": [
           "kvmem"
         ],
-        "after_tree": "7abf4998a0cee165e04875d529d926d0c7190ab9",
+        "after_tree": "d45854b6cf46d24d1aac17030ccf791773d3d0db",
         "source": "1314521gjy/ninfer-fusion-kvmem@b6e6c20deb93fe5ed84e5715642dad21c0455ef0; local qualified port a81ebf9031c167a29f418093e8a7253a4811cd01"
       },
       {
@@ -79,7 +79,7 @@
         "requires": [
           "ptq1"
         ],
-        "after_tree": "679e1a61384e89e9be699cbda6cde922dc752f8f",
+        "after_tree": "c3baa4e3085337591dd085de78a95ee909355003",
         "source": "Local PTQ1 routing and calibration over the compact native port, without changing SM120 policy"
       },
       {
@@ -90,7 +90,7 @@
           "ptq1-performance",
           "kvmem"
         ],
-        "after_tree": "57edbef0aa8834614a3753efa0b4585dd22df95f",
+        "after_tree": "0eed1e7ab5a4bfa0b0b41ca9ebd2db54b8942d09",
         "source": "JGamboa/ninfer-4090-windows@e905787f067de89ef6ef28c52d65a2ce91d425ca; RowSplit and existing BF16 producer adaptation"
       }
     ]
