@@ -493,10 +493,10 @@ index 0000000000000000000000000000000000000000..e1dd87196bf64eef8464164ab48c0038
 +    return true;
 +}
 diff --git a/ggml/src/ggml-cuda/mmvq.cu b/ggml/src/ggml-cuda/mmvq.cu
-index 50810640f5d5843a7d15759f16b9698bfca013ac..fa2f35d1f0cac3a77c8f7a188bb9b0951a4c675b 100644
+index 50810640f5d5843a7d15759f16b9698bfca013ac..5878b0ca2573361a2a4d51be77cdb86a2d9e4cb2 100644
 --- a/ggml/src/ggml-cuda/mmvq.cu
 +++ b/ggml/src/ggml-cuda/mmvq.cu
-@@ -1,4 +1,7 @@
+@@ -1,9 +1,14 @@
  #include "mmvq.cuh"
 +#if !defined(GGML_USE_HIP)
 +#include "mmvq-ptq1_0.cuh"
@@ -504,7 +504,14 @@ index 50810640f5d5843a7d15759f16b9698bfca013ac..fa2f35d1f0cac3a77c8f7a188bb9b095
  #include "quantize.cuh"
  #include "unary.cuh"
  #include "vecdotq.cuh"
-@@ -320,6 +323,9 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
+ 
+ #include <cstdint>
++#include <cstdlib>
++#include <cstring>
+ #include <type_traits>
+ 
+ // only enabled on DGX Spark, where it is a gain on every type below. On the higher-bandwidth parts the kernel
+@@ -320,6 +325,9 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
  }
  
  bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
@@ -514,7 +521,7 @@ index 50810640f5d5843a7d15759f16b9698bfca013ac..fa2f35d1f0cac3a77c8f7a188bb9b095
      if (!ggml_is_quantized(type)) {
          return false;
      }
-@@ -1542,6 +1548,33 @@ void ggml_cuda_mul_mat_vec_q(
+@@ -1542,6 +1550,33 @@ void ggml_cuda_mul_mat_vec_q(
      }
  
      const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);

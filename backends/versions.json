@@ -6,7 +6,7 @@
     "base_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
     "license_file": "backends/llamacpp/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "060a4dfcea26c3e86df2d7109eb8f0538a078c5c",
+    "patched_tree": "1593775ad2ac64b4ad6993ce1e04ca025953be0e",
     "patches": [
       {
         "id": "kvmem",
@@ -38,11 +38,11 @@
       {
         "id": "ptq1-performance",
         "path": "backends/patches/llamacpp-ptq1-performance.patch",
-        "sha256": "154efca7a29ccc431fd6282fded87b8bdbf3ca1bb961afcc0047d64826bc6707",
+        "sha256": "9867f0f9114953eb752212a0c3193ddc86b9b06a95ef9e38171f685a258c6b67",
         "requires": [
           "ptq1"
         ],
-        "after_tree": "060a4dfcea26c3e86df2d7109eb8f0538a078c5c",
+        "after_tree": "1593775ad2ac64b4ad6993ce1e04ca025953be0e",
         "source": "Prism PR218 PTQ1 planar matvec with the PDL consumer sync fix; scoped to dense CUDA 2D calls, current upstream fusion API retained"
       }
     ]
