@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 6f49c233cf92b72ad4ad3b32b0690f8b499afe1b..c47e6009d85466863239c2c145f2d3f9c8edf951 100644
+index 6f49c233cf92b72ad4ad3b32b0690f8b499afe1b..187f4da8eb9db53cf3dce52c22bf134803f8b3f4 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -225,7 +225,13 @@ if(MSVC)
@@ -58,7 +58,7 @@ index 6f49c233cf92b72ad4ad3b32b0690f8b499afe1b..c47e6009d85466863239c2c145f2d3f9
 +  message(FATAL_ERROR "Set NINFER_KVMEM_SOURCE_DIR to the portable KVMem core")
 +endif()
 +add_subdirectory("${NINFER_KVMEM_SOURCE_DIR}" "kvmem-core" EXCLUDE_FROM_ALL)
-+kvmem_enable_cuda_recall()
++kvmem_enable_cuda_recall(CUDART_TARGET ${NINFER_CUDART_TARGET})
  
  # --- Subdirectories ----------------------------------------------------------
  add_subdirectory(src)
