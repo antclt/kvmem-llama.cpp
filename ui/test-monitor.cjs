@@ -219,7 +219,7 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
         for (const view of ['monitor', 'about']) {
           await page.locator(`[data-page=${view}]`).click();
           const comparison = await page.evaluate(view => {
-            const stylesheet = document.querySelector('link[href="./launcher.css"]');
+            const stylesheet = document.querySelector('link[href$="/launcher.css"]');
             const elements = [document.querySelector('.s-header'),
               ...document.querySelectorAll(`[data-view=${view}], [data-view=${view}] *`)];
             function signature() {

@@ -25,6 +25,8 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from console_chat import ChatBridge, MAX_BODY
 
 ROOT = Path(__file__).resolve().parents[1]
 SPECULATIVE_PROFILES = json.loads((ROOT / 'scripts/speculative-capabilities.json').read_text(encoding='utf-8-sig'))
@@ -253,6 +255,8 @@ class Controller:
         self.observed_scoring = {}
         self.observed_offset = 0
         self.observed_pending = ''
+        self.instance = secrets.token_hex(12)
+        self.chat = ChatBridge(self)
         self.redactions = set()
         self.exit_code = None
         self.draft_path = self.state_dir / 'launch-draft.json'
@@ -694,7 +698,7 @@ class Controller:
                 self.exit_code = self.process.returncode
                 self._release()
             result = {'state': 'starting' if running else ('exited' if self.exit_code is not None else 'stopped'),
-                      'pid': self.process.pid if running else None, 'exit_code': self.exit_code,
+                      'pid': self.process.pid if running else None, 'exit_code': self.exit_code, 'instance':self.instance,
                       'active_config': without_secrets(self.active) if self.active else None,
                       'api_key_configured': bool(self.active and self.active['parameters'].get('ApiKey')), 'url': None}
             result['planned_scoring'] = copy.deepcopy(self.active_plan.get('resolved_scoring')) if self.active_plan else None
@@ -763,9 +767,11 @@ class Controller:
             except Exception:
                 self._release(); raise
             self.active, self.active_plan, self.exit_code = clean, plan_summary, None
+            self.instance = secrets.token_hex(12)
             return self.status()
 
     def stop(self):
+        self.chat.cancel_all()
         with self.lock:
             process = self.process
             if self.job:
@@ -774,6 +780,7 @@ class Controller:
                 process.wait(timeout=10)
             self._release(); self.exit_code = None; self.active = None; self.active_plan = None
             self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
+            self.instance = secrets.token_hex(12)
             return self.status()
 
     def log_tail(self):
@@ -823,17 +830,18 @@ class Handler(BaseHTTPRequestHandler):
     def reply(self, code, body, content_type='application/json; charset=utf-8'):
         if not isinstance(body, bytes):
             body = json.dumps(body, ensure_ascii=False).encode('utf-8')
-        self.send_response(code)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
-        self.end_headers()
         try:
+            self.send_response(code)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Content-Security-Policy', "frame-ancestors 'self'")
+            self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except ConnectionError:
+            # Navigation/refresh can abort either headers or body on Windows.
+            self.close_connection = True
 
     def trusted(self, mutate=False):
         host = self.headers.get('Host', '')
@@ -852,7 +860,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == '/api/launcher/info':
+            if path == '/api/chat/context':
+                self.reply(200, self.control.chat.context())
+            elif path.startswith('/api/chat/requests/'):
+                record = self.control.chat.record(path.rsplit('/',1)[1])
+                self.reply(200 if record else 404, record or {'error':'Unknown request'})
+            elif path.startswith('/chat/view/'):
+                self.chat_asset(path[len('/chat/view/'):])
+            elif path == '/api/launcher/info':
                 self.reply(200, {'token': self.control.token, 'backends': self.control.backends,
                                 'console_protocol': 1, 'console_root': str(ROOT.resolve()),
                                 'model_library_version': 1,
@@ -893,7 +908,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Location', '/monitor/')
                 self.send_header('Content-Length', '0')
                 self.end_headers()
-            elif path == '/monitor/':
+            elif path in ('/monitor/', '/chat/'):
                 self.asset('index.html')
             elif path.startswith('/monitor/') and '/' not in path[len('/monitor/'):]:
                 self.asset(path[len('/monitor/'):])
@@ -904,11 +919,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def asset(self, name):
         allowed = {'index.html', 'monitor.css', 'monitor.js', 'i18n.js', 'launcher.css', 'launcher.js',
-                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2'}
+                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html'}
         if name not in allowed:
             self.reply(404, {'error': 'Not found'}); return
         file = ROOT / 'ui/monitor' / name
         self.reply(200, file.read_bytes(), mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
+
+    def chat_asset(self, name):
+        roots = [ROOT/'ui/dist', self.control.backend_root/'workers/share/kvmem/ui', ROOT/'build/share/kvmem/ui']
+        root = next((p for p in roots if (p/'index.html').is_file()), None)
+        if root is None:
+            self.reply(503, {'error':'Unified chat assets missing; rebuild the UI package'}); return
+        root = root.resolve()
+        file = (root/(name or 'index.html')).resolve()
+        if root not in file.parents or not file.is_file() or file.suffix not in {'.html','.js','.css','.svg','.png','.ico','.woff','.woff2','.json'}:
+            self.reply(404, {'error':'Not found'}); return
+        self.reply(200,file.read_bytes(),mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
 
     def do_POST(self):
         if not self.trusted(mutate=True):
@@ -917,9 +943,14 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 raise ValueError('Expected application/json')
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 65536:
+            is_chat = self.path == '/api/chat/completions'
+            if not 0 < size <= (MAX_BODY if is_chat else 65536):
                 raise ValueError('Invalid request size')
             data = json.loads(self.rfile.read(size))
+            if is_chat:
+                self.control.chat.stream(self, data); return
+            if self.path == '/api/chat/cancel':
+                self.reply(200,self.control.chat.cancel(str(data.get('id','')))); return
             actions = {'/api/launcher/save': self.control.save, '/api/launcher/preview': self.control.plan,
                        '/api/launcher/browse-model': self.control.browse_model,
                        '/api/launcher/browse-template': lambda data: self.control.browse_model(data, template=True),

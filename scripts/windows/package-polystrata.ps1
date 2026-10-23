@@ -3,6 +3,7 @@
 param([Parameter(Mandatory)][string]$Worker,[string]$VisionWorker,
       [Parameter(Mandatory)][string]$OutputDir,[string]$PythonRuntime,
       [string]$CudaPath=$env:CUDA_PATH,[string]$ValidationReport,[string]$GgmlSource,
+      [string]$ChatUiDir,
       [switch]$ComponentOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -10,6 +11,11 @@ $root=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $poly=Join-Path $root 'backends/polystrata'
 $out=[IO.Path]::GetFullPath($OutputDir)
 if((Test-Path -LiteralPath $out) -and !$ComponentOnly) { throw 'OutputDir must be new' }
+if (!$ComponentOnly) {
+    if (!$ChatUiDir) { $ChatUiDir = Join-Path $root 'build/share/kvmem/ui' }
+    $chatManifest = Join-Path $ChatUiDir 'ui-build.json'
+    if (!(Test-Path -LiteralPath $chatManifest) -or (Get-Content -LiteralPath $chatManifest -Raw | ConvertFrom-Json).console_chat_protocol -ne 1) { throw 'Supply -ChatUiDir with the unified console chat build' }
+}
 if($ComponentOnly) {
     foreach($reserved in @('workers/polystrata','backends/polystrata','runtime/python')) {
         if(Test-Path -LiteralPath (Join-Path $out $reserved)) {throw "PolyStrata component destination exists: $reserved"}
@@ -47,15 +53,16 @@ foreach($entry in $workers) {
         }
     }
 }
-# The frontend serves its own chat/monitor assets. No GGUF or exported tokenizer is packaged.
+# The integration serves chat/monitor in the shared console; retain only the old-origin export helper.
 foreach($file in Get-ChildItem -LiteralPath (Join-Path $poly 'serve') -Recurse -File) {
     if($file.FullName -match '[\\/]__pycache__[\\/]' -or $file.Extension -eq '.pyc') {continue}
+    if($file.FullName -match '[\\/]serve[\\/]web[\\/]' -and $file.Name -ne 'history-export.html') {continue}
     $relative=$file.FullName.Substring($poly.Length+1)
     $dest=Join-Path $out "backends/polystrata/$relative"
     New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     Copy-Item -LiteralPath $file.FullName -Destination $dest
 }
-foreach($relative in @('tools/polystrata/server.py','tools/polystrata/assets.py','scripts/local-console.py','scripts/speculative-capabilities.json',
+foreach($relative in @('tools/polystrata/server.py','tools/polystrata/assets.py','scripts/local-console.py','scripts/console_chat.py','scripts/speculative-capabilities.json',
  'scripts/windows/start-backend.ps1','scripts/windows/start-polystrata.ps1','scripts/windows/native-process.ps1',
  'scripts/windows/query-scoring.ps1','scripts/windows/start-ui.ps1','scripts/windows/describe-launch-json.ps1',
  'scripts/windows/select-model.ps1','START-HERE-CN.bat','START-HERE-EN.bat','backends/versions.json')) {
@@ -63,7 +70,7 @@ foreach($relative in @('tools/polystrata/server.py','tools/polystrata/assets.py'
     if((Test-Path -LiteralPath $dest) -and (Get-FileHash -LiteralPath $dest).Hash -ne (Get-FileHash -LiteralPath (Join-Path $root $relative)).Hash) {throw "Conflicting common package file: $relative"}
     Copy-Item -LiteralPath (Join-Path $root $relative) -Destination $dest
 }
-foreach($file in Get-ChildItem -LiteralPath (Join-Path $root 'ui') -Recurse -File) {
+foreach($file in Get-ChildItem -LiteralPath (Join-Path $root 'ui/monitor') -Recurse -File) {
     $relative=$file.FullName.Substring($root.Length+1);$dest=Join-Path $out $relative
     New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     if((Test-Path -LiteralPath $dest) -and (Get-FileHash -LiteralPath $dest).Hash -ne (Get-FileHash -LiteralPath $file.FullName).Hash) {throw "Conflicting common UI file: $relative"}
@@ -84,6 +91,7 @@ if($PythonRuntime) {
 }
 if($ValidationReport) { Copy-Item -LiteralPath $ValidationReport -Destination (Join-Path $out $(if($ComponentOnly){'provenance/polystrata-validation.json'}else{'provenance/validation.json'})) }
 if($ComponentOnly) { Write-Output "Added PolyStrata component: $out";return }
+Copy-Item -LiteralPath $ChatUiDir -Destination (Join-Path $out 'ui/dist') -Recurse
 $manifest=@{backend='polystrata';architecture='qwen35moe';models_included=$false;offline_python_included=[bool]$PythonRuntime;
     source=(Get-Content -LiteralPath (Join-Path $root 'backends/versions.json') -Raw|ConvertFrom-Json).polystrata;
     capability_scope=@{gpu_count=1;kv=@('f16','q8_0');max_concurrency=8;solo_mtp_drafts=@(0..3);batch_mtp=$false};

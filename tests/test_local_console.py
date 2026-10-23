@@ -17,6 +17,15 @@ spec.loader.exec_module(console)
 
 
 class ConsoleTests(unittest.TestCase):
+    def test_reply_handles_abandoned_browser_during_headers_and_body(self):
+        for stage in ('end_headers', 'body'):
+            with self.subTest(stage=stage):
+                handler=MagicMock()
+                target=handler.end_headers if stage=='end_headers' else handler.wfile.write
+                target.side_effect=ConnectionAbortedError('Windows browser abort')
+                console.Handler.reply(handler,503,{'error':'No managed service is running'})
+                self.assertTrue(handler.close_connection)
+
     def test_speculative_config_validates_backend_algorithm_combinations(self):
         def normalize(**overrides):
             return console.normalize({'schema_version': 1, 'parameters': {

@@ -17,6 +17,19 @@
   function rememberModel(backend, path) {
     try { localStorage.setItem('kvmem-recent-models-'+backend, JSON.stringify([path,...recentModels(backend).filter(x=>x!==path)].slice(0,8))); } catch {}
   }
+  function recentModelLabel(path, items) {
+    const parts = path.split(/[\\/]/).filter(Boolean), name = parts.at(-1) || path;
+    const peers = items.filter(other => other !== path && other.split(/[\\/]/).at(-1)?.toLowerCase() === name.toLowerCase());
+    if (!peers.length) return name;
+    const parents = parts.slice(0,-1);
+    for (let depth=1;depth<=parents.length;depth++) {
+      const suffix = parents.slice(-depth).join('/');
+      if (peers.every(other => other.split(/[\\/]/).filter(Boolean).slice(0,-1).slice(-depth).join('/').toLowerCase() !== suffix.toLowerCase())) {
+        return name+' · '+suffix;
+      }
+    }
+    return name+' · '+parents.join('/');
+  }
   let selectedPreset = '', presetUndo = null;
   const DRAFT_KEY='kvmem-launch-draft-v2', TEMPLATE_KEY='kvmem-launch-templates-v1';
   let saveTimer=null, dirty=false, saveError=false, templateTab='builtin';
@@ -32,7 +45,7 @@
     'Port','ListenHost','SinkTokens','RecentTokens','RetainedSessions','Concurrency',
     'DiskEnabled','DiskPath','DiskMiB',
     'ModelAlias','LogLevel','QueryScorer','ScoreAggregation','GraphAlpha','Lrfu','LrfuLambda','LrfuTopFraction','QueryMaxTokens','QueryReplayMaxTokens'];
-  const names={llamacpp:'llama.cpp',ninfer:'NInfer',polystrata:'PolyStrata · Qwen3.5 MoE'};
+  const names={llamacpp:'llama.cpp · Dense',ninfer:'NInfer · Dense',polystrata:'PolyStrata · MoE'};
   const groups=[['缓存与历史','Cache & history'],['硬件与加速','Hardware & acceleration'],['生成与思考','Generation & thinking'],['模板与图像','Templates & vision'],['服务与并发','Service & concurrency']];
   const make=(tag,attrs={},text)=>{const el=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));if(text!==undefined)el.textContent=text;return el;};
   let openHelp=null,helpOpenTimer=null,helpCloseTimer=null,helpId=0;
@@ -301,14 +314,16 @@
     const input = make('input', {id:'launch-model', type:'text', 'data-param':'Model', required:'',
       placeholder:tr('点击选择模型，也可粘贴文件路径','Choose a model, or paste a file path')});
     input.value = p.Model || '';
+    input.title = input.value;
+    input.addEventListener('input',()=>{input.title=input.value;});
     const browse = make('button', {type:'button', class:'s-button', 'data-browse-model':''}, tr('选择模型…','Choose model…'));
     browse.disabled = pickingModel;
     row.append(input, browse);box.append(label, row);
     const recent = make('select', {'aria-label':tr('最近选择的模型','Recently selected models'),'data-recent-model':''});
     function refreshRecent() {
       const items = recentModels(p.Backend);
-      recent.replaceChildren(make('option',{value:''},tr('最近选择…','Recent models…')));
-      for (const path of items) recent.append(make('option',{value:path},path.split(/[\\/]/).pop()+' — '+path));
+      recent.replaceChildren(make('option',{value:''},tr(`最近选择（${items.length}）`,`Recent models (${items.length})`)));
+      for (const path of items) recent.append(make('option',{value:path,title:path},recentModelLabel(path,items)));
       recent.hidden = !items.length;
     }
     refreshRecent();
@@ -538,7 +553,7 @@
     const layout=make('div',{class:'l-layout'}),main=make('div',{class:'l-main'}),side=make('aside',{class:'l-side'});layout.append(main,side);root.append(layout);
     const form=make('form',{'aria-label':tr('启动配置','Launch configuration')});form.style.display='contents';main.append(form);form.addEventListener('submit',e=>e.preventDefault());
     const core=make('section',{class:'s-card l-essential'});core.append(make('h2',{class:'s-title'},tr('模型与资源','Model & resources')));const fields=make('div',{class:'l-fields l-core'});core.append(fields);form.append(core);
-    const backend=field(fields,p,'Backend','推理引擎','Backend','text',Object.entries(names).map(([v,t])=>[v,t]));Array.from(backend.options).forEach(o=>{o.disabled=!info.backends.includes(o.value);if(o.disabled)o.textContent+=' · '+tr('未安装','not installed');});
+    const backend=field(fields,p,'Backend','推理引擎','Backend','text',Object.entries(names).map(([v,t])=>[v,t]),['按 KVMem 当前支持范围区分：Dense 为稠密模型，MoE 为混合专家模型。PolyStrata 目前支持 Qwen3.5 MoE（包括 Tiel）。','Labels describe current KVMem support: Dense for dense models, MoE for mixture-of-experts models. PolyStrata currently supports Qwen3.5 MoE, including Tiel.']);Array.from(backend.options).forEach(o=>{o.disabled=!info.backends.includes(o.value);if(o.disabled)o.textContent+=' · '+tr('未安装','not installed');});
     modelPicker(fields,p);
     const gpu=field(fields,p,'Gpu','推理显卡','Inference GPUs','text',info.gpus.map(g=>[g.uuid,g.name+' · '+g.uuid.slice(-8)]),['选择要使用的显卡。多卡按勾选顺序排列，可前移／后移；切换引擎保留当前选择。','Choose the GPUs to use. Multiple GPUs follow selection order and can be reordered. Switching engines retains your selection.']);
     gpu.closest('label').classList.add('l-gpu-field');
@@ -746,7 +761,7 @@
     updateStatus(runtime);
     draftStatus();
   }
-  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running;root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){const ready=status.state==='ready'&&!!status.url;chat.hidden=false;chat.setAttribute('aria-disabled',String(!ready));if(ready)chat.href=status.url+'/' + (p?.Backend==='polystrata'?'?kvmem_ui=20261023-'+encodeURIComponent(status.pid||'ready'):'');else chat.removeAttribute('href');}renderLaunchProgress();}
+  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running;root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){chat.hidden=false;chat.href='/chat/';chat.removeAttribute('aria-disabled');}renderLaunchProgress();}
   function renderLaunchProgress(){
     const box=root.querySelector('[data-launch-progress]');if(!box)return;
     const state=startPending?'preparing':launchFailure?'failed':runtime?.state;
@@ -776,6 +791,6 @@
   }
   async function poll(){if(info&&!busy){try{updateStatus(await api('status'));}catch(e){message(e.message,true);}}setTimeout(poll,document.hidden?5000:2000);}
   window.addEventListener('kvmem-language-change',()=>{if(info){try{restoreDraft(captureDraft());}catch(e){message(e.message,true);}}document.querySelector('[data-page=config]').textContent=tr('启动配置','Launch configuration');});
-  async function init(){try{info=await api('info');let saved;try{saved=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');}catch{saveError=true;}if(usableDraft(saved))restoreDraft(saved);else render(info.draft.parameters);updateStatus(info.status);if(!['starting','ready'].includes(info.status.state))document.querySelector('[data-page=config]').click();poll();}catch(e){root.replaceChildren(make('section',{class:'s-card'},tr('启动配置需要独立的本地控制台。请运行 scripts/local-console.py，然后打开它显示的地址；推理服务停止后，这个控制台仍然可用。','Launch settings require the independent local console. Run scripts/local-console.py and open its printed URL; the console remains available when inference stops.')));}}
+  async function init(){try{info=await api('info');let saved;try{saved=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');}catch{saveError=true;}if(usableDraft(saved))restoreDraft(saved);else render(info.draft.parameters);updateStatus(info.status);if(location.pathname!=='/chat/'&&!location.hash&&!['starting','ready'].includes(info.status.state))document.querySelector('[data-page=config]').click();poll();}catch(e){root.replaceChildren(make('section',{class:'s-card'},tr('启动配置需要独立的本地控制台。请运行 scripts/local-console.py，然后打开它显示的地址；推理服务停止后，这个控制台仍然可用。','Launch settings require the independent local console. Run scripts/local-console.py and open its printed URL; the console remains available when inference stops.')));}}
   init();
 })();

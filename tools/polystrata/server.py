@@ -189,6 +189,7 @@ def main():
     if args.thinking_budget is not None: config["reasoning_budget_tokens"] = args.thinking_budget
     config["preserve_thinking"] = args.preserve_thinking
     config["client_reasoning_history"] = True
+    config["kvmem_console_only"] = True
     config["kvmem_vram_reserve_mib"] = args.vram_reserve_mib
     if args.chat_template_file:
         config["kvmem_chat_template"]=str(args.chat_template_file.resolve())

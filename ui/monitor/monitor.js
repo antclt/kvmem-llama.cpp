@@ -115,6 +115,7 @@
     window.dispatchEvent(new CustomEvent("kvmem-page-change", {detail: name}));
   }
   $$("[data-page]").forEach((el) => (el.onclick = () => page(el.dataset.page)));
+  window.addEventListener("kvmem-navigate", event => page(event.detail));
   function bar(name, value) {
     $(`[data-bar="${name}"]`).style.width =
       `${number(value) ? Math.max(0, Math.min(100, value)) : 0}%`;
