@@ -1,4 +1,21 @@
 /* Configuration uses the monitor palette. Its layout must not restyle other views. */
+#app .s-launch .l-model-health { border:1px solid var(--s-line); border-radius:12px; padding:14px 16px; background:var(--s-soft); min-width:0; font-size:13px; }
+#app .s-launch .l-model-health[data-state=blocked] { border-color:var(--s-error-text); }
+#app .s-launch .l-health-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+#app .s-launch .l-health-head .s-button { min-height:30px; padding:4px 10px; }
+#app .s-launch .l-model-health[data-state=ready] .l-health-head strong { color:var(--s-green-text); }
+#app .s-launch .l-model-health[data-state=blocked] .l-health-head strong, #app .s-launch .l-model-health [data-severity=error] { color:var(--s-error-text); }
+#app .s-launch .l-model-health [data-severity=warning] { color:var(--s-warn-text); }
+#app .s-launch .l-health-meta, #app .s-launch .l-health-note { margin:7px 0; color:var(--s-muted); line-height:1.6; }
+#app .s-launch .l-health-features { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0; }
+#app .s-launch .l-health-features span { padding:4px 8px; border:1px solid var(--s-line); border-radius:6px; background:var(--s-surface); font-size:11px; }
+#app .s-launch .l-health-issue { display:grid; gap:4px; margin:10px 0; overflow-wrap:anywhere; }
+#app .s-launch .l-model-health > .s-button { margin:4px 8px 4px 0; }
+#app .s-launch .l-model-health details { border-top:1px solid var(--s-line); padding-top:10px; margin-top:12px; }
+#app .s-launch .l-model-health summary { cursor:pointer; color:var(--s-muted); }
+#app .s-launch .l-model-health h4 { margin:16px 0 8px; font-size:12px; }
+#app .s-launch .l-model-health details p { margin:8px 0; overflow-wrap:anywhere; }
+#app .s-launch .l-model-health details small { display:block; margin-top:4px; font-size:11px; color:var(--s-muted); white-space:pre-wrap; }
 #app .s-launch { padding: 24px; width: 100%; max-width:1560px; margin:auto; }
 #app .s-launch .l-layout { display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 20px; align-items: start; }
 #app .s-launch .l-main, #app .s-launch .l-side { display: grid; gap: 16px; min-width: 0; }

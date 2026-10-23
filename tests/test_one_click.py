@@ -73,6 +73,13 @@ class OneClickTests(unittest.TestCase):
             self.assertEqual(manifest['console_chat_protocol'], 1)
             self.assertTrue((package / 'ui/dist/index.html').is_file())
             self.assertTrue((package / 'scripts/console_chat.py').is_file())
+            inspect = subprocess.run([str(package / 'runtime/python/python.exe'), '-I', '-S',
+                                      str(package / 'scripts/model_health.py')],
+                                     input=json.dumps({'schema_version': 1, 'parameters': {
+                                         'Backend': 'ninfer', 'Model': str(package / 'missing.ninfer')}}),
+                                     capture_output=True, text=True, timeout=15)
+            self.assertEqual(inspect.returncode, 0, inspect.stderr)
+            self.assertFalse(json.loads(inspect.stdout)['can_start'])
             self.assertEqual(manifest['python_archive_sha256'], digest)
             for name, expected in manifest['controller_files'].items():
                 self.assertEqual(hashlib.sha256((package / name).read_bytes()).hexdigest(), expected)

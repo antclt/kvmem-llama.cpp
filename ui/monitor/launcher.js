@@ -4,6 +4,7 @@
   const root = document.querySelector('[data-launch-root]');
   const tr = (zh,en) => window.monitorI18n.language === 'en' ? en : zh;
   let info, busy=false, activeTab=0, runtime=null, startPending=false, launchFailure="";
+  let health=null, healthKey='', healthTimer=null, healthAbort=null, healthSequence=0, healthState='idle';
   const perBackend = {};
   // Credentials are kept in memory only, separate from drafts and templates.
   const launchKeys = {};
@@ -48,6 +49,85 @@
   const names={llamacpp:'llama.cpp · Dense',ninfer:'NInfer · Dense',polystrata:'PolyStrata · MoE'};
   const groups=[['缓存与历史','Cache & history'],['硬件与加速','Hardware & acceleration'],['生成与思考','Generation & thinking'],['模板与图像','Templates & vision'],['服务与并发','Service & concurrency']];
   const make=(tag,attrs={},text)=>{const el=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));if(text!==undefined)el.textContent=text;return el;};
+  function healthParameters(){
+    const parameters={};
+    for(const key of ['Backend','Model','Worker','Vision','Mmproj','VisionWorker','Tokenizer','ChatTemplateFile','SpeculativeMode','MtpDrafts','DraftModel']){
+      const el=root.querySelector(`[data-param=${key}]`);
+      if(!el||el.disabled)continue;
+      if(el.type==='checkbox')parameters[key]=el.checked;
+      else if(el.value!=='')parameters[key]=el.type==='number'?Number(el.value):el.value;
+    }
+    return parameters;
+  }
+  function healthBlocks(){return health?.can_start===false;}
+  function scheduleHealth(force=false){
+    if(!info)return;
+    const parameters=healthParameters(),key=JSON.stringify(parameters);
+    if(!force&&key===healthKey)return;
+    healthKey=key;health=null;clearTimeout(healthTimer);healthAbort?.abort();
+    const sequence=++healthSequence;
+    healthState=parameters.Model?.trim()?'checking':'idle';renderHealth();updateStatus(runtime);
+    if(healthState==='idle')return;
+    if(info.model_inspection_version!==1){healthState='unavailable';renderHealth();return;}
+    healthTimer=setTimeout(async()=>{
+      const controller=new AbortController();healthAbort=controller;
+      const timeout=setTimeout(()=>controller.abort(),12000);
+      try{
+        const response=await fetch('/api/launcher/inspect-model',{method:'POST',headers:{'Content-Type':'application/json','X-KVMem-Token':info.token},body:JSON.stringify({schema_version:1,parameters}),signal:controller.signal});
+        const result=await response.json();
+        if(!response.ok||result.schema_version!==1||typeof result.can_start!=='boolean')throw Error('Inspection unavailable');
+        if(sequence!==healthSequence)return;
+        health=result;healthState=result.status;
+      }catch(error){if(sequence!==healthSequence)return;healthState='unavailable';}
+      finally{clearTimeout(timeout);if(sequence===healthSequence){renderHealth();updateStatus(runtime);}}
+    },force?0:400);
+  }
+  function renderHealth(){
+    const box=root.querySelector('[data-model-health]');if(!box)return;
+    const expanded=box.querySelector('details')?.open||false;
+    box.replaceChildren();box.dataset.state=healthState;
+    box.setAttribute('aria-busy',String(healthState==='checking'));
+    const titles={idle:['选择模型后自动体检','Select a model for automatic inspection'],checking:['正在检查模型文件…','Inspecting model files…'],ready:['静态检查通过','Static checks passed'],warning:['检查完成，有待确认项','Checked with items to review'],blocked:['当前配置无法启动','Current configuration cannot start'],unavailable:['体检未完成，可尝试启动','Inspection incomplete; launch may be attempted']};
+    const head=make('div',{class:'l-health-head'}),title=make('strong',{'data-health-summary':'',role:'status','aria-live':'polite'},tr(...(titles[healthState]||titles.unavailable)));
+    head.append(title);
+    if(healthState!=='idle'){
+      const retry=make('button',{type:'button',class:'s-button','data-health-retry':''},tr('重新检查','Recheck'));
+      retry.disabled=healthState==='checking';retry.onclick=()=>scheduleHealth(true);head.append(retry);
+    }
+    box.append(head);
+    if(healthState==='idle')return;
+    const model=health?.model||{},facts=[model.format,model.architecture,model.files?tr(`${model.files} 个文件`,`${model.files} file(s)`):'',model.bytes?`${(model.bytes/1024**3).toFixed(2)} GiB`:''].filter(Boolean);
+    if(facts.length)box.append(make('p',{class:'l-health-meta'},facts.join(' · ')));
+    box.append(make('p',{class:'l-health-note'},tr('仅检查文件与资源；worker 加载、显存用量与推理结果尚未验证。','Files and resources only; worker loading, VRAM use and inference remain unverified.')));
+    const features=make('div',{class:'l-health-features'}),states={present:['已包含','Included'],absent:['未包含','Absent'],unknown:['未确认','Unverified'],external:['需外部文件','External file']};
+    for(const [key,zh,en] of [['text','文本','Text'],['vision','图像','Vision'],['mtp','MTP','MTP'],['dflash2','DFlash2','DFlash2'],['tokenizer','分词器','Tokenizer'],['template','聊天模板','Chat template']]){
+      const state=health?.features?.[key];if(!state)continue;
+      features.append(make('span',{'data-feature':key,'data-state':state},tr(zh,en)+' · '+tr(...(states[state]||states.unknown))));
+    }
+    if(features.children.length)box.append(features);
+    const checks=health?.checks||[],issues=checks.filter(c=>c.status==='error'||c.status==='warning');
+    for(const item of issues.slice(0,4)){
+      const line=make('div',{class:'l-health-issue','data-severity':item.status});
+      line.append(make('strong',{},tr(item.zh,item.en)),make('span',{},item.detail||''));box.append(line);
+    }
+    const fixes=new Set(checks.filter(c=>c.status==='error'||c.status==='warning').map(c=>c.fix));
+    for(const fix of ['disable_vision','disable_speculative']){
+      if(!fixes.has(fix))continue;
+      const action=make('button',{type:'button',class:'s-button','data-health-fix':fix},fix==='disable_vision'?tr('关闭图像，重新检查','Disable vision and recheck'):tr('关闭推测解码，重新检查','Disable speculation and recheck'));
+      action.onclick=()=>{const key=fix==='disable_vision'?'Vision':'SpeculativeMode',el=root.querySelector(`[data-param=${key}]`);if(!el)return;if(el.type==='checkbox')el.checked=false;else el.value='none';el.dispatchEvent(new Event('change',{bubbles:true}));};box.append(action);
+    }
+    if(checks.length){
+      const details=make('details',{'data-health-details':''});details.open=expanded;details.append(make('summary',{},tr('查看检查详情','View check details')));
+      const labels={file:['文件结构','File structure'],config:['所选配置','Selected configuration'],worker:['引擎兼容性','Worker compatibility']};
+      for(const layer of ['file','config','worker']){
+        const items=checks.filter(c=>c.layer===layer);if(!items.length)continue;
+        details.append(make('h4',{},tr(...labels[layer])));
+        for(const item of items){const line=make('p',{'data-severity':item.status});line.append(make('strong',{},({pass:'✓ ',error:'✕ ',warning:'! ',unknown:'? '}[item.status]||'')+tr(item.zh,item.en)));if(item.detail)line.append(make('small',{},item.detail));details.append(line);}
+      }
+      const copy=make('button',{type:'button',class:'s-button','data-health-copy':''},tr('复制检查报告','Copy inspection report'));
+      copy.onclick=async()=>{try{await navigator.clipboard.writeText(JSON.stringify(health,null,2));copy.textContent=tr('已复制','Copied');}catch{copy.textContent=tr('复制失败，请重试','Copy failed; retry');}};details.append(copy);box.append(details);
+    }
+  }
   let openHelp=null,helpOpenTimer=null,helpCloseTimer=null,helpId=0;
   function closeHelp(){
     clearTimeout(helpOpenTimer);clearTimeout(helpCloseTimer);
@@ -118,8 +198,8 @@
     if(draft.raw){const layers=root.querySelector('[data-param=StageLayers]');if(layers&&typeof draft.raw.StageLayers==='string'){layers.value=draft.raw.StageLayers;layers.dispatchEvent(new Event('input'));}const native=root.querySelector('[data-native]');if(native&&typeof draft.raw.WorkerArgs==='string')native.value=draft.raw.WorkerArgs;}
     draftStatus();
   }
-  root.addEventListener('input',event=>{if(event.target.matches('[data-param], [data-native]')){syncDependencies();scheduleSave();}});
-  root.addEventListener('change',event=>{if(event.target.matches('[data-param], [data-native]')){syncDependencies();scheduleSave();}});
+  root.addEventListener('input',event=>{if(event.target.matches('[data-param], [data-native]')){syncDependencies();scheduleSave();scheduleHealth();}});
+  root.addEventListener('change',event=>{if(event.target.matches('[data-param], [data-native]')){syncDependencies();scheduleSave();scheduleHealth();}});
   window.addEventListener('pagehide',saveEditing);
   function readTemplates(){
     const values=JSON.parse(localStorage.getItem(TEMPLATE_KEY)||'[]');
@@ -555,6 +635,7 @@
     const core=make('section',{class:'s-card l-essential'});core.append(make('h2',{class:'s-title'},tr('模型与资源','Model & resources')));const fields=make('div',{class:'l-fields l-core'});core.append(fields);form.append(core);
     const backend=field(fields,p,'Backend','推理引擎','Backend','text',Object.entries(names).map(([v,t])=>[v,t]),['按 KVMem 当前支持范围区分：Dense 为稠密模型，MoE 为混合专家模型。PolyStrata 目前支持 Qwen3.5 MoE（包括 Tiel）。','Labels describe current KVMem support: Dense for dense models, MoE for mixture-of-experts models. PolyStrata currently supports Qwen3.5 MoE, including Tiel.']);Array.from(backend.options).forEach(o=>{o.disabled=!info.backends.includes(o.value);if(o.disabled)o.textContent+=' · '+tr('未安装','not installed');});
     modelPicker(fields,p);
+    fields.append(make('section',{class:'l-model-health l-wide','data-model-health':'','aria-label':tr('模型体检','Model inspection')}));
     const gpu=field(fields,p,'Gpu','推理显卡','Inference GPUs','text',info.gpus.map(g=>[g.uuid,g.name+' · '+g.uuid.slice(-8)]),['选择要使用的显卡。多卡按勾选顺序排列，可前移／后移；切换引擎保留当前选择。','Choose the GPUs to use. Multiple GPUs follow selection order and can be reordered. Switching engines retains your selection.']);
     gpu.closest('label').classList.add('l-gpu-field');
     gpu.multiple=true;gpu.size=2;Array.from(gpu.options).forEach(o=>o.selected=(p.Gpu||'').split(',').includes(o.value));
@@ -758,10 +839,11 @@
       for(const key of ['LogLevel']){const input=root.querySelector(`[data-param=${key}]`);if(input){input.disabled=true;input.dataset.backendSupported='false';}}
     }
     syncDependencies();
+    scheduleHealth(true);
     updateStatus(runtime);
     draftStatus();
   }
-  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running;root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){chat.hidden=false;chat.href='/chat/';chat.removeAttribute('aria-disabled');}renderLaunchProgress();}
+  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running||healthBlocks();root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){chat.hidden=false;chat.href='/chat/';chat.removeAttribute('aria-disabled');}renderLaunchProgress();}
   function renderLaunchProgress(){
     const box=root.querySelector('[data-launch-progress]');if(!box)return;
     const state=startPending?'preparing':launchFailure?'failed':runtime?.state;

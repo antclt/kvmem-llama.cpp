@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from console_chat import ChatBridge, MAX_BODY
+from model_health import request_parameters, unchecked
 
 ROOT = Path(__file__).resolve().parents[1]
 SPECULATIVE_PROFILES = json.loads((ROOT / 'scripts/speculative-capabilities.json').read_text(encoding='utf-8-sig'))
@@ -247,6 +248,7 @@ class Controller:
             raise ValueError('This console requires a NInfer or llama.cpp launcher')
         self.port, self.token = port, secrets.token_urlsafe(32)
         self.lock = threading.RLock()
+        self.inspection_slots = threading.BoundedSemaphore(2)
         self.picker_lock = threading.Lock()
         self.process = self.job = self.log = None
         self.active = None
@@ -733,12 +735,46 @@ class Controller:
             self.log.close(); self.log = None
         self.process = None
 
+    def inspect_model(self, data, *, for_launch=False):
+        parameters = request_parameters(data)
+        if parameters['Backend'] not in self.backends:
+            raise ValueError('Backend is not installed')
+        if not parameters.get('Worker'):
+            parameters['Worker'] = self.worker_defaults().get(parameters['Backend'], {}).get('path', '')
+        acquired = self.inspection_slots.acquire(timeout=11) if for_launch else self.inspection_slots.acquire(blocking=False)
+        if not acquired:
+            if for_launch:
+                raise ValueError('模型体检正在忙，请稍后重试启动 / Model inspection busy; retry launch shortly')
+            return unchecked('Inspection is busy; retry shortly')
+        try:
+            run = subprocess.run([sys.executable, str(ROOT / 'scripts/model_health.py')],
+                                 input=json.dumps({'schema_version': 1, 'parameters': parameters}),
+                                 capture_output=True, text=True, encoding='utf-8',
+                                 cwd=self.backend_root, timeout=10,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            if run.returncode != 0 or len(run.stdout) > 262144:
+                return unchecked('Inspector did not return a bounded report')
+            report = json.loads(run.stdout)
+            if not isinstance(report, dict) or report.get('schema_version') != 1 or type(report.get('can_start')) is not bool:
+                return unchecked('Unsupported inspector response')
+            return report
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return unchecked('Inspector unavailable or timed out; retry or attempt launch')
+        finally:
+            self.inspection_slots.release()
+
     def start(self, data):
+        clean = normalize(data, self.backends)
+        # Never trust a cached browser report. Inspect this exact launch request.
+        health = self.inspect_model(clean, for_launch=True)
+        if not health['can_start']:
+            errors = [c['zh'] + ' / ' + c['en'] + ': ' + c.get('detail', '')
+                      for c in health['checks'] if c['status'] == 'error']
+            raise ValueError('Model inspection blocked launch: ' + '; '.join(errors))
         with self.lock:
             if self.process and self.process.poll() is None:
                 raise ValueError('A managed service is already running; stop it before starting another')
             self._release()
-            clean = normalize(data, self.backends)
             result = self.plan(clean, reveal_secrets=True)
             port = clean['parameters'].get('Port', 18200)
             with socket.socket() as probe:
@@ -871,6 +907,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {'token': self.control.token, 'backends': self.control.backends,
                                 'console_protocol': 1, 'console_root': str(ROOT.resolve()),
                                 'model_library_version': 1,
+                                'model_inspection_version': 1,
                                 'kv_cache_version': 1,
                                 'query_scoring_version': 2,
                                 'speculative_capabilities': self.control.speculative_profiles,
@@ -956,6 +993,7 @@ class Handler(BaseHTTPRequestHandler):
                        '/api/launcher/browse-template': lambda data: self.control.browse_model(data, template=True),
                        '/api/launcher/browse-model-folder': lambda data: self.control.browse_model(data, folder=True),
                        '/api/launcher/scan-models': self.control.scan_models,
+                       '/api/launcher/inspect-model': self.control.inspect_model,
                        '/api/launcher/model-directories': self.control.update_model_directories,
                        '/api/launcher/start': self.control.start, '/api/launcher/stop': lambda _: self.control.stop()}
             action = actions.get(self.path)
