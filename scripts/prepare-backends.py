@@ -77,12 +77,12 @@ def prepare(name, entry, check_only):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--backend', choices=('llamacpp', 'ninfer', 'all'), default='all')
+    parser.add_argument('--backend', choices=('llamacpp', 'ninfer', 'polystrata', 'all'), default='all')
     parser.add_argument('--check', action='store_true',
                         help='verify exact prepared sources without fetching or applying patches')
     args = parser.parse_args()
     versions = json.loads((ROOT / 'backends/versions.json').read_text(encoding='utf-8'))
-    names = ('llamacpp', 'ninfer') if args.backend == 'all' else (args.backend,)
+    names = tuple(name for name,entry in versions.items() if isinstance(entry,dict) and 'path' in entry) if args.backend == 'all' else (args.backend,)
     try:
         for name in names:
             prepare(name, versions[name], args.check)

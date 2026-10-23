@@ -32,7 +32,7 @@
     'Port','ListenHost','SinkTokens','RecentTokens','RetainedSessions','Concurrency',
     'DiskEnabled','DiskPath','DiskMiB',
     'ModelAlias','LogLevel','QueryScorer','ScoreAggregation','GraphAlpha','Lrfu','LrfuLambda','LrfuTopFraction','QueryMaxTokens','QueryReplayMaxTokens'];
-  const names={llamacpp:'llama.cpp',ninfer:'NInfer'};
+  const names={llamacpp:'llama.cpp',ninfer:'NInfer',polystrata:'PolyStrata · Qwen3.5 MoE'};
   const groups=[['缓存与历史','Cache & history'],['硬件与加速','Hardware & acceleration'],['生成与思考','Generation & thinking'],['模板与图像','Templates & vision'],['服务与并发','Service & concurrency']];
   const make=(tag,attrs={},text)=>{const el=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));if(text!==undefined)el.textContent=text;return el;};
   let openHelp=null,helpOpenTimer=null,helpCloseTimer=null,helpId=0;
@@ -80,7 +80,7 @@
     root.querySelectorAll('[data-param]').forEach(el=>{
       if((el.disabled&&el.dataset.keepDraft!=='true')||el.dataset.secret==='true')return;
       const value=el.type==='checkbox'?(el.dataset.inverted==='true'?!el.checked:el.checked):el.multiple?Array.from(el.selectedOptions).map(x=>x.value).join(','):el.type==='number'&&el.value!==''?Number(el.value):el.value;
-      parameters[el.dataset.param]=value;
+      parameters[el.dataset.param]=el.dataset.idleSessions==='true'&&value!==''?Number(value)+1:value;
     });
     const raw={StageLayers:String(parameters.StageLayers||''),WorkerArgs:root.querySelector('[data-native]')?.value||'[]'};
     parameters.StageLayers=raw.StageLayers.trim()?raw.StageLayers.split(',').map(x=>Number(x.trim())).filter(Number.isFinite):[];
@@ -181,9 +181,9 @@
       if(errors.length){summary.textContent=tr('需要补全或修改配置','Some settings need attention');return;}
       const result=await api('preview',data);if(!el.isConnected)return;
       row(tr('后端程序','Backend executable'),result.argv[0],'Worker');
-      row(tr('对外模型名','Served model name'),p.ModelAlias||tr('沿用模型名称','Use model name'),'ModelAlias');
+      row(tr('对外模型名','Served model name'),result.effective_settings?.model_alias||p.ModelAlias||tr('沿用模型名称','Use model name'),'ModelAlias');
       row(tr('API 访问密钥','API access key'),p.ApiKey?tr('已设置 · 预览隐藏密钥','Configured · Hidden in preview'):tr('未设置','Not configured'),'ApiKey');
-      const reserveAt=result.argv.indexOf('--kvmem-gen-reserve'),outputAt=result.argv.indexOf(p.Backend==='ninfer'?'--default-max-tokens':'-n');
+      const reserveAt=result.argv.indexOf(p.Backend==='polystrata'?'--reserve':'--kvmem-gen-reserve'),outputAt=result.argv.indexOf(p.Backend==='polystrata'?'--max-tokens':p.Backend==='ninfer'?'--default-max-tokens':'-n');
       if(reserveAt>=0&&outputAt>=0){const reserve=Number(result.argv[reserveAt+1]),requested=Number(result.argv[outputAt+1]);row(tr('默认输出预算 / 追加空间','Default output budget / append workspace'),`${requested} / ${reserve} tokens · `+tr('追加空间可循环复用，输出预算可超过 R','Append workspace is reusable; output budget may exceed R'),'Reserve');}
       const port=result.preflight?.port??p.Port??18200,available=result.preflight?.port_available;
       row(tr('服务端口','Service port'),`${result.preflight?.listen_host||p.ListenHost||'127.0.0.1'}:${port} · `+(available===true?tr('可用','Available'):available===false?tr('已占用或无法绑定；启动前需释放或更换','In use or unavailable; release or change before starting'):tr('启动时检查','Checked on start')),'Port',available!==false);
@@ -194,12 +194,12 @@
       const command=Object.entries(result.environment||{}).map(([k,v])=>`$env:${k} = '${String(v).replaceAll("'","''")}'`).join('\n')+'\n& '+quoted;
       const code=make('pre',{class:'l-result'},command),copy=make('button',{type:'button',class:'s-button','data-copy-command':''},tr('复制启动命令','Copy launch command'));copy.onclick=async()=>{try{await navigator.clipboard.writeText(command);copy.textContent=tr('已复制','Copied');}catch{copy.textContent=tr('复制失败，请手动选择文本','Copy failed; select the text manually');}};advanced.append(code,copy);el.append(advanced);
       if(p.ApiKey)advanced.append(make('p',{class:'l-muted'},tr('复制的命令含 <redacted> 占位符，手动运行前需替换为密钥。页面启动服务会使用当前填写的密钥。','The copied command contains a <redacted> placeholder. Replace it before running manually. Starting here uses the key entered on this page.')));
-    }catch(error){if(!el.isConnected)return;summary.textContent=tr('检查未通过','Check failed');const text=error.message||String(error);const key=/JSON|原生参数|WorkerArgs/i.test(text)?'WorkerArgs':/Worker|后端程序/i.test(text)?'Worker':/Model|模型/i.test(text)?'Model':/StageLayers|层数/i.test(text)?'StageLayers':/Gpu|GPU|显卡/i.test(text)?'Gpu':/Port|端口/i.test(text)?'Port':null;row(tr('需要处理','Needs attention'),text,key,false);}
+    }catch(error){if(!el.isConnected)return;summary.textContent=tr('检查未通过','Check failed');const text=error.message||String(error);const key=['Prefill','Budget','Reserve','Context','MaxTokens','SinkTokens','RecentTokens','HostMiB','RetainedSessions','VramReserveMiB'].find(k=>text.includes(k))||(/JSON|原生参数|WorkerArgs/i.test(text)?'WorkerArgs':/Worker|后端程序/i.test(text)?'Worker':/Model|模型/i.test(text)?'Model':/StageLayers|层数/i.test(text)?'StageLayers':/Gpu|GPU|显卡/i.test(text)?'Gpu':/Port|端口/i.test(text)?'Port':null);row(tr('需要处理','Needs attention'),text,key,false);}
     finally{if(el.isConnected)el.append(make('p',{class:'l-muted'},tr('检查不会加载模型。兼容性和实际资源需求仍需启动验证；检查通过也不会自动启动。','This check does not load a model. Compatibility and resource needs are verified at startup; passing does not start a service.')));}
   }
   function message(text,error=false){const el=root.querySelector('[data-launch-message]');if(el){el.textContent=text;el.classList.toggle('l-error',error);el.setAttribute('role',error?'alert':'status');}}
   async function api(path,data,timeout=60000){const response=await fetch('/api/launcher/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-KVMem-Token':info.token},body:data===undefined?undefined:JSON.stringify(data),signal:AbortSignal.timeout(timeout)});const value=await response.json();if(!response.ok)throw Error(value.error||'HTTP '+response.status);return value;}
-  function collect(){const params={};root.querySelectorAll('[data-param]').forEach(el=>{if(el.disabled||el.dataset.uiOnly==='true')return;const k=el.dataset.param;if(el.type==='checkbox'){const checked=el.dataset.inverted==='true'?!el.checked:el.checked;if(checked||el.dataset.explicitBoolean==='true')params[k]=checked;}else if(el.multiple){params[k]=Array.from(el.selectedOptions).map(x=>x.value).join(',');}else if(el.value!==''){params[k]=el.type==='number'?Number(el.value):el.value;}});const layers=params.StageLayers;if(layers)params.StageLayers=layers.split(',').map(x=>Number(x.trim()));const raw=root.querySelector('[data-native]');if(raw?.value.trim()){const args=JSON.parse(raw.value);if(!Array.isArray(args))throw Error(tr('原生参数必须为 JSON 数组','Native arguments must be a JSON array'));params.WorkerArgs=args;}return {schema_version:1,parameters:params};}
+  function collect(){const params={};root.querySelectorAll('[data-param]').forEach(el=>{if(el.disabled||el.dataset.uiOnly==='true')return;const k=el.dataset.param;if(el.type==='checkbox'){const checked=el.dataset.inverted==='true'?!el.checked:el.checked;if(checked||el.dataset.explicitBoolean==='true'||k==='PreserveThinking')params[k]=checked;}else if(el.multiple){params[k]=Array.from(el.selectedOptions).map(x=>x.value).join(',');}else if(el.value!==''){params[k]=el.type==='number'?Number(el.value)+(el.dataset.idleSessions==='true'?1:0):el.value;}});const layers=params.StageLayers;if(layers)params.StageLayers=layers.split(',').map(x=>Number(x.trim()));const raw=root.querySelector('[data-native]');if(raw?.value.trim()){const args=JSON.parse(raw.value);if(!Array.isArray(args))throw Error(tr('原生参数必须为 JSON 数组','Native arguments must be a JSON array'));params.WorkerArgs=args;}return {schema_version:1,parameters:params};}
   function field(parent,p,key,zh,en,type='text',options=null,note=null,disabled=false){
     const label=make('label',{class:'l-field l-row'}),title=tr(zh,en);
     if(type==='checkbox'){
@@ -239,6 +239,7 @@
     if(get('DiskPath'))get('DiskPath').required=disk;
     for(const key of ['VisionTokens','VisionResidency'])dependency(key,vision,tr('先开启图像输入。','Enable vision input first.'));
     dependency('ThinkingBudget',get('ThinkingMode')?.value!=='off',tr('默认思考模式已关闭；重新开启或选择默认后可设置预算。','Default thinking is off. Select on or default to set a budget.'));
+    for(const option of get('ReasoningEffort')?.options||[])if(option.value==='none'&&get('Backend').value==='polystrata')option.disabled=get('ThinkingMode')?.value!=='off';
     dependency('ReasoningEffort',get('ThinkingMode')?.value!=='off',tr('默认思考模式已关闭；选择默认后可设置思考强度。','Default thinking is off. Select default to set reasoning effort.'));
     const history=!!get('Lrfu')?.checked;
     for(const key of ['LrfuLambda','LrfuTopFraction'])dependency(key,history,tr('先开启历史累计。','Enable LRFU history first.'));
@@ -515,14 +516,23 @@
   function render(p){
     // Migrate old templates in memory; only canonical fields are submitted.
     p={...p,SpeculativeMode:p.SpeculativeMode??(p.MtpEnabled===false?'none':Number(p.MtpDrafts)>0?'mtp':'none'),
-      DraftTokens:p.DraftTokens??p.MtpDrafts??4,DraftPolicy:p.DraftPolicy??(p.AdaptiveMtp?'adaptive':'fixed')};
+      DraftTokens:p.DraftTokens??p.MtpDrafts??(p.Backend==='polystrata'?2:4),DraftPolicy:p.DraftPolicy??(p.AdaptiveMtp?'adaptive':'fixed')};
     const legacyScoring=!p.QueryScorer&&('NoLrfu' in p||'LrfuLambda' in p||'LrfuTopFraction' in p);
     const scorer=p.QueryScorer||(legacyScoring&&(!p.NoLrfu||p.ScoreAggregation==='max'||'LrfuLambda' in p||'LrfuTopFraction' in p)?'meanq-cosine':'page-softmax');
     p={...p,QueryScorer:scorer,ScoreAggregation:p.ScoreAggregation??(scorer==='meanq-cosine'?'max':'mean'),
       GraphAlpha:p.GraphAlpha??(scorer==='meanq-cosine'?0:0.2),Lrfu:p.Lrfu??('NoLrfu' in p?!p.NoLrfu:scorer==='meanq-cosine'),
       QueryMaxTokens:p.QueryMaxTokens??512,QueryReplayMaxTokens:p.QueryReplayMaxTokens??2048};
     let refreshGpuOrder=()=>{};
-    const b=p.Backend,n=b==='ninfer',l=b==='llamacpp';
+    const b=p.Backend,n=b==='ninfer',l=b==='llamacpp',poly=b==='polystrata';
+    // Resolve the launcher's omitted values before rendering; keep explicit 0/false.
+    const concreteDefaults={Prefill:poly?512:defaults.Prefill,ThinkingBudget:0,Concurrency:1,VisionTokens:1024,NgramDrafts:0,NgramMinMatch:12,
+      DeviceProfile:'off',LogLevel:'info',QueryMaxTokens:512,ReplayMaxTokens:2048};
+    for(const [key,value] of Object.entries(concreteDefaults))if(p[key]===undefined||p[key]===null||p[key]==='')p[key]=value;
+    if(p.RetainedSessions===undefined||p.RetainedSessions===null||p.RetainedSessions==='')p.RetainedSessions=poly?Math.max(4,Number(p.Concurrency)+1):4;
+    if(!p.ThinkingMode||p.ThinkingMode==='default')p.ThinkingMode=n?'default':poly?(p.ReasoningEffort==='none'?'off':'on'):'off';
+    if(poly&&!p.ReasoningEffort)p.ReasoningEffort='medium';
+    if(poly&&p.PreserveThinking===undefined)p.PreserveThinking=true;
+    if(poly&&p.VramReserveMiB===undefined)p.VramReserveMiB=256;
     closeHelp();root.replaceChildren();
     const heading=make('div',{class:'l-heading l-page-heading'}),intro=make('div',{class:'l-intro'}),savedState=make('button',{type:'button',class:'l-save-state l-muted','data-draft-state':'','aria-live':'polite'});savedState.onclick=saveEditing;intro.append(make('h1',{},tr('启动配置','Launch configuration')),savedState);heading.append(intro);root.append(heading);
     const layout=make('div',{class:'l-layout'}),main=make('div',{class:'l-main'}),side=make('aside',{class:'l-side'});layout.append(main,side);root.append(layout);
@@ -585,8 +595,8 @@
       function sync(){
         for(const id of [...order,...info.gpus.map(g=>g.uuid).filter(id=>!order.includes(id))]){const option=options.get(id);gpu.append(option);option.selected=order.includes(id);}
         checks.forEach(check=>{check.checked=order.includes(check.dataset.gpuChoice);check.closest('label').classList.toggle('is-selected',check.checked);});
-        const singleOnly=l&&order.length>1;
-        const reason=singleOnly?tr('当前启动器对 llama.cpp 仅接入单卡。已保留原选择，请只勾选一张显卡后再启动。','This launcher currently exposes one GPU for llama.cpp. Your selection is retained; select just one GPU before starting.'):!order.length?tr('请至少选择一张显卡','Select at least one GPU'):'';
+        const singleOnly=(l||poly)&&order.length>1;
+        const reason=singleOnly?tr('当前后端仅接入单卡。已保留原选择，请只勾选一张显卡后再启动。','This backend currently exposes one GPU. Your selection is retained; select just one GPU before starting.'):!order.length?tr('请至少选择一张显卡','Select at least one GPU'):'';
         gpuLimit.textContent=reason;gpuLimit.hidden=!reason;gpuLimit.classList.toggle('l-error',singleOnly);
         checks[0].setCustomValidity(reason);choices.setAttribute('aria-invalid',String(!!reason));drawOrder();
       }
@@ -613,7 +623,7 @@
       help(kvTitle,tr('KV 格式','KV format'),tr('K 和 V 可分别选择：q8_0、q5_0、q4_0 可互配；f16、f32 可互配。浮点与量化不能混搭。','Choose K and V independently: q8_0, q5_0 and q4_0 can be combined; f16 and f32 can be combined. Floating-point and quantized types cannot be mixed.'));
       kvField.append(kvTitle,pair,make('p',{class:'l-muted l-error l-kv-status','data-kv-pair-status':'','aria-live':'polite',hidden:''}));panels[0].append(kvField);
     }else{
-      const kv=['int8','bf16','fp8','nvfp4','k8v4','rk8v4','rk4v4','rk4v4-e8','rk2v4-e8'];
+      const kv=poly?['f16','q8_0']:['int8','bf16','fp8','nvfp4','k8v4','rk8v4','rk4v4','rk4v4-e8','rk2v4-e8'];
       field(panels[0],{...p,KvType:p.KvType||kv[0]},'KvType','KV 格式','KV format','text',kv.map(v=>[v,v]));
     }
     // UI state only: the worker still receives the existing path/budget pair.
@@ -623,7 +633,8 @@
     const diskBudget=field(panels[0],{DiskMiB:4096,...p},'DiskMiB','SSD 缓存预算 · MiB','SSD cache budget · MiB','number');
     diskBudget.min='1';
     field(panels[0],p,'SinkTokens','保留开头 · tokens','Keep prefix · tokens','number');field(panels[0],p,'RecentTokens','保留最近 · tokens','Keep recent · tokens','number');
-    field(panels[0],p,'RetainedSessions','保留会话数量（可选）','Retained sessions (optional)','number',null,['保留的空闲会话数量，不含正在使用的会话','Idle sessions to retain; excludes active sessions']);
+    const retained=field(panels[0],{...p,RetainedSessions:poly?Math.max(0,p.RetainedSessions-1):p.RetainedSessions},'RetainedSessions','额外保留的空闲会话','Idle sessions to retain','number',null,['不含活动会话；PolyStrata 当前运行槽之外的历史保留目标，实际数量还受共享内存预算约束。','Excludes active sessions. Retention is also bounded by the shared memory budget.']);
+    if(poly){retained.dataset.idleSessions='true';retained.max='15';}
     const advanced=make('details',{class:'l-advanced'});advanced.append(make('summary',{},tr('高级 · 历史检索与保留策略','Advanced · History retrieval & retention')));const ag=make('div',{class:'l-fields'});advanced.append(ag);['SinkTokens','RecentTokens','RetainedSessions'].forEach(k=>{const el=panels[0].querySelector(`[data-param="${k}"]`);if(el)ag.append(el.closest('label'));});panels[0].append(advanced);
     const retrieval=make('section',{class:'l-retrieval l-wide','data-graph-recall':''});
     retrieval.append(make('h3',{class:'s-title'},tr('历史检索','History retrieval')));
@@ -639,32 +650,33 @@
     for(const [key,zh,en,note] of [['QueryMaxTokens','问题评分上限 · tokens','Query score limit · tokens',['仅使用当前问题末尾的这些 tokens 评分。','Score with at most this many trailing tokens of the current question.']],['QueryReplayMaxTokens','完整回放上限 · tokens','Causal replay limit · tokens',['超过上限时保持驻留视图并使用 Pressure；不会截断因果回放。','Above this limit, retain the resident view with Pressure; causal replay is not truncated.']]]){const limit=field(scoring,p,key,zh,en,'number',null,note);limit.min='1';limit.required=true;}
     advanced.append(retrieval);
     field(panels[1],p,'Prefill','预填充块大小 · tokens','Prefill chunk · tokens','number');
+    if(poly){const vram=field(panels[1],p,'VramReserveMiB','显存预留 · MiB','VRAM reserve · MiB','number',null,['原生引擎最低为 256 MiB；与生成追加空间的 token 预算分别设置。','Worker minimum: 256 MiB. Separate from the generation workspace measured in tokens.']);vram.min='256';vram.max='65536';}
     const layerSplit=field(panels[1],{...p,StageLayers:(p.StageLayers||[]).join(',')},'StageLayers','多卡层数分配（可选）','Layer split (optional)','text',null,[n?'依次对应上方第 1、2…张显卡，用逗号分隔；留空由后端分配':'当前接入暂不支持设置多卡层数',n?'Comma-separated counts for GPU 1, 2, … above; empty uses backend allocation':'Layer assignment is unavailable in this integration'],!n);
     layerSplit.addEventListener('input',refreshGpuOrder);refreshGpuOrder();
     const specModes=info.speculative_capabilities?.[b]||{none:{},...(n?{mtp:{max_draft_tokens:15,adaptive:true,ngram:true,max_concurrency:8,max_devices:8,draft_asset:'embedded'}}:{})};
     const specMode=field(panels[1],p,'SpeculativeMode','草稿方式','Draft method','text',[
       ['none',tr('关闭','Off')],['mtp','MTP'],['dflash2','DFlash2']
-    ],['需要模型支持。可用选项取决于后端、并发和显卡数量。','Requires model support. Availability depends on backend, concurrency and GPU count.']);
+    ],poly?['单请求执行可使用 MTP；进入批处理时使用普通生成。','MTP is available in solo execution; batches use ordinary decode.']:['需要模型支持。可用选项取决于后端、并发和显卡数量。','Requires model support. Availability depends on backend, concurrency and GPU count.']);
     for(const option of specMode.options)option.disabled=!specModes[option.value];
     const draftTokens=field(panels[1],p,'DraftTokens','草稿长度 · tokens','Draft length · tokens','number',null,
       ['主模型会验证草稿；实际长度还受草稿模型限制。DFlash2 首次选择使用 5。','The target verifies the drafts. The draft model can impose a smaller limit. DFlash2 starts at 5.']);
     draftTokens.min='1';
-    specMode.addEventListener('change',()=>{if(specMode.value==='dflash2')draftTokens.value='5';else if(specMode.value!=='none'&&Number(draftTokens.value)<=0)draftTokens.value='4';});
+    specMode.addEventListener('change',()=>{if(specMode.value==='dflash2')draftTokens.value='5';else if(specMode.value!=='none'&&Number(draftTokens.value)<=0)draftTokens.value=String(poly?2:4);});
     field(panels[1],p,'DraftPolicy','草稿长度策略','Draft length policy','text',[
       ['fixed',tr('固定','Fixed')],['adaptive',tr('自动调整','Adaptive')]
     ],['自动调整仅在后端和所选草稿方式支持时生效。','Adaptive mode applies only when supported by the backend and draft method.']);
     const draftModel=field(panels[1],p,'DraftModel','草稿模型 GGUF','Draft model GGUF','text',null,
-      ['llama.cpp 的 DFlash2 需要与主模型匹配的独立草稿文件；NInfer 使用模型内置草稿组件。','DFlash2 on llama.cpp requires a separate draft matching the target. NInfer uses an embedded draft component.'],n);
-    if(!n){const row=inputActions(draftModel),choose=make('button',{type:'button',class:'s-button l-secondary'},tr('选择文件','Choose file'));row.append(choose);choose.onclick=async()=>{try{const result=await api('browse-model',{backend:'llamacpp',current_path:draftModel.value});if(result.path){draftModel.value=result.path;draftModel.dispatchEvent(new Event('change',{bubbles:true}));}}catch(e){message(e.message,true);}};}
+      ['llama.cpp 的 DFlash2 需要与主模型匹配的独立草稿文件；NInfer 使用模型内置草稿组件。','DFlash2 on llama.cpp requires a separate draft matching the target. NInfer uses an embedded draft component.'],n||poly);
+    if(!n&&!poly){const row=inputActions(draftModel),choose=make('button',{type:'button',class:'s-button l-secondary'},tr('选择文件','Choose file'));row.append(choose);choose.onclick=async()=>{try{const result=await api('browse-model',{backend:'llamacpp',current_path:draftModel.value});if(result.path){draftModel.value=result.path;draftModel.dispatchEvent(new Event('change',{bubbles:true}));}}catch(e){message(e.message,true);}};}
     field(panels[1],p,'FastPrefill','启用快速预填充','Enable fast prefill','checkbox',null,['支持 int8、rk8v4、rk4v4、rk4v4-e8、rk2v4-e8；还需模型支持。与 MTP、普通预填充块大小分别设置。','Supports int8, rk8v4, rk4v4, rk4v4-e8 and rk2v4-e8; model support is also required. Independent of MTP and the standard prefill chunk size.'],!n);
     field(panels[2],p,'MaxTokens','默认最大输出 · tokens','Default output limit · tokens','number',null,['聊天请求可以覆盖默认输出预算。温度、top-p 等采样参数由聊天请求设置。','Chat requests can override the default output budget. Temperature, top-p and other sampling controls are set by chat requests.']);
-    const thinking=field(panels[2],{ThinkingMode:'default',...p},'ThinkingMode','默认思考模式','Default thinking mode','text',[['default',tr('沿用引擎 / 模型默认','Use engine / model default')],['on',tr('开启','On')],['off',tr('关闭','Off')]],n?['NInfer 启动参数支持默认与关闭；显式开启由聊天请求选择，仍需模型支持。','NInfer supports default/off at startup; explicit thinking-on belongs to chat requests and requires model support.']:['llama.cpp 当前默认关闭；开启仍需模型与模板支持。聊天请求可以覆盖此默认值。','llama.cpp currently defaults to off. Enabling requires model/template support; chat requests can override this default.']);
-    if(n){thinking.querySelector('[value=on]').disabled=true;thinking.querySelector('[value=on]').textContent=tr('开启 · 由聊天请求设置','On · Set by chat request');}
-    field(panels[2],p,'ThinkingBudget','默认思考预算（可选）','Default thinking budget (optional)','number',null,['限制思考阶段的 token 数；留空使用引擎默认值','Limits thinking tokens; leave empty for the engine default'],!n);
+    const thinking=field(panels[2],p,'ThinkingMode','默认思考模式','Default thinking mode','text',[[n?'default':'on',tr('开启','On')],['off',tr('关闭','Off')]],['需要模型与模板支持。聊天请求中的显式设置优先。','Requires model/template support. Explicit chat settings take priority.']);
+    const thinkingBudget=field(panels[2],p,'ThinkingBudget','默认思考预算 · tokens','Default thinking budget · tokens','number',null,poly?['0：根据输出上限自动给答案留空间；正数：思考 token 上限，也受总输出预算约束。','0: automatically reserve answer space within the output limit. Positive values cap reasoning tokens, subject to the total output budget.']:['0：不设置单独的思考限额，仍受总输出预算约束。正数：思考 token 上限。','0: no separate reasoning cap; the total output budget still applies. Positive values cap reasoning tokens.'],!n&&!poly);
+    if(n||poly){thinkingBudget.required=true;thinkingBudget.closest('label').append(make('small',{class:'l-muted'},poly?tr('0 = 自动给答案留空间','0 = automatically reserve answer space'):tr('0 = 不设置单独限额','0 = no separate cap')));}
     field(panels[2],p,'ReasoningEffort','默认思考强度（可选）','Default reasoning effort (optional)','text',[
-      ['',tr('沿用引擎 / 模型默认','Use engine / model default')],...['none','minimal','low','medium','high','xhigh','max'].map(x=>[x,x])
-    ],['NInfer 的默认思考强度，具体支持取决于模型；与思考 token 预算分别设置。','NInfer default reasoning effort; supported levels depend on the model. Separate from the thinking-token budget.'],!n);
-    field(panels[2],p,'PreserveThinking','保留历史思考','Preserve previous reasoning','checkbox',null,['在后续提示中保留已结束轮次的 assistant 思考内容。','Retain closed-turn assistant reasoning in later prompts.'],!n);
+      ...(!poly?[['',tr('不附加强度指令','No additional effort instruction')]]:[]),...(poly?['none','low','medium','high']:['none','minimal','low','medium','high','xhigh','max']).map(x=>[x,x])
+    ],['默认思考强度，具体支持取决于模型；与思考 token 预算分别设置。','Default reasoning effort; supported levels depend on the model. Separate from the thinking-token budget.'],!n&&!poly);
+    field(panels[2],p,'PreserveThinking','保留历史思考','Preserve previous reasoning','checkbox',null,poly?['保留客户端回传的已结束轮次思考；内置聊天页自动回传。不会按回答文本猜测或补回缺失思考。','Retain reasoning supplied by the client. Built-in chat sends it automatically; missing reasoning is never guessed from answer text.']:['在后续提示中保留已结束轮次的 assistant 思考内容。','Retain closed-turn assistant reasoning in later prompts.'],!n&&!poly);
     field(panels[3],p,'Vision','启用图像输入','Enable vision','checkbox',null,['需要模型及配套资源支持','Requires compatible model and resources'],l);
     field(panels[3],p,'VisionTokens','图像 token 上限（可选）','Image token limit (optional)','number',null,['开启图像输入时生效。','Applies when vision input is enabled.'],l);field(panels[3],{VisionResidency:'resident',...p},'VisionResidency','图像编码器存放位置','Vision encoder placement','text',[['resident','GPU'],['cpu','CPU']],['开启图像输入时生效；关闭后保留原选择。','Applies when vision input is enabled; the selection is retained when off.'],l);
     templateFileField(panels[3],p);
@@ -672,15 +684,19 @@
     const concurrency=field(panels[4],p,'Concurrency','同时处理的请求数（可选）','Simultaneous requests (optional)','number',null,n?['范围 1–8；留空为 1。并发增加会提高 KV 和显存需求。','Range 1–8; empty uses 1. More concurrent requests require more KV and VRAM.']:['范围 1–8；留空为 1。当前控制台使用单卡；并发增加会提高 KV 和显存需求。','Range 1–8; empty uses 1. This console uses one GPU; more concurrent requests require more KV and VRAM.']);concurrency.min='1';concurrency.max='8';
     credentialField(panels[4],p);
     const serviceAdvanced=make('details',{class:'l-advanced l-wide'});serviceAdvanced.append(make('summary',{},tr('高级 · 服务标识与日志','Advanced · Service identity & logs')));const serviceFields=make('div',{class:'l-fields l-service-fields'});serviceAdvanced.append(serviceFields);panels[4].append(serviceAdvanced);
-    field(serviceFields,p,'ModelAlias','对外模型名（可选）','Served model name (optional)','text',null,['供 API 客户端使用的稳定名称；留空沿用模型名称。','A stable name for API clients; leave empty to inherit the model name.']);
-    field(serviceFields,{LogLevel:'',...p},'LogLevel','日志级别','Log level','text',[['',tr('引擎默认 · Info','Engine default · Info')],['info','Info'],['debug','Debug'],['trace','Trace'],['warning','Warning'],['error','Error'],['off',tr('关闭日志','Off')]],['通常使用 Info；排查问题时可临时选择 Debug。','Use Info normally; select Debug temporarily for troubleshooting.']);
+    field(serviceFields,p,'ModelAlias','对外模型名（可选）','Served model name (optional)','text',null,poly?['供 API 客户端使用；留空使用 kvmem-polystrata-qwen35。','API model name; empty uses kvmem-polystrata-qwen35.']:['供 API 客户端使用的稳定名称；留空沿用模型名称。','A stable name for API clients; leave empty to inherit the model name.']);
+    field(serviceFields,p,'LogLevel','日志级别','Log level','text',[['info','Info'],['debug','Debug'],['trace','Trace'],['warning','Warning'],['error','Error'],['off',tr('关闭日志','Off')]],['通常使用 Info；排查问题时可临时选择 Debug。','Use Info normally; select Debug temporarily for troubleshooting.']);
     const native=make('details',{class:'s-card l-native'});native.append(make('summary',{},tr('引擎专属参数 · ','Engine-specific settings · ')+names[b]));const ng=make('div',{class:'l-fields'});native.append(ng);
-    if(n||l){
+    if(n||l||poly){
       const detected=info.workers?.[b];
       const worker=field(ng,p,'Worker','后端程序（可选）','Backend executable (optional)','text',null,
         detected?.available?['留空自动使用已检测到的后端程序：'+detected.path,'Leave empty to use the detected backend executable: '+detected.path]:['可将后端程序放在启动器同目录或 bin 目录，再重新打开控制台；也可直接填写程序路径','Place the backend executable beside the launcher or in bin, then reopen the console; or enter its path here']);
       worker.placeholder=detected?.available?detected.path:tr('请选择已安装的后端程序','Enter the installed backend executable');
       if(!detected?.available&&!p.Worker)worker.parentElement.append(make('small',{class:'l-unavailable'},tr('未检测到默认程序','No default executable detected')));
+    }
+    if(poly){
+      for(const [key,zh,en] of [['Tokenizer','tokenizer 目录（留空从模型自动准备）','Tokenizer directory (empty: prepare from model)'],['PolystrataSource','PolyStrata frontend 目录（可选）','PolyStrata frontend directory (optional)'],['Python','Python 程序（可选）','Python executable (optional)'],['VisionWorker','图像编码程序（可选）','Vision encoder (optional)'],['Mmproj','图像投影 GGUF（可选）','Vision projection GGUF (optional)']])field(ng,p,key,zh,en);
+      ng.append(make('p',{class:'l-muted'},tr('单卡原生 batch 共享专家计算；并发时普通解码，独占时可使用 1–3 个 MTP 草稿。','Native single GPU batches share expert computation. Batches use ordinary decode; solo execution can use 1–3 MTP drafts.')));
     }
     if(n){
       const ngram=field(ng,p,'NgramDrafts','N-gram 推测 token 数','N-gram draft tokens','number',null,['依赖支持 N-gram 的草稿方式；0 或留空关闭，1–63 启用。并发时后端可能缩小实际推测宽度。','Requires a draft method supporting N-gram. 0 or empty disables it; 1–63 enables it. The backend may reduce its width under concurrency.']);ngram.max='63';
@@ -697,9 +713,16 @@
     backend.onchange=()=>{
       try{
         const target=backend.value,previous=captureDraft();previous.parameters.Backend=b;perBackend[b]=previous;
-        const draft=structuredClone(perBackend[target]||{version:2,parameters:{...defaults,Backend:target}});
+        const draft=structuredClone(perBackend[target]||{version:2,parameters:{...defaults,Backend:target,Prefill:target==='polystrata'?512:defaults.Prefill}});
         const oldOrder=(draft.parameters.Gpu||'').split(',').filter(Boolean);
-        for(const key of sharedSettings)if(Object.hasOwn(previous.parameters,key))draft.parameters[key]=previous.parameters[key];
+        for(const key of sharedSettings){
+          // PolyStrata's measured default and explicit edits belong to its own draft.
+          if(key==='Prefill'&&(target==='polystrata'||b==='polystrata'))continue;
+          if(key==='RetainedSessions'&&Object.hasOwn(previous.parameters,key)){
+            draft.parameters[key]=previous.parameters[key]+(target==='polystrata'?1:0)-(b==='polystrata'?1:0);continue;
+          }
+          if(Object.hasOwn(previous.parameters,key))draft.parameters[key]=previous.parameters[key];
+        }
         const newOrder=(draft.parameters.Gpu||'').split(',').filter(Boolean),layers=draft.parameters.StageLayers||[];
         let layersCleared=false;
         if(oldOrder.join(',')!==newOrder.join(',')){
@@ -716,11 +739,14 @@
       }catch(e){backend.value=b;message(e.message,true);}
     };
     [save,preview,start,stop].forEach(button=>button.onclick=()=>act(button.dataset.action));
+    if(poly){
+      for(const key of ['LogLevel']){const input=root.querySelector(`[data-param=${key}]`);if(input){input.disabled=true;input.dataset.backendSupported='false';}}
+    }
     syncDependencies();
     updateStatus(runtime);
     draftStatus();
   }
-  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running;root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){const ready=status.state==='ready'&&!!status.url;chat.hidden=false;chat.setAttribute('aria-disabled',String(!ready));if(ready)chat.href=status.url+'/';else chat.removeAttribute('href');}renderLaunchProgress();}
+  function updateStatus(status){runtime=status;if(!status)return;window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running;root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){const ready=status.state==='ready'&&!!status.url;chat.hidden=false;chat.setAttribute('aria-disabled',String(!ready));if(ready)chat.href=status.url+'/' + (p?.Backend==='polystrata'?'?kvmem_ui=20261023-'+encodeURIComponent(status.pid||'ready'):'');else chat.removeAttribute('href');}renderLaunchProgress();}
   function renderLaunchProgress(){
     const box=root.querySelector('[data-launch-progress]');if(!box)return;
     const state=startPending?'preparing':launchFailure?'failed':runtime?.state;

@@ -135,11 +135,23 @@ class ConsoleTests(unittest.TestCase):
         script.parent.mkdir(parents=True)
         script.write_text("[ValidateSet('llamacpp', 'ninfer', 'strata', 'polystrata')][string]$Backend", encoding='utf-8')
         controller = console.Controller(folder, folder / 'state', 18199)
-        self.assertEqual(controller.backends, ['llamacpp', 'ninfer'])
-        for backend in ('strata', 'polystrata'):
+        self.assertEqual(controller.backends, ['llamacpp', 'ninfer', 'polystrata'])
+        for backend in ('strata',):
             bad = {'schema_version': 1, 'parameters': {'Backend': backend}}
             with self.assertRaises(ValueError):
                 console.normalize(bad, ['llamacpp', 'ninfer', 'strata', 'polystrata'])
+
+    def test_polystrata_uses_single_gpu_and_embedded_solo_mtp(self):
+        value={'schema_version':1,'parameters':{'Backend':'polystrata','KvType':'q8_0',
+               'SpeculativeMode':'mtp','DraftTokens':3,'Concurrency':4}}
+        self.assertEqual(console.normalize(value,['polystrata'])['parameters']['DraftTokens'],3)
+        thinking={**value['parameters'],'ThinkingMode':'on','ThinkingBudget':128,'ReasoningEffort':'high','PreserveThinking':True}
+        self.assertEqual(console.normalize({'schema_version':1,'parameters':thinking},['polystrata'])['parameters']['ThinkingBudget'],128)
+        for invalid in ({'DraftTokens':4},{'DraftModel':'draft.gguf'},{'DraftPolicy':'adaptive'},
+                        {'KvType':'int8'},{'Gpu':'GPU-12345678,GPU-87654321'},
+                        {'ReasoningEffort':'xhigh'},{'ThinkingMode':'on','ReasoningEffort':'none'}):
+            with self.subTest(invalid=invalid),self.assertRaises(ValueError):
+                console.normalize({'schema_version':1,'parameters':{**value['parameters'],**invalid}},['polystrata'])
 
     def test_draft_is_independent_and_survives_controller_restart(self):
         self.controller.save(self.config)

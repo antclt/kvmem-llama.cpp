@@ -19,5 +19,16 @@
     "patch": "backends/patches/ninfer-kvmem.patch",
     "patch_sha256": "bd2cd52553369c580111d92a980ddf2453ab5f5a7ae9d04eb66fda6a3ae89871",
     "patched_tree": "cfcab546bc5e4b6d5dafef60a3d4a4cdf0e37a03"
+  },
+  "polystrata": {
+    "path": "backends/polystrata",
+    "upstream": "https://github.com/VecSzn/PolyStrata.git",
+    "base_commit": "974552f562aecb3e86cdd2679e76e4515b52b9d2",
+    "license_file": "backends/polystrata/LICENSE",
+    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base",
+    "patch": "backends/patches/polystrata-kvmem.patch",
+    "patch_sha256": "17e6be34d55557fcd9b61daefd1d935f6e8c7339be1914031b1ffd288334b947",
+    "patched_tree": "b640f03f5abe6b6a1682ac8f4bcfdb409196e279",
+    "source_tag": "v0.1.45-poly.2"
   }
 }

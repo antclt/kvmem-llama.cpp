@@ -6,6 +6,8 @@
   font-display: swap;
   src: url("./outfit-latin-wght.woff2") format("woff2");
 }
+#app .s-speed-pair { display:flex; flex-wrap:wrap; gap:8px 20px; align-items:start; }
+#app .s-speed-pair > div { flex:1 1 auto; }
 #app {
   --s-bg: light-dark(#f9fafb, #0e1113);
   --s-surface: light-dark(#fff, #161a1d);

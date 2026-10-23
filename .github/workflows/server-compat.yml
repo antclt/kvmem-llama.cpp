@@ -59,6 +59,16 @@ jobs:
         run: |
           python3 scripts/prepare-backends.py --backend llamacpp
           python3 scripts/prepare-backends.py --backend llamacpp --check
+      - name: Validate PolyStrata integration patch and adapters
+        run: |
+          python3 scripts/prepare-backends.py --backend polystrata
+          python3 scripts/prepare-backends.py --backend polystrata --check
+          python3 -m pip install Jinja2==3.1.6 regex==2026.9.10
+          python3 -m unittest discover -s tools/polystrata -p test_wrapper.py
+          python3 -m unittest discover -s tools/polystrata -p test_assets.py
+          python3 -m unittest discover -s tools/polystrata -p test_monitor.py
+          python3 -m unittest discover -s tools/polystrata -p test_ui_contract.py
+          node ui/test-polystrata-contract.cjs
       - name: Configure host and model-free server tests
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

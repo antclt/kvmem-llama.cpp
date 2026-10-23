@@ -43,8 +43,8 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  console.log('PASS: English launch, saved-language override, picker/reload retention and URL preservation');
  const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base+'/monitor/');await page.locator('[data-param=Backend]').waitFor();
- assert.deepEqual(info.backends,['llamacpp','ninfer']);
- assert.deepEqual(await page.locator('[data-param=Backend] option').evaluateAll(items=>items.map(x=>x.value)),['llamacpp','ninfer']);
+ assert.deepEqual(info.backends,['llamacpp','ninfer','polystrata']);
+ assert.deepEqual(await page.locator('[data-param=Backend] option').evaluateAll(items=>items.map(x=>x.value)),['llamacpp','ninfer','polystrata']);
  assert.equal(await page.locator('[data-view=config]').isVisible(),true);
  if(info.gpus.length){
   const choices=page.locator('[data-gpu-choice]');
