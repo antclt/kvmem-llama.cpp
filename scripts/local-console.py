@@ -32,19 +32,19 @@ DEFAULTS = dict(Backend='ninfer', Model='', Worker='', Gpu='', Context=262144,
                 Budget=32768, Reserve=1024, HostMiB=16384, Prefill=128,
                 MaxTokens=1024, Port=18200, ListenHost='127.0.0.1',
                 SinkTokens=12288, RecentTokens=1024)
-STRINGS = {'Backend', 'Model', 'Worker', 'Gpu', 'ListenHost', 'KvType', 'KvTypeK', 'KvTypeV', 'DiskPath',
+STRINGS = {'Tokenizer','PolystrataSource','Python','VisionWorker','Mmproj','QueryScorer','Backend', 'Model', 'Worker', 'Gpu', 'ListenHost', 'KvType', 'KvTypeK', 'KvTypeV', 'DiskPath',
            'VisionResidency',
            'DeviceProfile', 'ScoreAggregation', 'QueryScorer', 'ApiKey', 'ModelAlias', 'LogLevel',
            'ChatTemplateFile', 'ThinkingMode', 'ReasoningEffort', 'SpeculativeMode', 'DraftPolicy', 'DraftModel'}
-INTEGERS = {'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
+INTEGERS = {'VramReserveMiB', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
             'MtpDrafts', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions',
             'VisionTokens', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'DiskMiB', 'DraftTokens',
-            'QueryMaxTokens', 'QueryReplayMaxTokens'}
+            'QueryMaxTokens', 'QueryReplayMaxTokens', 'ReplayMaxTokens'}
 BOOLEANS = {'AdaptiveMtp', 'FastPrefill', 'Vision', 'NoLrfu', 'Lrfu', 'PreserveThinking'}
 DECIMALS = {'LrfuLambda', 'LrfuTopFraction', 'GraphAlpha'}
 # Deliberately limited native escape hatch. Common options must not be duplicated.
 NATIVE = {'llamacpp': {'--threads', '--threads-batch', '--n-gpu-layers'},
-          'ninfer': {'--threads'}}
+          'ninfer': {'--threads'}, 'polystrata': {'--threads'}}
 
 
 def without_secrets(data):
@@ -114,8 +114,8 @@ def normalize(data, backends):
         raise ValueError('NInfer supports default/off at startup; thinking-on is selected by requests')
     if p.get('ReasoningEffort') not in (None, 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'):
         raise ValueError('Unsupported ReasoningEffort')
-    if p['Backend'] != 'ninfer' and {'ReasoningEffort', 'PreserveThinking'} & p.keys():
-        raise ValueError('ReasoningEffort and PreserveThinking configure NInfer only')
+    if p['Backend'] not in {'ninfer','polystrata'} and {'ReasoningEffort', 'PreserveThinking'} & p.keys():
+        raise ValueError('ReasoningEffort and PreserveThinking configure NInfer or PolyStrata only')
     if p.get('ThinkingMode') == 'off' and p.get('ReasoningEffort'):
         raise ValueError('ReasoningEffort conflicts with ThinkingMode off')
     if p['Backend'] != 'llamacpp' and {'KvTypeK', 'KvTypeV'} & p.keys():
@@ -158,6 +158,11 @@ def normalize(data, backends):
                 raise ValueError('DFlash2 requires DraftModel with a compatible GGUF')
             if draft and (Path(draft).suffix.lower() != '.gguf' or not Path(draft).is_file()):
                 raise ValueError('DraftModel must be an existing GGUF file')
+    if p['Backend']=='polystrata':
+        if p.get('KvType','f16') not in {'f16','q8_0'}: raise ValueError('PolyStrata KV format must be f16 or q8_0')
+        if ',' in p.get('Gpu',''): raise ValueError('PolyStrata currently supports one GPU')
+        if p.get('ReasoningEffort') not in (None,'none','low','medium','high'): raise ValueError('PolyStrata reasoning effort must be none, low, medium or high')
+        if p.get('ThinkingMode')=='on' and p.get('ReasoningEffort')=='none': raise ValueError('ThinkingMode conflicts with ReasoningEffort none')
     gpu = p.get('Gpu', '')
     if gpu and not all(re.fullmatch(r'GPU-[0-9a-fA-F-]{8,64}', x) for x in gpu.split(',')):
         raise ValueError('Select GPUs by UUID, separated by commas')
@@ -229,6 +234,10 @@ class Controller:
         if not match:
             raise ValueError('Cannot detect supported backends from start-backend.ps1')
         self.backends = [name for name in re.findall(r"'([^']+)'", match[1]) if name in NATIVE]
+        build_info=self.backend_root/'BUILD-INFO.json'
+        if build_info.is_file():
+            package=json.loads(build_info.read_text(encoding='utf-8-sig'))
+            if package.get('backend')=='polystrata': self.backends=[name for name in self.backends if name=='polystrata']
         self.launcher_query_contract = all(name in source for name in ('QueryScorer', 'GraphAlpha', 'QueryMaxTokens', 'QueryReplayMaxTokens'))
         profile_file = self.backend_root / 'scripts/speculative-capabilities.json'
         self.speculative_profiles = json.loads(profile_file.read_text(encoding='utf-8-sig')) if profile_file.is_file() else {}
@@ -331,7 +340,7 @@ class Controller:
                        for p in paths.values())):
             raise ValueError('Invalid worker-paths.json: map backend names to absolute executable paths')
         names = {'ninfer': ('ninfer-kvmem-server.exe', 'ninfer-serve.exe'),
-                 'llamacpp': ('llama-kvmem-server.exe',)}
+                 'llamacpp': ('llama-kvmem-server.exe',), 'polystrata':('strata-poly.exe',)}
         result = {}
         for backend in self.backends:
             if backend in paths:
@@ -352,7 +361,9 @@ class Controller:
     def draft(self):
         if self.draft_path.exists():
             return without_secrets(json.loads(self.draft_path.read_text(encoding='utf-8')))
-        return {'schema_version': 1, 'parameters': dict(DEFAULTS)}
+        backend = DEFAULTS['Backend'] if DEFAULTS['Backend'] in self.backends else self.backends[0]
+        return {'schema_version': 1, 'parameters': {**DEFAULTS, 'Backend': backend,
+                'Prefill': 512 if backend == 'polystrata' else DEFAULTS['Prefill']}}
 
     def save(self, data):
         clean = without_secrets(normalize(data, self.backends))
@@ -400,7 +411,9 @@ class Controller:
                                  cwd=self.backend_root,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
             if run.returncode:
-                raise ValueError(self.redact(run.stderr.strip()[-6000:] or run.stdout.strip()[-6000:]))
+                message = run.stderr.strip()[-6000:] or run.stdout.strip()[-6000:]
+                concise = re.search(r'\[KVMEM_CONFIG\]\s*([^\r\n]+)', message)
+                raise ValueError(self.redact(concise.group(1).strip() if concise else message))
             # PowerShell warnings may precede the JSON result.
             start = run.stdout.find('{')
             result = json.loads(run.stdout[start:])
@@ -408,10 +421,14 @@ class Controller:
             if not isinstance(argv, list) or not argv or any(not isinstance(x, str) or '\x00' in x for x in argv):
                 raise ValueError('Launcher returned invalid argv')
             if api_key:
-                argv.extend(['--api-key', api_key if reveal_secrets else '<redacted>'])
+                if params['Backend']=='polystrata':
+                    result.setdefault('environment',{})['STRATA_API_KEY']=api_key if reveal_secrets else '<redacted>'
+                else:
+                    argv.extend(['--api-key', api_key if reveal_secrets else '<redacted>'])
             result['warnings'] = self.redact(run.stdout[:start].strip())
-            result['worker'] = self.worker_capabilities(argv[0], params['Backend'])
-            result['resolved_scoring'] = self.scoring_from_argv(argv)
+            native_argv = result.get('native_argv', argv)
+            result['worker'] = self.worker_capabilities(native_argv[0], params['Backend'])
+            result['resolved_scoring'] = self.scoring_from_argv(native_argv)
             return result
         finally:
             Path(name).unlink(missing_ok=True)

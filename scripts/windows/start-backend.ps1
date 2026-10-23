@@ -1,9 +1,16 @@
 #Requires -Version 5.1
 [CmdletBinding(PositionalBinding=$false)]
 param(
-    [Parameter(Mandatory)][ValidateSet('llamacpp', 'ninfer')][string]$Backend,
+    [Parameter(Mandatory)][ValidateSet('llamacpp', 'ninfer', 'polystrata')][string]$Backend,
     [string]$Model,
     [string]$Worker,
+    [string]$Tokenizer,
+    [string]$PolystrataSource,
+    [string]$Python,
+    [string]$VisionWorker,
+    [string]$Mmproj,
+    [ValidateRange(256,65536)][int]$VramReserveMiB=256,
+    [ValidateRange(1,65536)][int]$ReplayMaxTokens=2048,
     [string]$Gpu = $env:CUDA_VISIBLE_DEVICES,
     [uint32[]]$StageLayers = @(),
     [ValidateRange(1, 65535)][int]$Port = 18200,
@@ -94,7 +101,19 @@ if ($Backend -eq 'ninfer') {
         throw 'KVMem disables legacy --lookup-ngram; use -NgramDrafts and -NgramMinMatch'
     }
 }
+if ($Backend -eq 'polystrata') {
+    $capabilities.supported_combinations=@{
+        text=@{architectures=@('qwen35moe');kv=@('f16','q8_0');max_concurrency=8;max_devices=1}
+        mtp=@{drafts=@(0..3);solo=$true;batch=$false;batch_fallback='ordinary_decode'}
+        storage=@{scope='process';shared_active_idle_quota=$true;ssd_persistence='process'}
+        query=@{scorers=@('page-softmax','meanq-cosine');bounded_replay=$true;tool_continuation='resident_pressure'}
+    }
+}
 if ($Describe) { $capabilities | ConvertTo-Json -Depth 4; return }
+if ($Backend -eq 'polystrata') {
+    & (Join-Path $PSScriptRoot 'start-polystrata.ps1') -Parameters $PSBoundParameters -Root $root -WorkerArgs $WorkerArgs
+    return
+}
 # Canonical settings take precedence over defaults, while conflicting explicit
 # aliases fail before the worker starts. Old saved MTP configurations still work.
 if (!$SpeculativeMode) { $SpeculativeMode = if ($MtpDrafts -gt 0) { 'mtp' } else { 'none' } }
