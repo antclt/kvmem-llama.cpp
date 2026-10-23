@@ -7,6 +7,22 @@
   import { normalizeHistory } from "./history";
   import { english } from "./labels";
   import { setMode } from "mode-watcher";
+  import {
+    Plus,
+    ArrowUp,
+    Square,
+    PanelLeft,
+    MoreHorizontal,
+    ChevronDown,
+    MessageSquare,
+    Download,
+    Copy,
+    Paperclip,
+    SlidersHorizontal,
+    Brain,
+    X,
+    Trash2,
+  } from "@lucide/svelte";
   type Row = any;
   let ctx = $state<Row>(null),
     conversations = $state<Row[]>([]),
@@ -57,6 +73,96 @@
     }
   }
   const plain = (v: any) => JSON.parse(JSON.stringify(v));
+  const modelLabel = (name: unknown) =>
+    typeof name === "string"
+      ? name
+          .split(/[\\/]/)
+          .pop()!
+          .replace(/\.gguf$/i, "")
+      : "";
+  const backendLabel = (name: string) =>
+    ({ llamacpp: "llama.cpp", ninfer: "NInfer", polystrata: "PolyStrata" })[
+      name
+    ] ||
+    name ||
+    "KVMem";
+  const historyGroups = $derived.by(() => {
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const week = new Date(today);
+    week.setDate(today.getDate() - 7);
+    const groups = ["今天", "昨天", "近七天", "更早"].map((label) => ({
+      label,
+      items: [] as Row[],
+    }));
+    for (const c of [...conversations].sort(
+      (a, b) => (b.lastModified || 0) - (a.lastModified || 0),
+    )) {
+      const time = Number(c.lastModified) || 0;
+      groups[
+        time >= +today ? 0 : time >= +yesterday ? 1 : time >= +week ? 2 : 3
+      ].items.push(c);
+    }
+    return groups.filter((group) => group.items.length);
+  });
+  function autosize(node: HTMLTextAreaElement, _value: string) {
+    const main = node.closest<HTMLElement>(".chat-main")!;
+    const composer = node.closest<HTMLElement>(".composer-wrap")!;
+    const header = main.querySelector<HTMLElement>(".chat-header")!;
+    let pending = 0;
+    const resize = () => {
+      pending = 0;
+      if (!node.isConnected) return;
+      node.style.height = "auto";
+      // Keep the action row visible even when the viewport gets shorter or
+      // notices/controls wrap. Long drafts scroll within the textarea.
+      const available =
+        main.clientHeight -
+        header.offsetHeight -
+        (composer.offsetHeight - node.offsetHeight) -
+        48;
+      const minimum = parseFloat(getComputedStyle(node).minHeight) || 56;
+      const maximum = Math.max(minimum, Math.min(200, available));
+      node.style.height = Math.min(node.scrollHeight, maximum) + "px";
+    };
+    const schedule = () => {
+      if (!pending) pending = requestAnimationFrame(resize);
+    };
+    const observer = new ResizeObserver(schedule);
+    for (const element of [main, header, composer]) observer.observe(element);
+    resize();
+    return {
+      update: () => {
+        void tick().then(schedule);
+      },
+      destroy: () => {
+        observer.disconnect();
+        cancelAnimationFrame(pending);
+      },
+    };
+  }
+  function disclosure(node: HTMLDetailsElement) {
+    const close = (event: PointerEvent) => {
+      if (!node.contains(event.target as Node)) node.open = false;
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && node.open) {
+        node.open = false;
+        node.querySelector("summary")?.focus();
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("pointerdown", close);
+    node.addEventListener("keydown", key);
+    return {
+      destroy() {
+        document.removeEventListener("pointerdown", close);
+        node.removeEventListener("keydown", key);
+      },
+    };
+  }
   const shown = (key: string) =>
     typeof value(key) === "number" ? Number(value(key).toFixed(6)) : value(key);
   function drawer(
@@ -304,11 +410,18 @@
       loading = false;
     }
   }
-  async function remove() {
-    if (!active || busy || !confirm(t("删除此对话？请先导出需要保留的记录。")))
+  async function remove(conversation: Row) {
+    if (
+      !conversation ||
+      busy ||
+      loading ||
+      !confirm(
+        conversation.name + "\n\n" + t("删除此对话？请先导出需要保留的记录。"),
+      )
+    )
       return;
-    await DB.deleteConversation(active.id);
-    await selectConversation(null);
+    await DB.deleteConversation(conversation.id);
+    if (active?.id === conversation.id) await selectConversation(null);
     await refreshHistory();
   }
   function navigate(page: string) {
@@ -466,6 +579,7 @@
           execution: {
             backend: ctx.backend,
             model: ctx.model,
+            displayModel: ctx.display_model,
             effective: Object.fromEntries(
               [
                 ...new Set([
@@ -521,6 +635,9 @@
         drawTimer = null;
       }
       if (reply) {
+        const follow =
+          scroll &&
+          scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 140;
         reply.autoOpen = false;
         reply.elapsedMs = Date.now() - live.started_at_ms;
         reply.firstTokenMs = live.first_token_at_ms
@@ -529,6 +646,7 @@
         persistReply();
         await writes;
         messages = messages.map((m) => (m.id === reply.id ? { ...reply } : m));
+        if (follow) await tick().then(() => bottom?.scrollIntoView());
       }
       try {
         await cancelRequest(requestId);
@@ -729,21 +847,44 @@
         <strong>{t("聊天历史")}</strong><button
           class="mobile-only"
           onclick={() => (historyOpen = false)}
-          aria-label={t("关闭面板")}>×</button
+          aria-label={t("关闭面板")}><X size={18} /></button
         >
       </div>
       <button
         class="s-primary new-chat"
         disabled={busy || loading}
-        onclick={() => selectConversation(null)}>＋ {t("新建对话")}</button
+        onclick={() => selectConversation(null)}
+        ><Plus size={17} /> {t("新建对话")}</button
       >
-      <nav>
-        {#each conversations as c (c.id)}<button
-            class:selected={active?.id === c.id}
-            disabled={busy || loading}
-            onclick={() => selectConversation(c)}
-            title={c.name}>{c.name}</button
-          >{/each}
+      <nav aria-label={t("聊天历史")}>
+        {#each historyGroups as group (group.label)}
+          <div class="history-group">
+            <span class="history-date">{t(group.label)}</span>
+            {#each group.items as c (c.id)}<div
+                class="history-row"
+                class:selected={active?.id === c.id}
+              >
+                <button
+                  class="history-item"
+                  aria-current={active?.id === c.id ? "page" : undefined}
+                  disabled={busy || loading}
+                  onclick={() => selectConversation(c)}
+                  title={c.name}>{c.name}</button
+                >
+                <details class="history-menu" use:disclosure>
+                  <summary
+                    aria-label={t("对话操作") + "：" + c.name}
+                    title={t("对话操作")}><MoreHorizontal size={17} /></summary
+                  >
+                  <div class="conversation-actions">
+                    <button disabled={busy || loading} onclick={() => remove(c)}
+                      ><Trash2 size={14} />{t("删除对话")}</button
+                    >
+                  </div>
+                </details>
+              </div>{/each}
+          </div>
+        {:else}<p class="history-empty">{t("对话会保存在这里")}</p>{/each}
       </nav>
       <div class="history-actions">
         <button
@@ -751,12 +892,13 @@
           onclick={() => {
             migrationOpen = !migrationOpen;
             historyOpen = false;
-          }}>{t("导入与备份")}</button
+          }}><Download size={15} />{t("导入与备份")}</button
         ><small>{t("历史仅保存在此浏览器")}</small>
       </div>
     </aside>
     <section
       class="chat-main"
+      class:empty={!messages.length && !migrationOpen}
       aria-label={t("聊天")}
       inert={historyOpen && mobile}
     >
@@ -765,21 +907,28 @@
           bind:this={historyButton}
           class="mobile-only"
           onclick={() => (historyOpen = true)}
-          aria-label={t("聊天历史")}>☰</button
+          aria-label={t("聊天历史")}><PanelLeft size={18} /></button
         >
-        <div>
-          <strong>{ctx?.model || t("尚未启动模型")}</strong><small
-            >{ctx?.backend || "KVMem"}{#if ctx?.context}
+        <div class="model-heading">
+          <strong title={ctx?.display_model || ctx?.model}
+            >{modelLabel(ctx?.display_model || ctx?.model) ||
+              t("尚未启动模型")}</strong
+          ><small
+            >{backendLabel(ctx?.backend)}{#if ctx?.context}
               · {Number(ctx.context).toLocaleString()} {t("上下文")}{/if}</small
           >
         </div>
-        <span class="s-badge"
+        <span
+          class="chat-state"
+          class:ready={ctx?.state === "ready"}
+          class:working={busy}
           >{t(
             busy ? "生成中" : ctx?.state === "ready" ? "就绪" : "未就绪",
           )}</span
         ><button
           onclick={() => (settingsOpen = true)}
-          disabled={busy || ctx?.state !== "ready"}>{t("参数")}</button
+          disabled={busy || ctx?.state !== "ready"}
+          ><SlidersHorizontal size={15} />{t("参数")}</button
         >
       </header>
       <div class="chat-scroll" bind:this={scroll}>
@@ -813,8 +962,17 @@
             >
           </section>{/if}
         {#if !messages.length}<div class="welcome">
+            <div class="welcome-mark" aria-hidden="true">
+              <MessageSquare size={26} strokeWidth={1.5} />
+            </div>
             <h1>{t("开始一次对话")}</h1>
-            <p>{t("本地模型，统一的聊天与监控体验")}</p>
+            <p>
+              {t(
+                ctx?.state === "ready"
+                  ? "从一个问题、一个想法或一段代码开始。"
+                  : "启动本地模型，即可开始聊天。",
+              )}
+            </p>
             {#if ctx?.state !== "ready"}<button
                 onclick={() => navigate("config")}>{t("前往启动配置")}</button
               >{/if}
@@ -822,7 +980,11 @@
         <div class="messages">
           {#each messages as m (m.id)}<article class:user={m.role === "user"}>
               <div class="role">
-                {m.role === "user" ? t("你") : m.execution?.model || "KVMem"}
+                {m.role === "user"
+                  ? t("你")
+                  : modelLabel(
+                      m.execution?.displayModel || m.execution?.model,
+                    ) || "KVMem"}
               </div>
               {#if m.reasoningContent}<details
                   class="thinking"
@@ -834,10 +996,15 @@
                       m.thinkOpen = !(m.thinkOpen ?? m.autoOpen ?? false);
                       messages = [...messages];
                     }}
-                    >{t(
-                      "思考",
-                    )}{#if m.uiStatus === "pending" && live?.state === "thinking"}
-                      · {t("进行中")}{/if}</summary
+                    ><Brain size={15} /><span
+                      >{t(
+                        m.uiStatus === "pending" && live?.state === "thinking"
+                          ? "思考中"
+                          : m.uiStatus === "complete" || m.finishReason
+                            ? "思考过程"
+                            : "思考",
+                      )}</span
+                    ><ChevronDown size={14} class="thinking-chevron" /></summary
                   >{#if m.thinkOpen ?? m.autoOpen ?? false}<div
                       class="reasoning"
                     >
@@ -857,17 +1024,25 @@
               {#if m.role === "assistant" && m.uiStatus !== "pending"}<footer
                   class="message-footer"
                 >
-                  <span>{finish(m)}</span>{#if speed(m)}<span
-                      >{t("平均")} {speed(m)} tok/s</span
-                    >{/if}{#if m.timings?.predicted_n ?? m.usage?.completion_tokens}<span
-                      >{m.timings?.predicted_n ?? m.usage?.completion_tokens} token</span
-                    >{/if}<button onclick={() => copy(m.content)}
-                    >{t("复制")}</button
-                  ><button
-                    onclick={() =>
-                      download(m.content, "answer.md", "text/markdown")}
-                    >{t("下载")}</button
-                  >
+                  <div class="message-meta">
+                    <span
+                      class:finish-warning={m.uiStatus === "error" ||
+                        m.uiStatus === "interrupted" ||
+                        m.finishReason === "length"}>{finish(m)}</span
+                    >{#if speed(m)}<span>{t("平均")} {speed(m)} tok/s</span
+                      >{/if}{#if m.timings?.predicted_n ?? m.usage?.completion_tokens}<span
+                        >{m.timings?.predicted_n ?? m.usage?.completion_tokens} token</span
+                      >{/if}
+                  </div>
+                  <div class="message-actions">
+                    <button onclick={() => copy(m.content)} title={t("复制")}
+                      ><Copy size={14} />{t("复制")}</button
+                    ><button
+                      onclick={() =>
+                        download(m.content, "answer.md", "text/markdown")}
+                      ><Download size={14} />{t("下载")}</button
+                    >
+                  </div>
                   <details>
                     <summary>{t("详情")}</summary>
                     <div class="message-details">
@@ -909,7 +1084,7 @@
           </div>{/if}{#if notice}<div class="chat-notice" role="status">
             {notice}<button
               onclick={() => (notice = "")}
-              aria-label={t("关闭面板")}>×</button
+              aria-label={t("关闭面板")}><X size={16} /></button
             >
           </div>{/if}
         {#if busy}<div class="live-line" role="status">
@@ -919,9 +1094,9 @@
                 : live?.state === "answering"
                   ? "输出正文"
                   : "等待首个输出",
-            )} · {((now - (live?.started_at_ms || now)) / 1000).toFixed(
-              0,
-            )}s{#if live?.metrics?.decode_tps}<span
+            )} · {(
+              Math.max(0, now - (live?.started_at_ms || now)) / 1000
+            ).toFixed(0)}s{#if live?.metrics?.decode_tps}<span
                 >{t("实时")} {live.metrics.decode_tps.toFixed(1)} tok/s</span
               >{/if}{#if live?.metrics?.decode_tps_mean}<span
                 >{t("平均")}
@@ -930,27 +1105,6 @@
               >{t("查看监控")}</button
             >
           </div>{/if}
-        <div class="quick-controls">
-          <button
-            onclick={() => (settingsOpen = true)}
-            disabled={busy || ctx?.state !== "ready"}
-            >{t("思考")}：{value("enable_thinking") == null
-              ? t("未报告")
-              : value("enable_thinking")
-                ? t("开启")
-                : t(
-                    "关闭",
-                  )}{#if value("enable_thinking") && value("reasoning_effort")}
-              · {value("reasoning_effort")}{/if}</button
-          >{#if value("reasoning_budget_tokens") != null}<span
-              >{t("预算")}
-              {value("reasoning_budget_tokens") === -1
-                ? t("不限（-1）")
-                : value("reasoning_budget_tokens")}</span
-            >{/if}{#if Object.keys(overrides).length}<span class="changed"
-              >{t("本对话已修改")} {Object.keys(overrides).length}</span
-            >{/if}
-        </div>
         <form
           onsubmit={(e) => {
             e.preventDefault();
@@ -966,10 +1120,11 @@
             </div>{/if}<textarea
             aria-label={t("消息输入")}
             bind:value={input}
+            use:autosize={input}
             oninput={() => set(draftKey(), input)}
             disabled={loading || busy}
-            placeholder={t("输入消息，Enter 发送，Shift+Enter 换行")}
-            rows="2"
+            placeholder={t("输入消息…")}
+            rows="1"
             onkeydown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
                 e.preventDefault();
@@ -985,9 +1140,13 @@
             }}
           ></textarea>
           <div class="compose-actions">
-            <div>
-              {#if ctx?.capabilities?.vision}<label class="button"
-                  >＋ {t("图片")}<input
+            <div class="quick-controls">
+              {#if ctx?.capabilities?.vision}<label
+                  class="button"
+                  title={t("图片")}
+                  ><Paperclip size={17} /><span class="sr-only"
+                    >{t("图片")}</span
+                  ><input
                     type="file"
                     accept="image/png,image/jpeg,image/webp,image/gif"
                     multiple
@@ -997,29 +1156,67 @@
                       e.currentTarget.value = "";
                     }}
                   /></label
-                >{/if}{#if active}<button
+                >{/if}<button
+                type="button"
+                class="thinking-control"
+                onclick={() => (settingsOpen = true)}
+                disabled={busy || ctx?.state !== "ready"}
+                ><Brain size={15} />{t("思考")}：{value("enable_thinking") ==
+                null
+                  ? t("未报告")
+                  : value("enable_thinking")
+                    ? t("开启")
+                    : t(
+                        "关闭",
+                      )}{#if value("enable_thinking") && value("reasoning_effort")}<span
+                    class="effort">· {value("reasoning_effort")}</span
+                  >{/if}</button
+              >
+              {#if value("reasoning_budget_tokens") != null}<span
+                  class="thinking-budget"
+                  >{t("预算")}
+                  {value("reasoning_budget_tokens") === -1
+                    ? t("不限（-1）")
+                    : value("reasoning_budget_tokens")}</span
+                >{/if}
+              {#if Object.keys(overrides).length}<button
                   type="button"
-                  class="muted"
+                  class="changed"
                   disabled={busy}
-                  onclick={remove}>{t("删除对话")}</button
+                  onclick={() => (settingsOpen = true)}
+                  title={t("本对话已修改")}
+                  aria-label={t("本对话已修改") +
+                    " " +
+                    Object.keys(overrides).length}
+                  ><SlidersHorizontal size={13} />{Object.keys(overrides)
+                    .length}</button
                 >{/if}
             </div>
-            <div>
-              {#if busy}<button type="button" class="stop" onclick={stop}
-                  >■ {t("停止生成")}</button
+            <div class="send-actions">
+              {#if busy}<button
+                  type="button"
+                  class="stop"
+                  onclick={stop}
+                  aria-label={t("停止生成")}
+                  title={t("停止生成")}
+                  ><Square size={14} fill="currentColor" /></button
                 >{:else}{#if messages.at(-1)?.finishReason === "length" || messages.at(-1)?.uiStatus === "interrupted"}<button
                     type="button"
                     onclick={() => send(true)}>{t("续写（新请求）")}</button
                   >{/if}<button
                   type="submit"
                   class="s-primary"
+                  aria-label={t("发送")}
+                  title={t("发送")}
                   disabled={loading ||
                     ctx?.state !== "ready" ||
-                    (!input.trim() && !images.length)}>{t("发送")} ↑</button
+                    (!input.trim() && !images.length)}
+                  ><ArrowUp size={19} /></button
                 >{/if}
             </div>
           </div>
         </form>
+        <div class="composer-hint">{t("Enter 发送 · Shift+Enter 换行")}</div>
       </div>
     </section>
   </div>
@@ -1041,7 +1238,7 @@
       <header>
         <strong>{t("生成与思考")}</strong><button
           onclick={() => (settingsOpen = false)}
-          aria-label={t("关闭面板")}>×</button
+          aria-label={t("关闭面板")}><X size={16} /></button
         >
       </header>
       <div class="settings-body">
@@ -1159,9 +1356,13 @@
     --code-background: var(--s-surface);
     --code-foreground: var(--s-ink);
   }
+  #app[data-theme] {
+    background-image: none;
+  }
   .chat-shell {
+    --chat-width: 880px;
     display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-columns: 232px minmax(0, 1fr);
     height: 100%;
     font-family: var(--s-font);
   }
@@ -1188,7 +1389,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 7px;
   }
   button:hover:not(:disabled),
   .button:hover:not(:has(input:disabled)) {
@@ -1207,20 +1408,28 @@
     outline: 2px solid var(--s-info);
     outline-offset: 2px;
   }
-  .new-chat {
-    min-height: 38px;
-  }
-  small,
-  .muted {
+  small {
     color: var(--s-muted);
   }
   a {
     color: var(--s-info);
   }
+  :global(#app svg.lucide) {
+    flex-shrink: 0;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   aside {
     background: var(--s-surface);
-    border-right: 1px solid var(--s-line);
-    padding: 18px 14px;
+    border-right: 1px solid var(--s-line-soft);
+    padding: 20px 14px 16px;
     display: flex;
     flex-direction: column;
     gap: 18px;
@@ -1230,230 +1439,376 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 14px;
+    font-size: 13px;
+    color: var(--s-muted);
+  }
+  .side-head strong {
+    font-weight: 500;
+  }
+  .new-chat {
+    min-height: 38px;
   }
   aside nav {
     overflow: auto;
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    min-height: 0;
+    scrollbar-width: thin;
   }
-  aside nav button {
+  .history-group + .history-group {
+    margin-top: 20px;
+  }
+  .history-date {
     display: block;
+    padding: 0 10px 8px;
+    color: var(--s-muted);
+    font-size: 11px;
+  }
+  .history-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 30px;
+    align-items: center;
+    margin-bottom: 3px;
+    border-radius: 8px;
+  }
+  .history-row:hover,
+  .history-row:focus-within {
+    background: var(--s-soft);
+  }
+  .history-row.selected {
+    background: color-mix(in srgb, var(--s-info) 11%, var(--s-surface));
+  }
+  #app .history-item {
+    display: block;
+    min-width: 0;
+    min-height: 38px;
     text-align: left;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     background: transparent;
-    border-color: transparent;
-    min-height: 38px;
-    flex-shrink: 0;
+    border: 0;
+    padding: 9px 10px;
+    font-weight: 400;
   }
-  aside nav button.selected {
-    background: var(--s-info-tint);
+  #app .selected .history-item {
     color: var(--s-info-text);
-    border-color: var(--s-info);
-    font-weight: 600;
+    font-weight: 500;
   }
-  aside nav button:not(.selected):hover:not(:disabled) {
-    background: var(--s-soft);
-    border-color: var(--s-line);
+  .history-menu {
+    display: contents;
+  }
+  .history-menu summary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    min-height: 32px;
+    cursor: pointer;
+    border-radius: 5px;
+    color: var(--s-muted);
+  }
+  summary {
+    cursor: pointer;
+  }
+  .history-menu summary,
+  .thinking summary,
+  .message-footer summary {
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  .conversation-actions {
+    grid-column: 1 / -1;
+    padding: 4px 6px 7px;
+    border-top: 1px solid var(--s-line-soft);
+  }
+  #app .conversation-actions button {
+    width: 100%;
+    justify-content: flex-start;
+    color: var(--s-error-text);
+    border: 0;
+    font-size: 12px;
+  }
+  .history-empty {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--s-muted);
+    padding: 0 10px;
   }
   .history-actions {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 9px;
+    padding-top: 12px;
+    border-top: 1px solid var(--s-line-soft);
+  }
+  #app .history-actions button {
+    justify-content: flex-start;
+    border: 0;
+    color: var(--s-muted);
   }
   .history-actions small {
     font-size: 11px;
-    text-align: center;
+    padding: 0 12px;
   }
   .chat-main {
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    background: var(--s-bg);
   }
   .chat-header {
     display: flex;
     gap: 14px;
     align-items: center;
-    min-height: 72px;
-    border-bottom: 1px solid var(--s-line);
-    padding: 12px 24px;
-    background: var(--s-surface);
+    min-height: 60px;
+    border-bottom: 1px solid var(--s-line-soft);
+    padding: 10px 24px;
   }
-  .chat-header > div {
+  .model-heading {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
   }
-  .chat-header strong {
+  .model-heading strong {
     font-size: 14px;
-    display: block;
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .chat-header small {
-    font-size: 12px;
+  .model-heading small {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .chat-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--s-muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .chat-state::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--s-muted);
+  }
+  .chat-state.ready::before {
+    background: var(--s-accent);
+  }
+  .chat-state.working {
+    color: var(--s-info-text);
   }
   .chat-scroll {
     overflow: auto;
     flex: 1;
     min-height: 0;
-    padding: 20px 30px;
-    scrollbar-gutter: stable;
+    padding: 30px 32px 12px;
+    scrollbar-gutter: stable both-edges;
   }
   .messages,
   .welcome,
   .migration {
-    max-width: 900px;
-    margin: auto;
+    max-width: var(--chat-width);
+    width: 100%;
+    margin: 0 auto;
   }
   .welcome {
-    padding: 10vh 0;
     text-align: center;
+    padding: 28px 0;
+  }
+  .welcome-mark {
+    width: 48px;
+    height: 48px;
+    display: grid;
+    place-items: center;
+    margin: 0 auto 20px;
+    border-radius: 16px;
+    background: var(--s-surface);
+    color: var(--s-info-text);
   }
   .welcome h1 {
-    font-size: 26px;
-    font-weight: 650;
+    font-size: clamp(24px, 2.5vw, 30px);
+    font-weight: 600;
+    letter-spacing: -0.035em;
   }
   .welcome p {
     font-size: 14px;
     color: var(--s-muted);
-    margin: 12px 0 24px;
+    margin: 12px 0 20px;
+    line-height: 1.7;
+  }
+  .empty .chat-scroll {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .empty .composer-wrap {
+    padding-bottom: clamp(32px, 18vh, 190px);
   }
   article {
-    margin: 0 0 24px;
-    padding: 12px 16px;
+    margin: 0 0 32px;
+    padding: 0;
     overflow-wrap: anywhere;
     min-width: 0;
+    font-size: 15px;
+    line-height: 1.8;
   }
   article.user {
+    width: fit-content;
+    max-width: 86%;
+    margin-left: auto;
     background: var(--s-soft);
-    border: 1px solid var(--s-line-soft);
-    border-radius: 14px;
-    margin-left: 8%;
+    border-radius: 16px 16px 4px 16px;
+    padding: 12px 18px;
+  }
+  article.user .role {
+    display: none;
   }
   .role {
     font-size: 12px;
+    font-weight: 500;
     color: var(--s-muted);
-    margin-bottom: 8px;
+    margin-bottom: 12px;
   }
   .user-text,
   .reasoning {
     white-space: pre-wrap;
   }
-  .reasoning {
-    font-size: 13px;
-    line-height: 1.65;
-    color: var(--s-muted);
-    max-height: 340px;
-    overflow: auto;
-    padding: 0 12px 12px;
-    margin: 0 12px 12px;
-    border-left: 2px solid var(--s-info);
-  }
   .thinking {
-    margin-bottom: 10px;
-    border: 1px solid var(--s-line);
-    border-radius: 8px;
-    background: var(--s-soft);
+    margin: 0 0 14px;
   }
   .thinking summary {
-    font-size: 13px;
+    display: flex;
+    align-items: center;
+    width: fit-content;
+    gap: 8px;
+    font-size: 12px;
     color: var(--s-muted);
-    cursor: pointer;
-    padding: 10px 12px;
+    padding: 5px 2px;
+    border-radius: 5px;
+  }
+  .thinking summary:hover {
+    color: var(--s-ink);
+  }
+  .thinking :global(.thinking-chevron) {
+    transition: transform 0.15s ease;
+  }
+  .thinking[open] :global(.thinking-chevron) {
+    transform: rotate(180deg);
+  }
+  .reasoning {
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--s-muted);
+    max-height: 320px;
+    overflow: auto;
+    padding: 4px 16px;
+    margin: 10px 0 0 8px;
+    border-left: 1px solid var(--s-line);
   }
   .attachment {
     max-width: min(320px, 100%);
     max-height: 240px;
-    border-radius: 8px;
+    border-radius: 10px;
     margin: 8px 0;
   }
   .message-footer {
     display: flex;
-    gap: 10px;
     flex-wrap: wrap;
     align-items: center;
-    margin-top: 12px;
-    font-size: 12px;
+    gap: 8px 14px;
+    margin-top: 16px;
     color: var(--s-muted);
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .message-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .message-meta > span + span::before {
+    content: "·";
+    margin-right: 12px;
+    color: var(--s-muted);
+  }
+  .finish-warning {
+    color: var(--s-warn-text);
+  }
+  .message-actions {
+    display: flex;
+    gap: 3px;
   }
   #app .message-footer button {
     border: 0;
-    background: transparent;
     color: var(--s-muted);
-    font-size: 12px;
+    font-size: 11px;
     min-height: 28px;
     padding: 3px 6px;
+    gap: 5px;
   }
   #app .message-footer button:hover {
     background: var(--s-soft);
     color: var(--s-ink);
   }
   .message-footer details {
-    flex-basis: 100%;
+    display: contents;
+  }
+  .message-footer summary {
+    padding: 4px 2px;
+    border-radius: 4px;
+  }
+  .message-footer summary:hover {
+    color: var(--s-ink);
   }
   .message-details {
-    padding: 10px;
-    line-height: 1.8;
-    background: var(--s-soft);
+    flex-basis: 100%;
+    padding: 12px 14px;
+    line-height: 1.9;
+    background: var(--s-surface);
     overflow-wrap: anywhere;
-    border: 1px solid var(--s-line);
-    border-radius: 8px;
-    margin-top: 8px;
-  }
-  summary {
-    cursor: pointer;
+    border: 1px solid var(--s-line-soft);
+    border-radius: 10px;
   }
   .composer-wrap {
-    padding: 8px 28px 18px;
-    max-width: 1000px;
+    padding: 10px 32px 12px;
     width: 100%;
-    margin: auto;
-  }
-  .quick-controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 0 0 8px;
-    font-size: 12px;
-    color: var(--s-muted);
-  }
-  .quick-controls button {
-    font-size: 12px;
-    padding: 5px 9px;
-  }
-  .changed {
-    color: var(--s-info-text);
+    max-width: calc(var(--chat-width) + 64px);
+    margin: 0 auto;
   }
   form {
     border: 1px solid var(--s-line);
-    border-radius: 14px;
+    border-radius: 18px;
     background: var(--s-surface);
-    box-shadow: var(--s-shadow);
     overflow: hidden;
+    transition: border-color 0.15s;
   }
   form:focus-within {
-    border-color: var(--s-info);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--s-info) 15%, transparent);
+    border-color: color-mix(in srgb, var(--s-info) 65%, var(--s-line));
   }
   textarea {
     resize: none;
     display: block;
     width: 100%;
-    min-height: 72px;
-    max-height: 180px;
-    padding: 14px 16px;
+    min-height: 58px;
+    max-height: 200px;
+    padding: 16px 18px 10px;
     border: 0;
     background: transparent;
-    font-size: 14px;
-    line-height: 1.55;
+    font-size: 15px;
+    line-height: 1.7;
+    overflow-y: auto;
   }
-  /* The composer owns the focus indicator; reset the forms plugin's inner ring. */
   #app textarea:focus {
     outline: 0;
     box-shadow: none;
@@ -1464,12 +1819,55 @@
   .compose-actions {
     display: flex;
     justify-content: space-between;
+    align-items: flex-end;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 4px 10px 10px;
   }
-  .compose-actions > div {
+  .quick-controls {
     display: flex;
-    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px 8px;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--s-muted);
+  }
+  #app .quick-controls button,
+  #app .quick-controls .button {
+    font-size: 12px;
+    padding: 5px 7px;
+    border: 0;
+    color: var(--s-muted);
+    gap: 5px;
+  }
+  #app .quick-controls button:hover {
+    color: var(--s-ink);
+  }
+  .thinking-budget {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  #app .quick-controls .changed {
+    color: var(--s-info-text);
+  }
+  .send-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 6px;
+  }
+  .send-actions .s-primary,
+  .send-actions .stop {
+    width: 36px;
+    min-height: 36px;
+    padding: 0;
+    border-radius: 10px;
+  }
+  .composer-hint {
+    text-align: right;
+    padding: 8px 4px 0;
+    font-size: 10px;
+    color: var(--s-muted);
   }
   .button input {
     position: absolute;
@@ -1493,16 +1891,14 @@
     border-color: var(--s-error-text);
     background: var(--s-error-tint);
   }
-  #app button.muted {
-    color: var(--s-muted);
-  }
   .chat-error,
   .chat-notice {
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-size: 13px;
-    margin-bottom: 8px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    font-size: 12px;
+    margin-bottom: 10px;
     overflow-wrap: anywhere;
+    line-height: 1.6;
   }
   .chat-error {
     background: var(--s-error-tint);
@@ -1512,41 +1908,47 @@
     background: var(--s-info-tint);
     color: var(--s-info-text);
     display: flex;
+    align-items: center;
     justify-content: space-between;
+    gap: 8px;
   }
   .chat-notice button {
     padding: 0 6px;
     background: transparent;
     border: 0;
+    min-height: 26px;
   }
   .live-line {
     display: flex;
     align-items: center;
-    gap: 10px;
-    font-size: 12px;
+    gap: 8px;
+    font-size: 11px;
     color: var(--s-muted);
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     flex-wrap: wrap;
+    font-variant-numeric: tabular-nums;
   }
   .live-line button {
     margin-left: auto;
     font-size: 11px;
     padding: 3px 6px;
+    min-height: 28px;
+    border: 0;
   }
   .pulse {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--s-accent);
   }
   .attachments {
-    padding: 8px;
+    padding: 10px 12px 0;
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
   .migration {
-    margin-bottom: 20px !important;
+    margin-bottom: 24px;
     font-size: 13px;
   }
   .migration p {
@@ -1677,52 +2079,141 @@
     border-top: 1px solid var(--s-line);
     padding-top: 10px;
   }
+  :global(#app .markdown-content :is(td, th)) {
+    font-family: var(--s-font);
+    font-size: 13px;
+    line-height: 1.65;
+    padding: 10px 12px;
+  }
+  :global(#app .markdown-content .table-wrapper) {
+    margin: 18px 0;
+    border: 1px solid var(--s-line-soft);
+    border-radius: 10px;
+  }
+  :global(#app .markdown-content table:hover) {
+    box-shadow: none;
+  }
+  :global(#app .markdown-content blockquote),
+  :global(#app .markdown-content blockquote:hover) {
+    margin: 18px 0;
+    padding: 3px 16px;
+    border-left: 2px solid var(--s-line);
+    border-radius: 0;
+    background: transparent;
+    font-style: normal;
+    color: var(--s-muted);
+    transform: none;
+    transition: none;
+  }
+  :global(#app .markdown-content blockquote::before),
+  :global(#app .markdown-content hr::after) {
+    content: none;
+  }
+  :global(#app .markdown-content hr) {
+    height: 1px;
+    background: var(--s-line-soft);
+    margin: 24px 0;
+  }
+
   .mobile-only {
     display: none;
   }
   #app[data-density="compact"] aside {
-    padding: 12px;
-    gap: 12px;
+    padding: 16px 12px 12px;
+    gap: 14px;
   }
   #app[data-density="compact"] .chat-header {
-    min-height: 58px;
-    padding: 8px 20px;
+    min-height: 54px;
+    padding: 8px 24px;
   }
   #app[data-density="compact"] .chat-scroll {
-    padding: 14px 24px;
+    padding-top: 22px;
   }
   #app[data-density="compact"] article {
-    margin-bottom: 16px;
-    padding: 10px 12px;
+    margin-bottom: 24px;
   }
   #app[data-density="compact"] .composer-wrap {
-    padding-bottom: 12px;
+    padding-top: 8px;
   }
-  :global(#app .chat-main pre) {
+  :global(#app .markdown-content) {
+    font-size: 15px;
+    line-height: 1.8;
+    color: var(--s-ink);
+  }
+  :global(#app .markdown-content p) {
+    margin-block: 0.85em;
+  }
+  :global(#app .markdown-content :is(h1, h2, h3, h4)) {
+    line-height: 1.4;
+    letter-spacing: -0.015em;
+    margin-top: 1.4em;
+    margin-bottom: 0.65em;
+  }
+  :global(#app .markdown-content h1) {
+    font-size: 1.55em;
+  }
+  :global(#app .markdown-content h2) {
+    font-size: 1.35em;
+  }
+  :global(#app .markdown-content h3) {
+    font-size: 1.15em;
+  }
+  :global(#app .markdown-content :is(ul, ol)) {
+    margin-block: 0.8em;
+  }
+  :global(#app .markdown-content li) {
+    margin-block: 0.3em;
+  }
+  :global(#app .markdown-content pre) {
     max-width: 100%;
     overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.7;
   }
   :global(#app .markdown-content .code-block-wrapper) {
-    border-color: var(--s-line);
+    border-color: var(--s-line-soft);
+    border-radius: 10px;
     box-shadow: none;
+    margin-block: 18px;
   }
   :global(#app .markdown-content .code-block-header) {
     color: var(--s-muted);
-    background: var(--s-soft);
-    border-bottom: 1px solid var(--s-line);
+    background: var(--s-surface);
+    border-bottom: 1px solid var(--s-line-soft);
+    font-size: 11px;
   }
   :global(#app .markdown-content th) {
-    background: var(--s-soft);
-  }
-  :global(#app .chat-main iframe) {
-    max-width: 100%;
+    background: var(--s-surface);
   }
   :global(#app .chat-main table) {
     display: table;
     max-width: 100%;
+    font-size: 13px;
   }
-  :global(#app .chat-main img) {
+  :global(#app .chat-main :is(iframe, img)) {
     max-width: 100%;
+  }
+  @media (min-width: 761px) and (hover: hover) and (pointer: fine) {
+    .history-menu summary {
+      opacity: 0;
+    }
+    .history-row:hover .history-menu summary,
+    .history-row:focus-within .history-menu summary,
+    .history-menu[open] summary {
+      opacity: 1;
+    }
+  }
+  @media (max-width: 1080px) {
+    .model-heading {
+      display: block;
+    }
+    .model-heading strong {
+      display: block;
+    }
+    .model-heading small {
+      display: block;
+      margin-top: 2px;
+    }
   }
   @media (max-width: 760px) {
     .chat-shell {
@@ -1734,46 +2225,113 @@
     aside.mobile-open {
       display: flex;
       position: absolute;
-      inset: 0 16% 0 0;
+      inset: 0 14% 0 0;
       z-index: 25;
     }
     .mobile-only {
       display: inline-flex;
     }
-    .chat-header {
-      padding: 10px 12px;
+    .chat-header,
+    #app[data-density="compact"] .chat-header {
+      padding: 9px 12px;
       gap: 8px;
+      min-height: 58px;
     }
-    .chat-header .s-badge {
+    .chat-header .chat-state {
       display: none;
     }
-    .chat-scroll {
-      padding: 12px;
+    .model-heading strong {
+      font-size: 13px;
+    }
+    .model-heading small {
+      font-size: 10px;
+    }
+    .chat-header > button {
+      padding: 5px 8px;
+    }
+    .chat-scroll,
+    #app[data-density="compact"] .chat-scroll {
+      padding: 22px 16px 8px;
+      scrollbar-gutter: auto;
     }
     .composer-wrap {
       padding: 8px 12px 12px;
     }
-    .quick-controls {
-      gap: 6px;
-      flex-wrap: wrap;
+    .empty .composer-wrap {
+      padding-bottom: clamp(24px, 12vh, 100px);
     }
-    article {
-      padding: 10px 0;
+    .welcome {
+      padding: 20px 0;
+    }
+    .welcome-mark {
+      margin-bottom: 16px;
+    }
+    .welcome p {
+      font-size: 13px;
+    }
+    article,
+    #app[data-density="compact"] article {
+      margin-bottom: 26px;
     }
     article.user {
-      padding: 12px;
-      margin-left: 3%;
+      max-width: 92%;
+      padding: 10px 14px;
     }
-    .compose-actions button,
-    .button {
-      font-size: 12px;
-      padding: 6px 8px;
+    .reasoning {
+      padding-right: 6px;
+      max-height: 240px;
     }
-    #app[data-density="compact"] .chat-scroll {
-      padding: 12px;
+    .message-footer {
+      gap: 6px 10px;
     }
-    #app[data-density="compact"] .chat-header {
-      padding: 8px 12px;
+    textarea {
+      padding: 14px 14px 8px;
+      font-size: 16px;
+      min-height: 56px;
+    }
+    .compose-actions {
+      padding: 4px 8px 8px;
+      gap: 4px;
+    }
+    .quick-controls {
+      gap: 2px 4px;
+    }
+    #app .quick-controls button {
+      font-size: 11px;
+      padding-inline: 5px;
+      gap: 4px;
+    }
+    .thinking-budget {
+      font-size: 10px;
+    }
+    .send-actions > button:not(.s-primary):not(.stop) {
+      max-width: 90px;
+      white-space: normal;
+      font-size: 10px;
+      padding: 4px;
+    }
+    .composer-hint {
+      display: none;
+    }
+    .settings-drawer {
+      width: min(390px, 100%);
+    }
+  }
+  @media (max-height: 560px) {
+    .empty .composer-wrap {
+      padding-bottom: 12px;
+    }
+    .welcome-mark {
+      display: none;
+    }
+    .welcome {
+      padding: 12px 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    form,
+    .thinking :global(.thinking-chevron) {
+      transition: none;
     }
   }
 </style>

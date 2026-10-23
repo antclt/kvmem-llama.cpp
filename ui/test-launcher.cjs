@@ -23,6 +23,18 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
 (async()=>{
  const info=await until(async()=>{const r=await api('info');return r.code===200&&r.body;});token=info.token;
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+ // Either initialization order must preserve the stopped-service config page.
+ for(const late of ['shell','info']){
+  const context=await browser.newContext(),page=await context.newPage(),errors=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.route(late==='shell'?'**/monitor/console-shell.js':'**/api/launcher/info',async route=>{await delay(200);await route.continue();});
+  await page.goto(base+'/monitor/');await page.locator('[data-param=Backend]').waitFor();
+  assert.equal(new URL(page.url()).hash,'#config','initial selection survives delayed '+late);
+  await page.goto(base+'/monitor/#about');await page.locator('[data-view=about]').waitFor();
+  assert.equal(new URL(page.url()).hash,'#about','explicit navigation wins with delayed '+late);
+  assert.deepEqual(errors,[]);await context.close();
+ }
+ console.log('PASS: launcher/shell initialization order and explicit navigation');
  // English launch overrides an old Chinese choice, then lets the picker persist normally.
  const languageContext=await browser.newContext(),languagePage=await languageContext.newPage();
  await languagePage.goto(base+'/monitor/#config');await languagePage.locator('[data-param=Backend]').waitFor();
@@ -299,14 +311,23 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.locator('[data-density-select]').selectOption('compact');
  assert.ok((await page.locator('.l-essential').boundingBox()).height<comfortableHeight,'compact settings reduce vertical space');
  for(const width of [1920,1366,768,390]){await page.setViewportSize({width,height:768});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'compact overflow '+width);}
+ assert.ok((await page.locator('.s-header').boundingBox()).height<=80,'mobile header leaves room for content');
+ await page.locator('.s-appearance > summary').click();
  await page.locator('[data-language-select]').selectOption('en');
  assert.equal(await page.locator('[data-density-select] option:checked').textContent(),'Layout: Compact');
+ assert.equal(await page.locator('[data-page=config] .s-nav-short').textContent(),'Config');
+ assert.ok(await page.locator('.s-nav').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'English navigation fits before reload');
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  assert.equal(await page.locator('#app').getAttribute('data-density'),'compact');
  assert.equal(await page.locator('[data-param=Model]').inputValue(),beforeDensity.model);
  assert.equal(await page.locator('[data-param=Context]').inputValue(),beforeDensity.context);
+ await page.locator('.s-appearance > summary').click();
  await page.locator('[data-language-select]').selectOption('zh-CN');
+ assert.equal(await page.locator('[data-page=config] .s-nav-short').textContent(),'配置');
+ assert.ok(await page.locator('.s-nav').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'Chinese navigation fits after a live language switch');
  await page.locator('[data-density-select]').selectOption('comfortable');
+ await page.locator('.s-appearance > summary').press('Escape');
+ assert.equal(await page.locator('[data-language-select]').isVisible(),false,'Escape closes mobile appearance controls');
  for(const width of [1920,1440,1366,768,390]){await page.setViewportSize({width,height:width===1366?768:1080});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'horizontal overflow '+width);if(width===1366){const box=await page.locator('[data-action=template]').boundingBox();assert.ok(box.y+box.height<=768,'template action below laptop viewport: '+JSON.stringify(box));}}
  await page.setViewportSize({width:1920,height:1080});
  if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'launch-desktop.png'),fullPage:true});}

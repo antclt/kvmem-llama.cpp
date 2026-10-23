@@ -27,10 +27,11 @@ function settings(backend){
  try{
   for(const backend of ['llamacpp','ninfer','polystrata']){
    const context=await browser.newContext(),page=await context.newPage(),errors=[],bad=[],sent=[];
-   const ctx=settings(backend);let timings={predicted_n:1,predicted_ms:.001,predicted_per_second:1000000};
+   const ctx=settings(backend);let exposedContext=ctx,timings={predicted_n:1,predicted_ms:.001,predicted_per_second:1000000};
+   const running={state:'ready',instance:'previous-service',active_config:{parameters:{Model:'C:\\models\\display-'+backend+'.gguf'}}};
    page.on('pageerror',e=>errors.push(e.message));page.on('response',r=>{if(r.status()>=400)bad.push(r.url());});
-   await page.route('**/api/launcher/info',route=>route.fulfill({json:{token:'fixture-token'}}));
-   await page.route('**/api/chat/context',route=>route.fulfill({json:ctx}));
+   await page.route('**/api/launcher/info',route=>route.fulfill({json:{token:'fixture-token',status:running}}));
+   await page.route('**/api/chat/context',route=>route.fulfill({json:exposedContext}));
    await page.route('**/api/chat/requests/*',route=>route.fulfill({json:{state:'completed'}}));
    await page.route('**/api/chat/cancel',route=>route.fulfill({json:{cancelled:true}}));
    await page.route('**/api/chat/completions',route=>{
@@ -42,6 +43,33 @@ function settings(backend){
    try{
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.getByText(ctx.model,{exact:true}).waitFor();
+    // A display name may only come from the same running instance, never the draft.
+    running.instance=ctx.instance;
+    await page.getByText('display-'+backend,{exact:true}).waitFor();
+    for(const state of ['stopped','starting','exited']){
+     exposedContext={schema_version:1,state,instance:null,effective:{},capabilities:{},backend:null,model:null};
+     await page.waitForResponse(async response=>response.url().endsWith('/api/chat/context')&&(await response.json()).state===state);
+     await page.getByText('尚未启动模型',{exact:true}).waitFor();
+     assert.equal(await page.locator('.model-heading').textContent(),'尚未启动模型KVMem');
+     assert.equal(await page.getByRole('button',{name:'参数',exact:true}).isDisabled(),true);
+    }
+    exposedContext=ctx;await page.getByText('display-'+backend,{exact:true}).waitFor();
+    assert.deepEqual(errors,[],'non-ready service states must not throw or leave the previous model displayed');
+    const message=page.getByLabel('消息输入',{exact:true});
+    const initialHeight=await message.evaluate(el=>el.clientHeight);
+    await message.fill('Line one\nLine two\nLine three\nLine four\nLine five');
+    await page.waitForFunction(height=>document.querySelector('textarea').clientHeight>height,initialHeight);
+    const viewport=page.viewportSize();
+    await message.fill('Long draft line\n'.repeat(15));
+    await page.setViewportSize({width:390,height:280});
+    await page.waitForFunction(()=>{
+     const input=document.querySelector('textarea'),button=document.querySelector('button[type="submit"]'),rect=button.getBoundingClientRect();
+     return rect.bottom<=innerHeight&&rect.top>=0&&input.clientHeight<200&&input.scrollHeight>input.clientHeight;
+    });
+    await page.setViewportSize(viewport);
+    await page.waitForFunction(()=>document.querySelector('textarea').clientHeight===200);
+    await message.fill('');
+    await page.waitForFunction(height=>document.querySelector('textarea').clientHeight===height,initialHeight);
     await page.getByRole('button',{name:'参数',exact:true}).click();
     const dialog=page.getByRole('dialog',{name:'生成参数'}),thinking=dialog.getByLabel('思考',{exact:true});
     assert.equal(await dialog.getByLabel('temperature',{exact:true}).inputValue(),backend==='llamacpp'?'0.7':'0.2');
@@ -83,6 +111,11 @@ function settings(backend){
     assert.equal(sent.at(-1).chat_template_kwargs.enable_thinking,true);
     if(backend==='polystrata')assert.equal(sent.at(-1).reasoning_effort,'high');
     await page.reload();await page.locator('.message-footer').nth(5).waitFor();
+    assert.equal(await page.locator('form').getByRole('button',{name:'删除对话',exact:true}).count(),0);
+    await page.locator('.history-menu summary').click();
+    page.once('dialog',dialog=>dialog.dismiss());
+    await page.getByRole('button',{name:'删除对话',exact:true}).click();
+    assert.equal(await page.locator('.message-footer').count(),6,'cancelled deletion keeps the current history');
     assert.deepEqual(errors,[]);assert.deepEqual(bad,[]);
     console.log('PASS unified chat settings, means, thinking and history:',backend);
    }finally{await context.close();}
