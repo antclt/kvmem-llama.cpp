@@ -11,13 +11,25 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 try {
-    foreach ($relative in 'scripts/local-console.py', 'scripts/windows/start-backend.ps1',
+    foreach ($relative in 'scripts/local-console.py', 'scripts/console_chat.py', 'scripts/windows/start-backend.ps1',
                           'scripts/windows/describe-launch-json.ps1', 'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1',
                           'scripts/windows/select-model.ps1',
-                          'ui/monitor/index.html', 'ui/monitor/launcher.js', 'ui/monitor/monitor.js') {
+                          'ui/monitor/index.html', 'ui/monitor/launcher.js', 'ui/monitor/monitor.js',
+                          'ui/monitor/console-shell.js', 'ui/monitor/console-shell.css') {
         if (!(Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) {
             throw "Incomplete KVMem package: missing $relative. Extract the complete ZIP first."
         }
+    }
+    $chatRoot = @('ui/dist', 'workers/share/kvmem/ui', 'build/share/kvmem/ui') |
+        ForEach-Object { Join-Path $root $_ } |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_ 'index.html') -PathType Leaf } |
+        Select-Object -First 1
+    if (!$chatRoot -or !(Test-Path -LiteralPath (Join-Path $chatRoot 'ui-build.json') -PathType Leaf)) {
+        throw 'Unified chat files are missing. Extract the complete KVMem package first.'
+    }
+    $chatManifest = Get-Content -LiteralPath (Join-Path $chatRoot 'ui-build.json') -Raw | ConvertFrom-Json
+    if (!$chatManifest.PSObject.Properties['console_chat_protocol'] -or $chatManifest.console_chat_protocol -ne 1) {
+        throw 'The chat bundle does not match this console. Extract the complete KVMem package first.'
     }
     # Avoid Windows Store aliases and automatic installs by either Python launcher.
     $env:PYLAUNCHER_ALLOW_INSTALL = $null

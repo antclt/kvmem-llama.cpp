@@ -40,6 +40,10 @@ if (($PythonArchive -or $PolystrataWorker) -and !$LlamaUiDir) {
 }
 if ($LlamaUiDir) {
     if (!(Test-Path -LiteralPath (Join-Path $LlamaUiDir 'index.html') -PathType Leaf)) { throw 'Supply LlamaUiDir with built chat assets for the llama.cpp worker' }
+    if ($PythonArchive -or $PolystrataWorker) {
+        $uiManifest = Join-Path $LlamaUiDir 'ui-build.json'
+        if (!(Test-Path -LiteralPath $uiManifest) -or (Get-Content -LiteralPath $uiManifest -Raw | ConvertFrom-Json).console_chat_protocol -ne 1) { throw 'Rebuild the unified console chat assets with scripts/build-webui.py' }
+    }
     $LlamaUiDir = (Resolve-Path -LiteralPath $LlamaUiDir).Path
 }
 $NinferSource = (Resolve-Path -LiteralPath $NinferSource).Path

@@ -20,6 +20,7 @@
   --s-green-tint: light-dark(#ecfdf5, #19352b);
   --s-green-text: light-dark(#0c8a60, #4ade80);
   --s-info: light-dark(#0f97ff, #3aa9ff);
+  --s-action: light-dark(#086ac5, #4669c9);
   --s-info-tint: light-dark(#e8f4ff, #192b3a);
   --s-info-text: light-dark(#0668c2, #7cc4ff);
   --s-warn: light-dark(#e39b0b, #f5b53d);
@@ -27,6 +28,9 @@
   --s-warn-text: light-dark(#8a5a00, #f8c96a);
   --s-error-tint: light-dark(#fdecee, #361f25);
   --s-error-text: light-dark(#b01a2e, #ff8a98);
+  --s-button-radius: 10px;
+  --s-button-weight: 700;
+  --s-button-hover: var(--s-soft);
   --s-shadow:
     0 18px 7px #00000003, 0 10px 6px #00000005, 0 4px 4px #00000008,
     0 1px 2px #0000000a;
@@ -361,14 +365,14 @@
   justify-content: center;
   height: 34px;
   padding: 0 12px;
-  border-radius: 10px;
+  border-radius: var(--s-button-radius);
   background: transparent;
   border: 1px solid var(--s-line);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: var(--s-button-weight);
 }
-#app .s-button:hover {
-  background: var(--s-soft);
+#app .s-button:hover:not(:disabled) {
+  background: var(--s-button-hover);
 }
 #app .s-table-wrap {
   overflow-x: auto;
@@ -560,6 +564,7 @@
   --s-green-tint: #142e37;
   --s-green-text: #6dd6f6;
   --s-info: #7b9cff;
+  --s-action: #4669c9;
   --s-info-tint: #1c2540;
   --s-info-text: #a9bcff;
   --s-warn: #d7b86c;
@@ -567,6 +572,8 @@
   --s-warn-text: #e1c480;
   --s-error-tint: #351e2a;
   --s-error-text: #f08cae;
+  --s-button-radius: 6px;
+  --s-button-weight: 500;
   --s-shadow: none;
   --g-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
   background-image:
@@ -641,10 +648,6 @@
 #app[data-theme="dark"] .s-status::before {
   box-shadow: 0 0 7px #45c7f25c;
 }
-#app[data-theme="dark"] .s-button {
-  border-radius: 6px;
-  font-weight: 500;
-}
 #app[data-theme="dark"] .s-detail {
   border-radius: 8px;
   background: #0b121c;
@@ -685,6 +688,7 @@
   --s-green-tint: #eaf0ff;
   --s-green-text: #2455b9;
   --s-info: #5a9cde;
+  --s-action: #3267d6;
   --s-info-tint: #eaf4fd;
   --s-info-text: #2e6ca8;
   --s-warn: #cc9440;
@@ -692,6 +696,7 @@
   --s-warn-text: #95611c;
   --s-error-tint: #fcecee;
   --s-error-text: #b03d54;
+  --s-button-hover: #e8effb;
   --s-shadow: 0 10px 24px #16376007, 0 2px 4px #16376008;
 }
 #app[data-theme="blue"] .s-header {
@@ -736,8 +741,15 @@
 #app[data-theme="blue"] .s-table-wrap th {
   background: #f4f7fc;
 }
-#app[data-theme="blue"] .s-button:hover {
-  background: #e8effb;
+/* Primary actions share one treatment in configuration and chat. */
+#app :is(.s-primary, .s-launch .l-primary) {
+  background: var(--s-action);
+  border-color: var(--s-action);
+  color: #fff;
+}
+#app :is(.s-primary, .s-launch .l-primary):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--s-action) 86%, #000);
+  border-color: color-mix(in srgb, var(--s-action) 86%, #000);
 }
 
 html,
@@ -801,9 +813,21 @@ body {
 #app select {
   cursor: pointer;
 }
+/* One shared focus indicator, including chat fields styled by the forms plugin. */
+#app :is(input, select, textarea):focus {
+  box-shadow: none;
+}
 #app :focus-visible {
-  outline: 2px solid var(--s-accent);
-  outline-offset: 3px;
+  outline: 2px solid var(--s-info);
+  outline-offset: 2px;
+}
+/* Reading content should not grow borders or lift when the pointer crosses it. */
+#app .chat-main .markdown-content table:hover {
+  box-shadow: none;
+}
+#app .chat-main .markdown-content blockquote:hover {
+  border-left-width: 4px;
+  transform: none;
 }
 #app .s-badges .s-badge {
   opacity: 0.4;

@@ -133,6 +133,7 @@ def main():
     validate_icons(output)
     shutil.copy2(ROOT / 'backends/llamacpp/LICENSE', output / 'llama.cpp-LICENSE')
     copy_monitor(output)
+    shutil.copy2(ROOT/'ui/monitor/history-export.html', output/'history-export.html')
     if args.full_ui:
         # Full UI: hash upstream src/lib entry files so the manifest records whether the page is genuinely upstream-built.
         # 中文：full-ui 模式下对上游 src/lib 的 TS 入口文件做哈希，写入 manifest 以证明产物非轻量构建
@@ -144,7 +145,7 @@ def main():
                        for p in sorted((ROOT / 'ui/lightweight').iterdir()) if p.is_file()}
         mode = 'lightweight'
     manifest = {'llama_commit': pin, 'backend_patch_sha256': versions['llamacpp']['patch_sha256'],
-                'mode': mode, 'entry_files': entry_files}
+                'mode': mode, 'console_chat_protocol': None if args.full_ui else 1, 'entry_files': entry_files}
     (output / 'ui-build.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(output)
 

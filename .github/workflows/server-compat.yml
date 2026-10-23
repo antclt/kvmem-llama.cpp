@@ -53,6 +53,7 @@ jobs:
       - name: Test local console and monitor packaging
         run: |
           python3 tests/test_local_console.py
+          python3 tests/test_console_chat.py
           python3 tests/test_one_click.py
           python3 tests/test_webui_builder.py
       - name: Prepare pinned llama.cpp integration
@@ -68,6 +69,7 @@ jobs:
           python3 -m unittest discover -s tools/polystrata -p test_assets.py
           python3 -m unittest discover -s tools/polystrata -p test_monitor.py
           python3 -m unittest discover -s tools/polystrata -p test_ui_contract.py
+          python3 -m unittest discover -s tools/polystrata -p test_console_routes.py
           node ui/test-polystrata-contract.cjs
       - name: Configure host and model-free server tests
         run: >-
@@ -96,6 +98,7 @@ jobs:
       - name: Test local console and monitor packaging
         run: |
           python tests/test_local_console.py
+          python tests/test_console_chat.py
           python tests/test_windows_worker_args.py
           python tests/test_one_click.py
           python tests/test_webui_builder.py
@@ -286,10 +289,12 @@ jobs:
           else
             python3 scripts/build-webui.py
           fi
-      - name: Test built chat against both backend props
+      - name: Test unified chat against all backend settings
         if: needs.changes.outputs.run_ci == 'true' && matrix.mode == 'lightweight'
         working-directory: ui
-        run: node test-chat-props.cjs
+        run: |
+          node test-chat-props.cjs
+          node test-chat-history.cjs
       - name: Documentation-only result
         if: needs.changes.outputs.run_ci == 'false'
         run: echo 'Documentation only; UI tests and builds skipped.'

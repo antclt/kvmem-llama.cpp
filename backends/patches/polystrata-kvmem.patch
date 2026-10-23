@@ -258,10 +258,10 @@ index 0000000..8b4ecca
 +    return Prompt(ids, _bounds(service, original, *rendered, ids))
 diff --git a/serve/kvmem_monitor.py b/serve/kvmem_monitor.py
 new file mode 100644
-index 0000000..c6b2ef3
+index 0000000..0406723
 --- /dev/null
 +++ b/serve/kvmem_monitor.py
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,140 @@
 +"""Read-only KVMem monitor schema; no prompts, answers or reasoning are exposed."""
 +import math
 +import os
@@ -334,6 +334,7 @@ index 0000000..c6b2ef3
 +        generating = st.get('first_token') is not None
 +        count = st.get('generated', 0)
 +        active.append({'id': st.get('kvmem_monitor_id', str(started)),
++                       'client_request_id': st.get('kvmem_client_request_id'),
 +                       'started_at_ms': started * 1000, 'elapsed_ms': max(0, (now-started)*1000),
 +                       'status': 'generating' if generating else 'reading', 'phase': st.get('phase'),
 +                       'endpoint': 'generation', 'prompt_tokens': st.get('prompt_tokens'),
@@ -353,6 +354,7 @@ index 0000000..c6b2ef3
 +        read, ms = row.get('prompt_read'), row.get('prompt_ms')
 +        finish = row.get('finish')
 +        recent.append({'id': row.get('kvmem_monitor_id') or str(started),
++                       'client_request_id': row.get('kvmem_client_request_id'),
 +                       'started_at_ms': started*1000, 'elapsed_ms': row.get('duration_s', 0)*1000,
 +                       'status': 'error' if finish == 'error' else 'disconnected' if finish in ('disconnect', 'cancelled', 'cancel') else 'completed',
 +                       'finish_reason': finish, 'finish_phase': row.get('finish_phase'),
@@ -401,7 +403,7 @@ index 0000000..c6b2ef3
 +            'dropped_records': max(0, totals.get('requests', 0)-len(history)),
 +            'hardware': hardware, 'kvmem': usage}
 diff --git a/serve/server.py b/serve/server.py
-index 78e7dcd..249e4cf 100644
+index 78e7dcd..f5f2cc9 100644
 --- a/serve/server.py
 +++ b/serve/server.py
 @@ -1275,6 +1275,12 @@ class StrataEngine:
@@ -589,27 +591,49 @@ index 78e7dcd..249e4cf 100644
                  yield from self._run(ids, thinking, tools, max_new, sampling, cancel, force)
                  return
              reasoning, text = [], []
-@@ -4836,6 +4890,8 @@ class Service:
+@@ -4836,6 +4890,9 @@ class Service:
                          st.update(busy=True, phase="reading the prompt", prompt_tokens=len(ids),
                                    generated=0, started=time.time(), first_token=None, tool=None, tail="",
                                    max_tokens=max_new, reasoning_recoveries=0, thinking_budget=budget)
 +                        if getattr(self, 'kvmem_monitor_gpu_uuid', None):
 +                            st['kvmem_monitor_id'] = uuid.uuid4().hex[:12]
++                            st['kvmem_client_request_id'] = (sampling or {}).get('_kvmem_request_id')
                          if par:
                              self.live_reqs[id(st)] = (st, rate)
                              self.status.update(st)
-@@ -5082,6 +5138,10 @@ class Service:
+@@ -5082,6 +5139,11 @@ class Service:
                                  if last.get("offloaded") is not None and routed else None
                              seen = prompt_tokens_seen(len(ids), last)   # #471: < len(ids) when cancelled mid-read
                              self.history.append({
 +                                "kvmem_monitor_id": st.get('kvmem_monitor_id'),
++                                "kvmem_client_request_id": st.get('kvmem_client_request_id'),
 +                                "kvmem_monitor_limit": st.get('max_tokens'),
 +                                "finish_phase": st.get("phase"),
 +                                "ttft_ms": (st["first_token"] - started) * 1000 if st.get("first_token") else None,
                                  "projection": (sampling or {}).get("experimental_speed_projection") is not False
                                  if loaded else None,
                                  "time": started, "duration_s": round(time.time() - started, 1), "finish": finish,
-@@ -5922,6 +5982,14 @@ def make_handler(svc: Service):
+@@ -5889,6 +5951,19 @@ def make_handler(svc: Service):
+ 
+         def do_GET(self):
+             path = self.path.split("?")[0].rstrip("/")
++            if path == '/kvmem-history-export':
++                body = (ROOT / 'serve/web/history-export.html').read_bytes()
++                self.send_response(200)
++                self.send_header('Content-Type', 'text/html; charset=utf-8')
++                self.send_header('Content-Length', str(len(body)))
++                self.send_header('Cache-Control', 'no-store')
++                self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
++                self.end_headers()
++                self.wfile.write(body)
++                return
++            if getattr(svc, 'kvmem_console_only', False) and (path in ('', '/api-monitor') or path.startswith(('/web/', '/fonts/'))):
++                self._json(404, {'error': {'message': 'Chat and monitoring are available in the KVMem console.'}})
++                return
+             if path.startswith("/fonts/"):
+                 # the web app's font (Outfit, OFL: serve/web/fonts); the page falls back to the system font
+                 name = path[len("/fonts/"):]
+@@ -5922,6 +5997,14 @@ def make_handler(svc: Service):
                  self.end_headers()
                  self.wfile.write(body)
                  return
@@ -624,7 +648,7 @@ index 78e7dcd..249e4cf 100644
              if path == "/metrics/prometheus":
                  if self._authorized():
                      body = svc.prometheus().encode()
-@@ -5957,7 +6025,7 @@ def make_handler(svc: Service):
+@@ -5957,7 +6040,7 @@ def make_handler(svc: Service):
                  return
              if path == "/settings":
                  if self._authorized():
@@ -633,7 +657,7 @@ index 78e7dcd..249e4cf 100644
                  return
              if path == "/config":                            # #564: the Settings view's keys of the run config
                  if self._authorized():
-@@ -5972,6 +6040,7 @@ def make_handler(svc: Service):
+@@ -5972,6 +6055,7 @@ def make_handler(svc: Service):
                  body = (ROOT / "serve" / "web" / ("monitor.html" if path else "index.html")).read_bytes()
                  self.send_response(200)
                  self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -641,7 +665,7 @@ index 78e7dcd..249e4cf 100644
                  self.send_header("Content-Length", str(len(body)))
                  self.end_headers()
                  self.wfile.write(body)
-@@ -6275,8 +6344,9 @@ def make_handler(svc: Service):
+@@ -6275,8 +6359,9 @@ def make_handler(svc: Service):
              params = {names.get(k, k): v for k, v in defaults.items()
                        if k in ("temperature", "top_p", "top_k", "min_p", "seed", "repetition_penalty",
                                 "presence_penalty", "frequency_penalty", "penalty_last_n")}
@@ -652,7 +676,7 @@ index 78e7dcd..249e4cf 100644
                       "total_slots": max(1, int(getattr(svc.engine, "batch", 0) or 0)),   # #1004: the batch slots
                       "model_alias": svc.model, "chat_template": svc.template.source,
                       "chat_template_caps": svc.template.caps,
-@@ -6284,6 +6354,33 @@ def make_handler(svc: Service):
+@@ -6284,6 +6369,33 @@ def make_handler(svc: Service):
                       "is_sleeping": not svc.loaded()}
              if getattr(svc.engine, "model_path", None):
                  props["model_path"] = svc.engine.model_path
@@ -686,7 +710,7 @@ index 78e7dcd..249e4cf 100644
              version = getattr(svc.engine, "info", {}).get("version")
              if version:
                  props["build_info"] = "PolyStrata " + str(version)
-@@ -6456,7 +6553,7 @@ def make_handler(svc: Service):
+@@ -6456,7 +6568,7 @@ def make_handler(svc: Service):
                  return
              print("[strata] other apps now use the Chat settings: " + ", ".join(f"{k}={v}" for k, v in shared.items())
                    if shared else "[strata] other apps use their own settings again", flush=True)
@@ -695,7 +719,7 @@ index 78e7dcd..249e4cf 100644
  
          def _sse(self):
              self._note(http_status=200)
-@@ -6518,7 +6615,7 @@ def make_handler(svc: Service):
+@@ -6518,7 +6630,7 @@ def make_handler(svc: Service):
              if validator is not None and (tools or req.get("strata_mcp")):
                  raise ValueError("structured response_format with tools/MCP is not supported")
              svc.load()
@@ -704,7 +728,7 @@ index 78e7dcd..249e4cf 100644
              bias_api.validate_request(req, svc.engine, len(getattr(svc.tok, "tokens", ())) or None)
              use_mcp = req.get("strata_mcp") is True and svc.mcp is not None      # the web app's opt-in (serve/mcp.py)
              own = {t.get("name") for t in tools or [] if isinstance(t, dict)}   # #592: a second line of defence
-@@ -6718,13 +6815,13 @@ def make_handler(svc: Service):
+@@ -6718,13 +6830,13 @@ def make_handler(svc: Service):
              shown = responses_api.prompt_tools(req, tools) if svc.codex_compaction_cache else tools
              try:
                  try:
@@ -720,7 +744,7 @@ index 78e7dcd..249e4cf 100644
                                                            cancel=cancel)
              except ResponsesError:
                  raise
-@@ -6758,7 +6855,7 @@ def make_handler(svc: Service):
+@@ -6758,7 +6870,7 @@ def make_handler(svc: Service):
              if tool_choice_of(req.get("tool_choice"))[0] == "none":   # Anthropic's {"type": "none"}: no tools offered
                  tools = None
              force = forced_call(req.get("tool_choice"), tools)        # "any" / {"type": "tool", "name": N}
@@ -729,15 +753,16 @@ index 78e7dcd..249e4cf 100644
              svc.reasoning_budget(req)                         # a bad value is a 400 before anything is sent
              stop_strings(req)                                 # ... and so is a bad stop / stop_sequences
              check_request_sampling(req)                       # ... and a sampling field of the wrong type
-@@ -7328,6 +7425,7 @@ def model_settings(cfg: dict, overrides: dict | None = None) -> dict:
+@@ -7328,6 +7440,8 @@ def model_settings(cfg: dict, overrides: dict | None = None) -> dict:
          "fit_max_tokens": bool(over.get("fit_max_tokens")) or cfg.get("fit_max_tokens") is True,
          "reasoning_close_retry": cfg.get("reasoning_close_retry") is True,   # #1053: opt-in, off by default
          "drop_oldest": cfg.get("drop_oldest") is True,                       # #17: opt-in, off by default
 +        "client_reasoning_history": cfg.get("client_reasoning_history") is True,
++        "kvmem_console_only": cfg.get("kvmem_console_only") is True,
          "preserve_thinking": cfg.get("preserve_thinking") is True,           # #25: opt-in, off by default
          "config_effort": effort,
          "codex_thread_titles": cfg.get("codex_thread_titles") is True,       # #923: opt-in, off by default
-@@ -7718,6 +7816,29 @@ def main() -> int:
+@@ -7718,6 +7832,29 @@ def main() -> int:
              raise SystemExit(f"[strata] {e}")
          print(f"[strata] slot save/restore on: {svc.slot_save_path} (session files are kept until deleted: "
                "about 1.2 GB per 63K-token conversation; restore only files this server wrote)", flush=True)
@@ -1148,6 +1173,46 @@ index 8d81190..74c3e43 100644
  showTab(location.hash.slice(1) || "chat");
  poll();
  
+diff --git a/serve/web/history-export.html b/serve/web/history-export.html
+new file mode 100644
+index 0000000..00ca83d
+--- /dev/null
++++ b/serve/web/history-export.html
+@@ -0,0 +1,34 @@
++<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KVMem · 历史导出</title>
++<style>body{margin:8vh auto;padding:24px;max-width:700px;background:#101716;color:#d9e5df;font:15px/1.7 system-ui}button{background:#9ddd9b;border:0;border-radius:9px;padding:12px 20px;cursor:pointer}code{color:#9ddd9b}pre{white-space:pre-wrap}small{color:#a8b6ad}</style>
++<h1>导出旧聊天历史 / Export old chats</h1><p>此页面只读取当前地址的浏览器记录，下载 JSON 备份。原记录不会更改或删除。<br>This page reads browser records at this address and downloads a JSON backup. Original records remain unchanged.</p><p id="origin"></p><button id="export">读取并下载 / Read & download</button><pre id="status" role="status"></pre><small>在统一控制台的“聊天 → 导入与备份”导入下载的文件。旧地址中的工具和附件原始数据也会包含在备份里。<br>Import the file in the unified console under Chat → Import & backup.</small>
++<script>
++document.querySelector('#origin').textContent=location.origin;
++const status=document.querySelector('#status');
++const result=req=>new Promise((ok,no)=>{req.onsuccess=()=>ok(req.result);req.onerror=()=>no(req.error)});
++document.querySelector('#export').onclick=async()=>{
++ const button=document.querySelector('#export');button.disabled=true;status.textContent='读取中 / Reading…';
++ try{
++  if(!indexedDB.databases)throw Error('当前浏览器无法列出历史数据库，请使用 Edge / Chrome。Use Edge or Chrome.');
++  const dbs=await indexedDB.databases(),conversations=[],legacy=[];
++  for(const {name} of dbs){
++   if(!['kvmem-chat','LlamaUi','LlamacppWebui'].includes(name))continue;
++   const request=indexedDB.open(name);request.onupgradeneeded=()=>request.transaction.abort();
++   const db=await result(request);
++   try{
++    if(!db.objectStoreNames.contains('conversations')||!db.objectStoreNames.contains('messages')){legacy.push({database:name,unsupportedStores:Array.from(db.objectStoreNames)});continue;}
++    const tx=db.transaction(['conversations','messages'],'readonly');
++    const [cs,ms]=await Promise.all([result(tx.objectStore('conversations').getAll()),result(tx.objectStore('messages').getAll())]);
++    for(const conv of cs){conversations.push({source:location.origin+':'+name,conv,messages:ms.filter(m=>m.convId===conv.id)});}
++   }finally{db.close();}
++  }
++  const raw=localStorage.getItem('strata.chat');
++  if(raw){const ms=JSON.parse(raw);if(!Array.isArray(ms))throw Error('Invalid strata.chat');
++   conversations.push({source:location.origin+':strata.chat',conv:{id:'strata-current',name:'PolyStrata',lastModified:Date.now()},messages:ms.map((m,i)=>({...m,id:String(i),convId:'strata-current',parent:i?String(i-1):null,children:i+1<ms.length?[String(i+1)]:[],content:m.text||'',reasoningContent:m.reasoning||'',timestamp:m.time||i,extra:(m.images||[]).filter(x=>x.url).map(x=>({type:'image',name:x.name,base64Url:x.url})),uiStatus:m.error?'error':m.stopped?'interrupted':'complete',legacySource:m}))});}
++  const old=localStorage.getItem('LlamaCppWebui');if(old)legacy.push({localStorage:'LlamaCppWebui',raw:JSON.parse(old)});
++  if(!conversations.length&&!legacy.length){status.textContent='当前地址未找到历史。请在原来的主机名和端口打开导出页。\nNo history at this origin. Use the original hostname and port.';return;}
++  const data={schema_version:1,source:location.origin,conversations,legacy},url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'}));
++  const a=document.createElement('a');a.href=url;a.download='kvmem-history-'+location.port+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
++  status.textContent=conversations.length+' 对话 / chats · '+conversations.reduce((n,c)=>n+c.messages.length,0)+' 消息 / messages\n'+(legacy.length?'包含旧版原始备份，部分旧格式需保留备份另行转换。\nIncludes legacy raw backups that may need conversion.':'')+'已下载，原数据未更改。 / Downloaded; originals unchanged.';
++ }catch(e){status.textContent='导出失败 / Export failed: '+e;}finally{button.disabled=false;}
++};
++</script></html>
 diff --git a/serve/web/index.html b/serve/web/index.html
 index 7ef1f3c..58c0b35 100644
 --- a/serve/web/index.html
