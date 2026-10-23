@@ -20,6 +20,13 @@ ninfer 预编译包可直接运行默认脚本。将包含文本、视觉和 MTP
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\start-ninfer.ps1
 ```
 
+Qwen3.5/3.6/3.8 的 CPU 视觉权重在首次实际图片编码时加载。最后一个编码器释放引用后，
+默认空闲300秒自动卸载，即使没有后续请求也会回收；文本请求不触发加载，后续图片可重新加载。
+统一启动器 `-CpuVisionIdleSeconds` 可调整秒数，0表示加载后保留到模型卸载；原生参数为
+`--cpu-vision-idle-seconds`。首次图片请求承担读取和反量化开销，视觉计算精度不变。
+`/props.cpu_vision` 提供驻留字节数和加载/卸载次数。此策略针对 ninfer 的 Qwen CPU 视觉路径，
+需要本轮新编译的 worker；范围与测量见 [按需加载和回收验收](ninfer-cpu-vision-lifecycle-validation-20261020.md)。
+
 默认端口18200，context200k、budget36k、gen reserve及输出上限16k、思考预算8192、双INT8、自适应MTP上限4、ngram31、CPU视觉（图片上限1024 tokens），Host预算12GiB。脚本调用统一启动器，可编辑模型路径与预算，通过 `-Gpu` 选择设备。小预算CPU/resident视觉的实际1024-token图片及八路图文功能已通过，范围见 [视觉并发验收](vision-concurrency-validation-20261006.md)；正式版在 RTX 5060 Ti 16GB 上完成了该默认配方的加载和短 Responses 请求检查；该检查不代表所有模型或完整长上下文质量已验收。各历史记录保留其原有测试范围。
 
 解压包后，在 PowerShell 中运行：
