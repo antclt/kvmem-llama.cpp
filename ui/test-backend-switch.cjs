@@ -30,7 +30,7 @@ module.exports=async({browser,base,info})=>{
  const values=async()=>Object.fromEntries(await Promise.all(sharedKeys.map(async key=>[key,await field(key).inputValue()])));
  const closeCheck=()=>page.locator('[data-dialog=check] [data-dialog-close]').click();
  try{
-  await page.goto(base+'/monitor/');await field('Backend').waitFor();
+  await page.goto(base+'/monitor/#config');await field('Backend').waitFor();
   await page.locator('[data-language-select]').selectOption('zh-CN');
   await field('Context').fill('123456');
   await page.locator('.l-native > summary').click();await page.locator('[data-native]').fill('["--threads",');

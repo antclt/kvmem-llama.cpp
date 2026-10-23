@@ -1,4 +1,5 @@
-/* Model-free by default; optional real-model lifecycle test on a disposable port. */
+/* Model-free by default; optional real-model lifecycle test on a disposable port.
+ * Configuration tests request #config explicitly; /monitor/ selects the monitor. */
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -24,7 +25,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
  // English launch overrides an old Chinese choice, then lets the picker persist normally.
  const languageContext=await browser.newContext(),languagePage=await languageContext.newPage();
- await languagePage.goto(base+'/monitor/');await languagePage.locator('[data-param=Backend]').waitFor();
+ await languagePage.goto(base+'/monitor/#config');await languagePage.locator('[data-param=Backend]').waitFor();
  await languagePage.locator('[data-language-select]').selectOption('zh-CN');
  await languagePage.goto(base+'/monitor/?lang=en&keep=1#config');
  await languagePage.locator('[data-param=Backend]').waitFor();
@@ -42,7 +43,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await languageContext.close();
  console.log('PASS: English launch, saved-language override, picker/reload retention and URL preservation');
  const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base+'/monitor/');await page.locator('[data-param=Backend]').waitFor();
+ await page.goto(base+'/monitor/#config');await page.locator('[data-param=Backend]').waitFor();
  assert.deepEqual(info.backends,['llamacpp','ninfer','polystrata']);
  assert.deepEqual(await page.locator('[data-param=Backend] option').evaluateAll(items=>items.map(x=>x.value)),['llamacpp','ninfer','polystrata']);
  assert.equal(await page.locator('[data-view=config]').isVisible(),true);

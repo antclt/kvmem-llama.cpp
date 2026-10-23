@@ -53,7 +53,7 @@ let browser;
  await page.locator('#s-reset').click();await page.waitForFunction(()=>document.querySelector('#s-thinking [data-v=none]').getAttribute('aria-checked')==='true');
  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.screenshot({path:path.join(evidence,'ui-consistency-chat-mobile.png'),fullPage:true,animations:'disabled'});
- await page.setViewportSize({width:1366,height:900});await page.goto(base+'/monitor/');await page.locator('[data-param=Backend]').waitFor();
+ await page.setViewportSize({width:1366,height:900});await page.goto(base+'/monitor/#config');await page.locator('[data-param=Backend]').waitFor();
  await page.locator('#launch-tab-0').click();const idle=page.locator('[data-param=RetainedSessions]');await idle.locator('xpath=ancestor::details').evaluate(e=>e.open=true);assert.equal(await idle.inputValue(),'3');
  await page.locator('#launch-tab-1').click();assert.equal(await page.locator('[data-param=VramReserveMiB]').inputValue(),'256');await page.locator('[data-param=SpeculativeMode]').selectOption('mtp');assert.equal(await page.locator('[data-param=DraftTokens]').inputValue(),'2');
  await page.locator('#launch-tab-2').click();assert.equal(await page.locator('[data-param=PreserveThinking]').isChecked(),true);await page.locator('[data-param=PreserveThinking]').uncheck();

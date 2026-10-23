@@ -38,7 +38,7 @@ module.exports = async function settingsChecks({browser,base,info}) {
   const result=previews.at(-1);await page.locator('[data-dialog=check] [data-dialog-close]').click();return result;
  };
  try {
-  await page.goto(base+'/monitor/');await field('Backend').waitFor();
+  await page.goto(base+'/monitor/#config');await field('Backend').waitFor();
   await page.locator('[data-language-select]').selectOption('zh-CN');
   // Let the asynchronous inspection card settle before measuring tooltip layout.
   await page.waitForFunction(()=>document.querySelector('[data-model-health]')?.getAttribute('aria-busy')==='false');

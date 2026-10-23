@@ -22,7 +22,7 @@ module.exports=async({browser,base,info})=>{
   assert.equal(previews.length,before+1);const result=previews.at(-1);await closeCheck();return result;
  }
  try{
-  await page.goto(base+'/monitor/');await field('KvTypeK').waitFor();
+  await page.goto(base+'/monitor/#config');await field('KvTypeK').waitFor();
   await page.locator('[data-language-select]').selectOption('zh-CN');
   assert.equal(await field('KvType').count(),0,'llama has two controls, no competing combined override');
   assert.deepEqual(await pair(),['q5_0','q5_0'],'legacy KvType initializes both sides');
