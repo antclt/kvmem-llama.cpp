@@ -21,6 +21,10 @@ worker EXEs remain available for advanced options.
 
 The source and newly built packages share `start-ninfer.ps1`, including `-Model`,
 `-NoVision`, `-ThinkingBudget`, `-ReasoningEffort` and `-PreserveThinking`.
+For the Qwen CPU Vision path, `-CpuVisionIdleSeconds` defaults to 300: weights load on the
+first actual image encode and unload five minutes after the last encoder releases them. Set it
+to 0 to retain lazily loaded weights until model unload. Both launchers forward this setting.
+
 Its 0.18 recipe differs from the unified launcher's defaults. Older ZIPs retain their
 original scripts. In a PowerShell session, pass an array; for an external `-File`
 invocation put native options last after `-WorkerArgs`:

@@ -463,6 +463,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--vision` | 启用模型的视觉资源，默认关；原生视频能力不代表 KVMem 视频可用 |
 | `--vision-residency` | resident/overlay/cpu，默认 resident；KVMem 仅 resident/cpu |
 | `--vision-cpu` | 同时启用 vision 并选择 CPU |
+| `--cpu-vision-idle-seconds` | Qwen CPU视觉权重按需加载；最后一个编码器释放后空闲超时卸载，默认300秒，0禁用自动卸载 |
 | `--vision-offload` | 必须带 on/off；on 选择 overlay，off 选择 resident，本身不启用 vision；KVMem 下不允许 on |
 | `--vision-max-merged` | 每媒体项 merged tokens，64–16384；默认 16384，CPU 且未显式指定时为 256 |
 | `--media-cache-mib` | 保留的预处理媒体，默认 1024 MiB；0 关闭 |

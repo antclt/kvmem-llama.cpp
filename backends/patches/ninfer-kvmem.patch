@@ -63,10 +63,18 @@ index 6f49c233cf92b72ad4ad3b32b0690f8b499afe1b..c47e6009d85466863239c2c145f2d3f9
  # --- Subdirectories ----------------------------------------------------------
  add_subdirectory(src)
 diff --git a/apps/cli/main.cpp b/apps/cli/main.cpp
-index bfe6ad57fa9e895af134dc5082adb815d35d1d7f..bb321a367e37abf4de03ca87e8cbb9de02ce578e 100644
+index bfe6ad57fa9e895af134dc5082adb815d35d1d7f..8eb999f72acdc43bc0f879909540ae0257756bc7 100644
 --- a/apps/cli/main.cpp
 +++ b/apps/cli/main.cpp
-@@ -404,6 +404,9 @@ int main(int argc, char** argv) {
+@@ -388,6 +388,7 @@ int main(int argc, char** argv) {
+         engine_options.speculative              = cli.speculative;
+         engine_options.enable_vision            = cli.enable_vision;
+         engine_options.vision_residency         = cli.vision_residency;
++        engine_options.cpu_vision_idle_seconds   = cli.cpu_vision_idle_seconds;
+         engine_options.vision_max_merged_tokens = cli.vision_max_merged_tokens;
+         engine_options.use_cuda_graph           = cli.use_cuda_graph;
+         engine_options.gpu_clock_floor_mhz      = cli.gpu_clock_floor_mhz;
+@@ -404,6 +405,9 @@ int main(int argc, char** argv) {
          engine_options.structured_output =
              cli.structured_output.kind != ninfer::StructuredOutputKind::None;
          engine_options.wddm_evictable_budget    = cli.wddm_evictable_budget;
@@ -76,7 +84,7 @@ index bfe6ad57fa9e895af134dc5082adb815d35d1d7f..bb321a367e37abf4de03ca87e8cbb9de
          engine_options.mlp_a8_decode            = cli.mlp_a8_decode;
          engine_options.prefill_a8               = cli.prefill_a8;
          engine_options.prefill_cublas           = cli.prefill_cublas;
-@@ -413,6 +416,11 @@ int main(int argc, char** argv) {
+@@ -413,6 +417,11 @@ int main(int argc, char** argv) {
          engine_options.context_cache.enabled                = false;
          engine_options.context_cache.host_state_slots       = 0;
          engine_options.context_cache.host_kv_capacity_bytes = 0;
@@ -89,7 +97,7 @@ index bfe6ad57fa9e895af134dc5082adb815d35d1d7f..bb321a367e37abf4de03ca87e8cbb9de
          engine_options.diagnostic_observer = ninfer::product::engine_diagnostic_observer(logger);
  
 diff --git a/apps/cli/options.cpp b/apps/cli/options.cpp
-index 3d82e0cd3db2c042c0f7d39a27bc06c6d4b69578..22c37eeeaff8e29d713448e7e80a74deca49ab89 100644
+index 3d82e0cd3db2c042c0f7d39a27bc06c6d4b69578..1d97828b0a40797af69884f790b2528866c48840 100644
 --- a/apps/cli/options.cpp
 +++ b/apps/cli/options.cpp
 @@ -2,6 +2,7 @@
@@ -137,7 +145,15 @@ index 3d82e0cd3db2c042c0f7d39a27bc06c6d4b69578..22c37eeeaff8e29d713448e7e80a74de
             "  --wddm-evictable-budget       Windows builds: budget against dedicated\n"
             "                                memory, committing arenas at startup\n"
             "\n"
-@@ -343,6 +363,7 @@ Options parse_options(int argc, char** argv) {
+@@ -310,6 +330,7 @@ std::string usage_text(const char* argv0) {
+            "                                with no device Vision memory, and caps\n"
+            "                                --vision-max-merged at 256 unless given\n"
+            "  --vision-cpu                  --vision with --vision-residency cpu\n"
++           "  --cpu-vision-idle-seconds N    Qwen CPU Vision unload after N idle seconds (300; 0 retains)\n"
+            "  --vision-max-merged N         merged tokens of one media item (default 16384);\n"
+            "                                larger media is downscaled\n"
+            "\n"
+@@ -343,6 +364,7 @@ Options parse_options(int argc, char** argv) {
      bool spec_explicit              = false;
      bool vision_max_merged_explicit = false;
      std::optional<std::size_t> kv_headroom_mib;
@@ -145,7 +161,7 @@ index 3d82e0cd3db2c042c0f7d39a27bc06c6d4b69578..22c37eeeaff8e29d713448e7e80a74de
  
      for (int i = 2; i < argc; ++i) {
          const std::string_view arg(argv[i]);
-@@ -445,6 +466,15 @@ Options parse_options(int argc, char** argv) {
+@@ -445,6 +467,15 @@ Options parse_options(int argc, char** argv) {
          } else if (arg == "--rope-scaling-original-context") {
              options.rope_scaling_original_context =
                  product::parse_rope_scaling_original_context(value(arg));
@@ -161,7 +177,16 @@ index 3d82e0cd3db2c042c0f7d39a27bc06c6d4b69578..22c37eeeaff8e29d713448e7e80a74de
          } else if (arg == "--wddm-evictable-budget") {
              options.wddm_evictable_budget = true;
          } else if (arg == "--mlp-a8-decode") {
-@@ -592,14 +622,42 @@ Options parse_options(int argc, char** argv) {
+@@ -494,6 +525,8 @@ Options parse_options(int argc, char** argv) {
+             options.reasoning_effort = parse_reasoning_effort(value(arg));
+         } else if (arg == "--vision") {
+             options.enable_vision = true;
++        } else if (arg == "--cpu-vision-idle-seconds") {
++            options.cpu_vision_idle_seconds = parse_u32(value(arg), "cpu-vision-idle-seconds", true);
+         } else if (arg == "--vision-residency") {
+             const std::string_view mode = value(arg);
+             if (mode == "resident") {
+@@ -592,14 +625,42 @@ Options parse_options(int argc, char** argv) {
      if (!options.devices.empty() && device_explicit) {
          throw std::invalid_argument("--device and --devices are mutually exclusive");
      }
@@ -205,10 +230,18 @@ index 3d82e0cd3db2c042c0f7d39a27bc06c6d4b69578..22c37eeeaff8e29d713448e7e80a74de
  
      const bool has_prompt   = !options.prompt.empty();
 diff --git a/apps/cli/options.h b/apps/cli/options.h
-index e4727e30a5cebc4bc04dd7c61ae5f2ecb52b92a5..0576e1945597cad1fbc7aafd2bbece0f4e2bd30c 100644
+index e4727e30a5cebc4bc04dd7c61ae5f2ecb52b92a5..4d60526fbb0dafcc902aa7b53386edf2a696c8d0 100644
 --- a/apps/cli/options.h
 +++ b/apps/cli/options.h
-@@ -55,6 +55,10 @@ struct Options {
+@@ -41,6 +41,7 @@ struct Options {
+     SpeculativeOptions speculative;
+     bool enable_vision  = false;
+     VisionResidency vision_residency       = VisionResidency::Resident;
++    std::uint32_t cpu_vision_idle_seconds = 300; // 0: retain lazily loaded Qwen CPU Vision weights
+     std::uint32_t vision_max_merged_tokens = 16384;
+     bool use_cuda_graph = true;
+     std::uint32_t gpu_clock_floor_mhz = 0;
+@@ -55,6 +56,10 @@ struct Options {
      float rope_scaling_factor                   = 1.0F;
      std::uint32_t rope_scaling_original_context = 0;
      bool wddm_evictable_budget = false;
@@ -507,7 +540,7 @@ index 09381b4e9abfb5576fba68b43b81ce896a1f1afb..b3eb36950ae216647e28fdc029fadf72
                                        envelope_, workspace_, output_tensor_, stream);
      }
 diff --git a/docs/cli.md b/docs/cli.md
-index ba821f3585ba744e4b36ce01a94715121825b050..796ab74170a735d6d03949552e324fdf3c577360 100644
+index ba821f3585ba744e4b36ce01a94715121825b050..45ca05b0640beb889884b3b5291d30ad3bc41383 100644
 --- a/docs/cli.md
 +++ b/docs/cli.md
 @@ -287,7 +287,7 @@ The table lists executable defaults. The examples above select INT8 KV and MTP3.
@@ -519,6 +552,14 @@ index ba821f3585ba744e4b36ce01a94715121825b050..796ab74170a735d6d03949552e324fdf
  | `--ngram-draft-tokens N` | copy drafting alongside `--spec`: up to `N` tokens (1..63) copied from earlier prompt, tool-result or output text that the last `--ngram-min-match` tokens match, verified by the target; `0` disables it; see [Ngram copy proposals](ngram.md) | `15` with `--spec`, else `0` |
  | `--ngram-min-match N` | shortest match a copy is drawn from, `4..64` | `12` |
  | `--prefill-cublas` | hand wide prefill GEMMs to cuBLAS: a large prefill speedup for a small perplexity cost, and it wants a larger `--prefill-chunk` to pay (see [quality trades](maintainer/quality-trade-experiments.md)) | off |
+@@ -301,6 +301,7 @@ The table lists executable defaults. The examples above select INT8 KV and MTP3.
+ | `--vision` | enable image/video input and load Vision GPU allocations | off |
+ | `--vision-residency resident\|overlay\|cpu` | `overlay` keeps the Vision tower host-pinned and borrows device memory per image from the evictable text weight tail (no resident Vision cost; needs CUDA VMM); for Gemma 4 the tower's blocks stay pinned and stream through a two-block device window. `--vision-offload on\|off` is accepted as an alias for `overlay\|resident`. `cpu` encodes on CPU threads from host FP32 weights, with no device Vision memory and `--vision-max-merged` capped at 256 unless given. Qwen3.8-Flash-Next keeps its tower resident | `resident` |
+ | `--vision-cpu` | `--vision` with `--vision-residency cpu` | off |
++| `--cpu-vision-idle-seconds N` | Qwen3.5-family CPU Vision weights load on the first uncached image encode and unload N seconds after the last encoder releases them; 0 retains them until model unload. Text-only requests never load the tower | 300 |
+ | `--vision-max-merged N` | merged-token budget of one media item; larger media downscales at preprocessing. Gemma 4: the most soft tokens an image or video frame may take, rounded down to its budgets 70, 140, 280, 560, 1120 (an image takes 280, 70 with `detail: low` and this bound with `detail: high`; a video frame 70) | 16384 |
+ | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
+ | `--gpu-clock-floor MHZ` | hold the graphics clock of the model's GPUs at MHZ or more while requests run and for 2 s after the last one (NVML locked clocks; an idle card then returns to the driver's clocks and idle power), so the stages of a layer pipeline do not wait at idle clocks (four RTX 3060 under Windows idled at 210 MHz between stages; two RTX 4090 under Linux kept their boost clocks without it, and decode stayed within 0.6 %). Giving the clocks back resets the cards' locked clocks, including a lock set before the start; a killed process leaves them locked until `nvidia-smi -rgc`. Needs administrator rights on Windows and root on Linux (a container usually lacks them); without them the start reports it and keeps the driver's clocks | off |
 diff --git a/docs/gemma4.md b/docs/gemma4.md
 index 1da6bc3bb05a01688f0d82d5890ab663e75a5aa3..de4b7c79fa2d6e0e1e9fd44922f0458e556a0cc0 100644
 --- a/docs/gemma4.md
@@ -588,10 +629,23 @@ index 6dec72ce69e53b86d217e286a3f714915165f010..624a387a47ca6d6f30f9042d655fd5a8
  
  The draft input is the target embedding of:
 diff --git a/docs/maintainer/engine-architecture.md b/docs/maintainer/engine-architecture.md
-index d746f1397819e9cf4976bf36b2e7b7a7df14f6e3..c91e875f4aebe691b9d30457497d4c3ca8399932 100644
+index d746f1397819e9cf4976bf36b2e7b7a7df14f6e3..738fea979b430c7bdd47e6e9b38e7b2a671bcf6d 100644
 --- a/docs/maintainer/engine-architecture.md
 +++ b/docs/maintainer/engine-architecture.md
-@@ -580,7 +580,7 @@ live KV 与 State 的 lane；未启用时每个 prefill unit 只多一次 relaxe
+@@ -81,6 +81,12 @@ flowchart LR
+ 
+ ---
+ 
++CPU Vision 的 Host 权重驻留由 Qwen Model 拥有：启动只验证绑定和格式，实际编码的 CPU worker
++取得不可变权重读租约时才读取并解码；多个编码器共享一次加载。最后一个租约释放后开始空闲计时，
++独立的 Host 回收线程在超时后释放权重，即使没有后续请求也会运行。该线程不调用 CUDA、不修改
++Program 或请求状态；活动租约阻止卸载，失败加载不发布部分权重。模型卸载停止并等待回收线程，
++已有租约独立拥有不可变数据直到最后一个读者释放。编码结果只保留 embedding，不继续持有权重。
++
+ ## 2. 四个执行边界
+ 
+ 请求路径只有四层：
+@@ -580,7 +586,7 @@ live KV 与 State 的 lane；未启用时每个 prefill unit 只多一次 relaxe
  - ordinary decode 不运行 catalog scan、pressure search 或后台 replica scan；
  - workspace 是 Program 启动时统一规划的 backing，Vision、Text 和 speculative schedule 按互斥 lifetime
    使用其内部区域；
@@ -600,7 +654,7 @@ index d746f1397819e9cf4976bf36b2e7b7a7df14f6e3..c91e875f4aebe691b9d30457497d4c3c
    KV plane、GDN state、replay records 和 workspace，位于各自设备上；仍然是一个 Program、一个 KV page
    allocator（每个 plane 绑定一个 rank）、一个 Scheduler 和一个 commit 序列。embedding、head、round state、
    sampling 和 MTP 留在 rank 0，residual 经 `StageLink` 逐 stage 传递并由最后一个 stage 送回。KV 容量取各设备
-@@ -698,12 +698,13 @@ captures D2H draft transfer and a host function that starts the lanes' jobs from
+@@ -698,12 +704,13 @@ captures D2H draft transfer and a host function that starts the lanes' jobs from
  verification, then a host function that collects the jobs and the H2D mask transfer before the
  acceptance. Host functions call no CUDA API; they capture exceptions for rethrow after stream
  synchronization and before any token can be published. All node addresses belong to Program and
@@ -909,7 +963,7 @@ index 9be7945f3a489744d8f2284c5ebebaccee767944..34c6f4e701bfc7d5566ee6fcc87eeba6
  sampled token's top 20 from the same logits before sampling.
  
 diff --git a/docs/serving.md b/docs/serving.md
-index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692e773c7b0 100644
+index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..76d62c5b3a0850f7e6ebb94a1ddf8d8c8403c552 100644
 --- a/docs/serving.md
 +++ b/docs/serving.md
 @@ -50,7 +50,9 @@ ledger.
@@ -923,7 +977,42 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  accepts draft counts 1..15 and supports the same sampling, concurrency, prefix reuse, and
  image/video request surfaces. It may remain combined with
  `--vision`.
-@@ -150,7 +152,9 @@ accepted as `auto`, `high` or `low`. `auto` and `high` see the image at the reso
+@@ -127,8 +129,9 @@ request log line reports `overlay=<windows>x<conc|excl|mixed> <ms> (evict <MiB>
+ staged <MiB>)` and the JSON record carries `vision_overlay`, including `exclusive_windows`.
+ 
+ `--vision-residency cpu` (or `--vision-cpu`, which also sets `--vision`) keeps no Vision memory on
+-the device at all: the tower is decoded to FP32 host memory at load (about 1.7 GiB for the Qwen3.6
+-tower) and each image is encoded on CPU threads, then uploaded a chunk's columns at a time like an
++the device at all: on the Qwen3.5 family (including Qwen3.6/3.8), the first uncached image encode
++loads and decodes the tower to FP32 host memory (about 1.7 GiB), and each image is encoded on CPU
++threads, then uploaded a chunk's columns at a time like an
+ overlay result. The encode of the next image runs beside other lanes' decode, and the lane that
+ owns it yields its prefill units until it completes, but it is slow: on a 12-core desktop CPU a
+ 512x512 image takes seconds, and the cost grows with the square of the patches, so this residency
+@@ -138,6 +141,22 @@ agree closely but not bit for bit. It reads the tower's weights in the official
+ formats as well as BF16, FP8 and NVFP4; a projection stored with a Hadamard rotation or an input
+ gather is refused at load.
+ 
++Qwen CPU Vision weights are shared across encoders and unload automatically after **300 seconds**
++without a weight reader, including when the server receives no further requests. Configure this
++with `--cpu-vision-idle-seconds N`; `0` disables timed unloading while preserving lazy loading.
++Active encoders hold read leases; the timeout starts only when the last lease is released. Cached
++media/prepared embeddings do not hold the tower in RAM. A later uncached encode reloads the same
++artifact and pays the load/decode delay again; text generation never does. Logical binding/format
++checks still run at startup, and a failed on-demand read publishes no partial weights and may be
++retried. An on-demand read failure returns an unavailable error for that image request; the Engine
++continues serving other requests. The artifact must remain available at its original entry path. This policy applies to the
++Qwen3.5-family CPU tower; Gemma 4 retains its separate CPU implementation.
++
++`/props.cpu_vision` reports residency, logical weight bytes, active encoder leases, load/unload
++counts, the last load time and the idle timeout. `CPU_VISION loaded` / `unloaded` log records
++identify actual transitions. Weight bytes exclude vector spare capacity and allocator overhead;
++OS working set and private memory can differ from this logical count.
++
+ Gemma 4 places its tower the same three ways with its own mechanics: `overlay` keeps the 27
+ blocks' matrices in pinned host memory and streams them through a two-block device window during
+ each encode (about 0.14 GiB of device memory instead of 1.07 GiB), and `cpu` runs an FP32 tower
+@@ -150,7 +169,9 @@ accepted as `auto`, `high` or `low`. `auto` and `high` see the image at the reso
  `--vision-max-merged` allows, which is NInfer's normal preprocessing. `low` bounds the image at the
  area of a 512 x 512 picture, 256 merged Vision tokens (or the server's bound when that is smaller),
  for a cheaper and coarser look. The same bytes at both details are prepared, cached and reused as
@@ -934,7 +1023,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  `auto` when the server runs with `--lenient-image-detail`. Gemma 4 maps the three to its budgets:
  `low` 70 soft tokens, `auto` the release's 280, `high` the `--vision-max-merged` bound (1120 by
  default).
-@@ -221,13 +225,13 @@ of the count: a token inside the string is decided by the characters it adds aga
+@@ -221,13 +242,13 @@ of the count: a token inside the string is decided by the characters it adds aga
  
  Every model computes a constrained request's masks on host threads while the GPU runs the step
  that needs them: the next token's mask, or in a speculative round one mask per draft position,
@@ -954,7 +1043,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  an explicit error, and so does a Gemma 4 or Flash-Next decoding request without a token for 120 s
  ([Gemma 4](gemma4.md#structured-output)). A generated token the grammar does not admit, which the
  masks should have excluded, fails its own request with an internal error (HTTP 500) and leaves
-@@ -375,35 +379,50 @@ grammar text instead.
+@@ -375,35 +396,50 @@ grammar text instead.
  This helps the model choose the intended final-answer branch when tools remain enabled; the
  token grammar enforces validity independently. Tool selection and termination remain model
  decisions under `tool_choice:"auto"`; use `tool_choice:"none"` when no further tools are needed.
@@ -1034,7 +1123,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  
  Masks are applied before target top-k/top-p/min-p filtering at **every** speculative position,
  including correction and bonus tokens. Drafts are proposed without the mask; every verification
-@@ -894,12 +913,10 @@ The endpoint supports:
+@@ -894,12 +930,10 @@ The endpoint supports:
  - function tools and free-form `custom` tools, the latter served to the model as a
    single-string-input function under the caller's own tool name so callers that dispatch by name
    keep working;
@@ -1051,7 +1140,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  - assistant tool-call history, tool-result messages, and legacy function-call history;
  - the top-level `reasoning_effort` field, where the `default` and `auto` aliases resolve to the
    server-configured level;
-@@ -912,7 +929,8 @@ The endpoint supports:
+@@ -912,7 +946,8 @@ The endpoint supports:
  Options whose observable behavior the Engine cannot provide are rejected when they request that
  behavior. This includes constrained output on a server without `--structured-output` (unless
  it runs with `--unconstrained-response-format`), nonzero `logit_bias`, audio/file input or audio
@@ -1061,7 +1150,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  Each capability rejection identifies the affected field and the guarantee NInfer cannot provide.
  
  Semantically neutral fields do not make an otherwise executable request fail. All-zero
-@@ -976,7 +994,8 @@ complete responses agree, and quoted examples stream as they arrive. A marker af
+@@ -976,7 +1011,8 @@ complete responses agree, and quoted examples stream as they arrive. A marker af
  still opens a call. Strict tools' grammar completes a call the model opens inside code, and that
  call is still returned as text.
  
@@ -1071,7 +1160,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  opens with a complete call, each marker is tried in order, and the first complete region that
  consumes the rest of the response becomes the structured turn; quoted markup before it stays
  ordinary content. At most sixteen markers are tried, the first one included, so an output that
-@@ -1503,15 +1522,15 @@ wire response contains typed `output` Items.
+@@ -1503,15 +1539,15 @@ wire response contains typed `output` Items.
  | `metadata` | at most 16 string pairs; keys at most 64 characters and values at most 512 |
  | `client_metadata` | Codex client extension; an object or `null`, accepted as opaque tracing metadata with no generation effect |
  | `reasoning.effort` | `none` requests disabled thinking; other standard effort values pass to the selected template |
@@ -1090,7 +1179,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  | `max_tool_calls` | non-negative integer accepted as a hosted-tool no-op; NInfer does not execute hosted tools |
  | `truncation` | omitted or `disabled`; overlong input fails instead of silently dropping Items |
  | `top_logprobs` | integer in `[0,20]`; a nonzero value also asks for [token log probabilities](#token-log-probabilities) |
-@@ -1608,7 +1627,7 @@ and without `strict`, which only selects the server's output contract, and parse
+@@ -1608,7 +1644,7 @@ and without `strict`, which only selects the server's output contract, and parse
  into separate `function_call` output Items. Each output has a protocol Item `id` (`fc_...`) and a distinct
  `call_id` (`call_...`). The client executes the function and sends a `function_call_output` Item in
  a later request. Only functions in the current effective tool set can become structured calls;
@@ -1099,7 +1188,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  declaration order, while `tool_choice:"none"` disables structured tool output even when the history
  contains earlier calls. A function definition's `async` may be `false`; `async:true` fails with
  `async_tools_not_supported`, because the turn-based tool loop has no non-blocking call protocol.
-@@ -1633,14 +1652,18 @@ run non-strict (see [Structured output](#structured-output)). NInfer does not ex
+@@ -1633,14 +1669,18 @@ run non-strict (see [Structured output](#structured-output)). NInfer does not ex
  so hosted tools, remote MCP tools, and custom free-form tools are rejected. Deferred
  loading, output schemas, and caller restrictions that exclude direct invocation are also rejected
  because their semantics cannot be honored.
@@ -1120,7 +1209,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  - an assistant `message` containing an `output_text` part;
  - one or more `function_call` Items.
  
-@@ -1694,13 +1717,11 @@ The normal lifecycle is:
+@@ -1694,13 +1734,11 @@ The normal lifecycle is:
  4. matching `*.done`, `response.content_part.done`, and `response.output_item.done` events;
  5. exactly one `response.completed`, `response.incomplete`, or `response.failed` terminal event.
  
@@ -1139,7 +1228,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  
  For `include:["reasoning.encrypted_content"]`, the in-progress
  `response.output_item.added` Item omits `encrypted_content` because the complete reasoning text is
-@@ -1773,8 +1794,8 @@ curl http://127.0.0.1:8080/v1/responses/input_tokens \
+@@ -1773,8 +1811,8 @@ curl http://127.0.0.1:8080/v1/responses/input_tokens \
  Unsupported Create fields include Conversations, prompt templates, context management,
  `access_programs`, hosted moderation, `include` values other than
  `reasoning.encrypted_content`, background execution, compaction, files/audio, and
@@ -1150,7 +1239,7 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  
  
  ## Anthropic Messages
-@@ -1841,21 +1862,15 @@ protocol-validated value to the selected template, substituting the nearest valu
+@@ -1841,21 +1879,15 @@ protocol-validated value to the selected template, substituting the nearest valu
  accepts as described above. `output_config.format` accepts `{"type":"json_schema","schema":{...}}`,
  enforced strictly (see [Structured output](#structured-output)); Count Tokens ignores it.
  
@@ -1181,7 +1270,15 @@ index e6b5fc2b7ec784d156aa75e61a8885a1c68049ab..d3944777b291f115c9a0a534c5871692
  
  Ephemeral `cache_control` on the request, tools, System blocks, and User text/image frontiers is a
  best-effort retention hint. NInfer maps representable breakpoints to exact prompt frontiers, keeps
-@@ -2591,3 +2606,20 @@ use [structured output](#structured-output).
+@@ -2077,6 +2109,7 @@ The table lists executable defaults. The startup example selects a long-context
+ | `--vision` | enable media input and load Vision GPU allocations | off |
+ | `--vision-residency resident\|overlay\|cpu` | `overlay` keeps the Vision tower in pinned host memory and encodes each image inside a window borrowed from the evict-ranked text weight tail, so `--vision` no longer reserves device memory and `--kv-capacity auto` resolves the no-vision capacity; requires `--vision` and CUDA virtual memory management; Gemma 4 keeps its tower's blocks pinned and streams them through a two-block device window instead. `--vision-offload on\|off` is accepted as an alias for `overlay\|resident`. `cpu` decodes the tower to host FP32 and encodes on CPU threads with no device Vision memory (see [Vision residency](#vision-residency)); it caps `--vision-max-merged` at 256 unless given. Qwen3.8-Flash-Next keeps its tower resident | `resident` |
+ | `--vision-cpu` | `--vision` with `--vision-residency cpu` | off |
++| `--cpu-vision-idle-seconds N` | Qwen3.5-family CPU Vision weights load on the first uncached image encode and unload N seconds after the last encoder releases them; 0 retains them until model unload. Text-only requests never load the tower | 300 |
+ | `--vision-max-merged N` | merged-token budget of one media item, `[64, 16384]`; larger images and video frame pairs are downscaled at preprocessing instead of being rejected, and the overlay window is sized for it. Gemma 4 (at least 70): the most soft tokens an image or video frame takes, rounded down to its budgets 70, 140, 280, 560, 1120; an image takes 280 (70 at `detail: low`, this bound at `detail: high`), a video frame 70 | 16384 |
+ | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
+ | `--gpu-clock-floor MHZ` | hold the graphics clock of the model's GPUs at MHZ or more while requests run and for 2 s after the last one (NVML locked clocks; an idle card then returns to the driver's clocks and idle power), so the stages of a layer pipeline do not wait at idle clocks (four RTX 3060 under Windows idled at 210 MHz between stages; two RTX 4090 under Linux kept their boost clocks without it, and decode stayed within 0.6 %). Giving the clocks back resets the cards' locked clocks, including a lock set before the start; a killed process leaves them locked until `nvidia-smi -rgc`. Needs administrator rights on Windows and root on Linux (a container usually lacks them); without them the start reports it and keeps the driver's clocks | off |
+@@ -2591,3 +2624,20 @@ use [structured output](#structured-output).
  
  Prompt-token usage includes chat-template and expanded media tokens. Generated-token usage comes
  from accepted output token IDs, including a stop token whose decoded text may be withheld.
@@ -1514,7 +1611,7 @@ index 0000000000000000000000000000000000000000..9c7ede518ca14fd2f735f9cfe5336c5f
 +                std::uint32_t block_tokens, Tensor& output, cudaStream_t stream);
 +} // namespace ninfer::ops
 diff --git a/include/ninfer/types.h b/include/ninfer/types.h
-index 3021b0151ae4b69f883a5db93b36ba4a8ad04928..592423fa81a4f0808b71c51ba02184ec018d8e0f 100644
+index 3021b0151ae4b69f883a5db93b36ba4a8ad04928..db3b352565b1b422d2b9c14bfab7a9853a0bb5b9 100644
 --- a/include/ninfer/types.h
 +++ b/include/ninfer/types.h
 @@ -146,8 +146,9 @@ struct SpeculativeOptions {
@@ -1614,7 +1711,15 @@ index 3021b0151ae4b69f883a5db93b36ba4a8ad04928..592423fa81a4f0808b71c51ba02184ec
      ModelSuspendOptions suspend;
      KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(2048);
      std::uint32_t max_concurrency      = 1;
-@@ -905,7 +960,17 @@ struct NgramSessionHints {
+@@ -677,6 +732,7 @@ struct EngineOptions {
+     std::uint32_t media_preprocess_threads = 0;
+     bool enable_vision                     = false;
+     VisionResidency vision_residency       = VisionResidency::Resident;
++    std::uint32_t cpu_vision_idle_seconds = 300; // 0: retain lazily loaded Qwen CPU Vision weights
+     // Speed-for-quality trades, opt-in and off by default. Measured in
+     // docs/maintainer/quality-trade-experiments.md: lm_head_q4 costs +0.69% perplexity for a
+     // C8 decode gain (~3%, real chat prompts); gdn_state_fp16 is free within measurement noise
+@@ -905,7 +961,17 @@ struct NgramSessionHints {
      // prior generated proposals must not reuse the random draws that produced them.
  };
  
@@ -1632,7 +1737,7 @@ index 3021b0151ae4b69f883a5db93b36ba4a8ad04928..592423fa81a4f0808b71c51ba02184ec
      ExecutionOptions execution;
      StopPolicy stop;
      OutputOptions output;
-@@ -1198,6 +1263,7 @@ enum class RequestErrorKind : std::uint8_t {
+@@ -1198,6 +1264,7 @@ enum class RequestErrorKind : std::uint8_t {
      ContextLengthExceeded,
      MediaBudgetExceeded,
      InvalidMedia,
@@ -1640,7 +1745,32 @@ index 3021b0151ae4b69f883a5db93b36ba4a8ad04928..592423fa81a4f0808b71c51ba02184ec
      Overloaded,
      QueueTimeout,
      Cancelled,
-@@ -1669,7 +1735,47 @@ struct DeviceMemorySummary {
+@@ -1605,8 +1672,8 @@ struct ArenaMemorySummary {
+     std::size_t peak_used_bytes = 0;
+ };
+ 
+-// Logical regions within the one physical workspace allocation. These byte values describe
+-// layout and live extents and must not be added to workspace.capacity_bytes.
++// Vision workspace extents and separate weight residency. Workspace extents describe regions
++// within workspace.capacity_bytes; CPU/overlay Host weights are separate allocations.
+ struct VisionWorkspaceMemorySummary {
+     std::uint32_t aggregate_prompt_tokens = 0;
+     std::uint32_t max_item_tokens         = 0;
+@@ -1620,6 +1687,13 @@ struct VisionWorkspaceMemorySummary {
+     std::size_t window_capacity_bytes     = 0; // overlay: device bytes one window borrows
+     std::size_t pinned_weight_bytes       = 0; // overlay: host-pinned tower bytes
+     std::size_t mirror_bytes              = 0; // overlay: pinned mirror of the borrowable tail
++    bool cpu_weights_lazy                = false;
++    bool cpu_weights_loading             = false;
++    std::size_t cpu_weight_bytes          = 0;
++    std::size_t cpu_weight_users          = 0;
++    std::uint64_t cpu_weight_loads        = 0, cpu_weight_unloads = 0;
++    double cpu_weight_last_load_seconds   = 0;
++    std::uint32_t cpu_weight_idle_seconds = 0;
+ };
+ 
+ enum class ModelResidency : std::uint8_t {
+@@ -1669,7 +1743,47 @@ struct DeviceMemorySummary {
      std::size_t expert_cache_bytes = 0;
  };
  
@@ -1688,7 +1818,7 @@ index 3021b0151ae4b69f883a5db93b36ba4a8ad04928..592423fa81a4f0808b71c51ba02184ec
      int device                                = 0;
      std::uint32_t max_context                 = 0;
      KvCapacityMode kv_capacity_mode           = KvCapacityMode::Explicit;
-@@ -1707,6 +1813,7 @@ struct MemorySummary {
+@@ -1707,6 +1821,7 @@ struct MemorySummary {
      std::size_t host_kv_page_group_bytes = 0;
      // Engaged only when the single host RAM budget mode is active.
      std::size_t host_cache_budget_bytes = 0;
@@ -1696,7 +1826,7 @@ index 3021b0151ae4b69f883a5db93b36ba4a8ad04928..592423fa81a4f0808b71c51ba02184ec
      // Host or disk routed experts: persistent device cache bytes, over every device. Native
      // Qwen delivery windows are counted separately in workspace.
      std::size_t expert_cache_bytes = 0;
-@@ -1775,7 +1882,10 @@ struct ExpertResidencyStats {
+@@ -1775,7 +1890,10 @@ struct ExpertResidencyStats {
  // Monotonic execution counters, boundary-consistent current gauges, and explicitly named last
  // decision observations. Consumers derive interval counters by subtracting two snapshots.
  struct RuntimeStats {
@@ -2981,6 +3111,26 @@ index df334c19e2cd923efad56794c4e9ac89d25dc747..ca7bc18845aef5bebd5acba083929906
  target_sources(ninfer_model_runtime PRIVATE expert_profile.cpp)
  
  include(qwen3_5/loading_sources.cmake)
+diff --git a/src/models/load_options.h b/src/models/load_options.h
+index 4eb0310d16b1f954220770b272570af51920681a..e40d929caaf4a69d97e61b316ca22cd277227447 100644
+--- a/src/models/load_options.h
++++ b/src/models/load_options.h
+@@ -43,6 +43,7 @@ struct LoadOptions {
+     // embedding, proposal head and MTP layer in an evictable device tail that one encode window
+     // may borrow. Resident whenever Vision is disabled.
+     VisionResidency vision_residency = VisionResidency::Resident;
++    std::uint32_t cpu_vision_idle_seconds = 300; // 0: retain lazily loaded Qwen CPU Vision weights
+     // How many devices the instance spans (`--devices`). One is the single-GPU route; more split
+     // the layers into that many stages, each owning its layers' weights, KV cache and recurrent
+     // state. The embedding, head and round state stay on the first device.
+@@ -128,6 +129,7 @@ struct LoadOptions {
+             .vision_max_merged_tokens = options.vision_max_merged_tokens,
+             .vision_residency         = options.enable_vision ? options.vision_residency
+                                                               : VisionResidency::Resident,
++            .cpu_vision_idle_seconds = options.cpu_vision_idle_seconds,
+             .ranks = std::max<std::size_t>(options.devices.size(), 1),
+             .stage_layers = options.stage_layers};
+ }
 diff --git a/src/models/qwen3_5/execution/attention.cpp b/src/models/qwen3_5/execution/attention.cpp
 index 4533e7c6345451fd3d82a3ee2e64e4191368a47c..a6ba5e7d2f631bbef9fc07e69947ef99cb820fc8 100644
 --- a/src/models/qwen3_5/execution/attention.cpp
@@ -3475,6 +3625,86 @@ index fc92d1b8487f19ef8f566811d78248d06a345dc8..783a581d120e2a63c5f2b7074a6b5d68
      void retire_handoff() noexcept;
      [[nodiscard]] double elapsed_seconds() const;
  
+diff --git a/src/models/qwen3_5/execution/vision_cpu.cpp b/src/models/qwen3_5/execution/vision_cpu.cpp
+index 1dfd0a582757d0bafd002b13756e80ae89a2e2ef..4098a26ec87447768cd09cf52745a6f1b676dd0b 100644
+--- a/src/models/qwen3_5/execution/vision_cpu.cpp
++++ b/src/models/qwen3_5/execution/vision_cpu.cpp
+@@ -1,4 +1,5 @@
+ #include "models/qwen3_5/execution/vision_cpu.h"
++#include "runtime/contract/execution.h"
+ 
+ #include <algorithm>
+ #include <bit>
+@@ -512,7 +513,7 @@ std::vector<std::uint16_t> encode_vision_on_cpu(const CpuVisionWeights& weights,
+     return out;
+ }
+ 
+-CpuVisionSession::CpuVisionSession(std::shared_ptr<const CpuVisionWeights> weights)
++CpuVisionSession::CpuVisionSession(std::shared_ptr<CpuVisionCache> weights)
+     : weights_(std::move(weights)) {
+     if (!weights_) { throw std::invalid_argument("CPU Vision session has no weights"); }
+ }
+@@ -535,8 +536,21 @@ void CpuVisionSession::submit_item(std::shared_ptr<const PreparedMediaPayload> p
+         try {
+             const std::lock_guard turn(encode_turn());
+             const auto started = std::chrono::steady_clock::now();
+-            results_[slot] =
+-                encode_vision_on_cpu(*weights_, payload->span(), control, 0, &cancelled_);
++            if (!cancelled_.load(std::memory_order_acquire)) {
++                std::shared_ptr<const CpuVisionWeights> weights;
++                try {
++                    weights = weights_->acquire();
++                } catch (const std::bad_alloc&) {
++                    throw; // preserve the Engine's Host OOM recovery path
++                } catch (const std::exception& error) {
++                    throw runtime::RequestResourceError(
++                        std::string("CPU Vision weight loading failed: ") + error.what());
++                }
++                results_[slot] =
++                    encode_vision_on_cpu(*weights, payload->span(), control, 0, &cancelled_);
++            } else {
++                results_[slot].clear();
++            }
+             worker_seconds_ =
+                 std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+         } catch (...) { error_ = std::current_exception(); }
+diff --git a/src/models/qwen3_5/execution/vision_cpu.h b/src/models/qwen3_5/execution/vision_cpu.h
+index bd21d84dbfb6a4e69ed54a64420f619136cf67e3..95f1e647e93f066a872229e13d37593132173515 100644
+--- a/src/models/qwen3_5/execution/vision_cpu.h
++++ b/src/models/qwen3_5/execution/vision_cpu.h
+@@ -1,12 +1,12 @@
+ #pragma once
+ 
+ // The Vision tower on CPU threads, for `--vision-residency cpu`. The encoder mirrors the device one
+-// op by op (vision.cpp) in FP32 over weights decoded at load; only its merged embeddings reach the
++// op by op (vision.cpp) in FP32 over weights acquired for each encode; only its merged embeddings reach the
+ // device, staged per prefill chunk the way overlay results are. One item encodes at a time across
+ // the process, since each encode already spreads over every core.
+ 
+ #include "models/qwen3_5/frontend/prepared_prompt.h"
+-#include "models/qwen3_5/load/vision_cpu.h"
++#include "models/qwen3_5/load/vision_cpu_cache.h"
+ #include "models/qwen3_5/program/vision_control.h"
+ 
+ #include <atomic>
+@@ -34,7 +34,7 @@ encode_vision_on_cpu(const CpuVisionWeights& weights, std::span<const std::uint1
+ // alternate, so the next item can encode while prefill still reads the previous one.
+ class CpuVisionSession {
+ public:
+-    explicit CpuVisionSession(std::shared_ptr<const CpuVisionWeights> weights);
++    explicit CpuVisionSession(std::shared_ptr<CpuVisionCache> weights);
+     ~CpuVisionSession();
+ 
+     CpuVisionSession(const CpuVisionSession&)            = delete;
+@@ -62,7 +62,7 @@ public:
+     [[nodiscard]] double encode_seconds() const noexcept { return encode_seconds_; }
+ 
+ private:
+-    std::shared_ptr<const CpuVisionWeights> weights_;
++    std::shared_ptr<CpuVisionCache> weights_;
+     std::thread worker_;
+     std::atomic<bool> finished_{false};
+     std::atomic<bool> cancelled_{false};
 diff --git a/src/models/qwen3_5/execution/workspace.h b/src/models/qwen3_5/execution/workspace.h
 index dbc8d092f66ddd993390ad7a2be5315f5d893ec6..1d4eab4f059fc7a20b96651e4bd25195e577e915 100644
 --- a/src/models/qwen3_5/execution/workspace.h
@@ -4726,10 +4956,50 @@ index d15d2c847f0d037ef80a51a8792ec0561ec4c63d..9b3ae06b59bcc95182203858e113e1c9
 +target_include_directories(ninfer_model_runtime PRIVATE ${PROJECT_SOURCE_DIR}/third_party/xgrammar/cpp)
 +target_link_libraries(ninfer_model_runtime PRIVATE ninfer_xgrammar)
 diff --git a/src/models/qwen3_5/load.cpp b/src/models/qwen3_5/load.cpp
-index 5e026e114829d9736fad840130ac92028f38b103..0f648b021e65d318675a7e6a290bf31bb66d0608 100644
+index 5e026e114829d9736fad840130ac92028f38b103..e42beb8057bcc563bb95176f1bdb0740ba303f28 100644
 --- a/src/models/qwen3_5/load.cpp
 +++ b/src/models/qwen3_5/load.cpp
-@@ -256,6 +256,15 @@ std::vector<std::uint32_t> default_stage_layers(const artifact::Reader& reader,
+@@ -7,7 +7,7 @@
+ #include "core/paged_kv_storage.h"
+ #include "core/stage_plan.h"
+ #include "models/qwen3_5/load/bindings.h"
+-#include "models/qwen3_5/load/vision_cpu.h"
++#include "models/qwen3_5/load/vision_cpu_cache.h"
+ 
+ #include <algorithm>
+ #include <stdexcept>
+@@ -24,7 +24,7 @@ struct LoadPlan::Impl {
+     artifact::MaterializationPlan materialization;
+     FrontendResources resources;
+     InstanceInfo info;
+-    std::shared_ptr<const CpuVisionWeights> cpu_vision;
++    std::shared_ptr<CpuVisionCache> cpu_vision;
+ };
+ 
+ LoadPlan::LoadPlan(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+@@ -95,7 +95,20 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options,
+         throw std::invalid_argument("--vision-residency cpu requires a Vision artifact");
+     }
+     if (options.cpu_vision()) {
+-        out->cpu_vision = loading::load_cpu_vision(binder, *out->config.vision, text);
++        if (out->artifact_path.empty()) {
++            throw std::invalid_argument("CPU Vision lazy loading requires the artifact entry path");
++        }
++        loading::validate_cpu_vision(binder, *out->config.vision, text);
++        out->cpu_vision = std::make_shared<CpuVisionCache>(
++            [path = std::filesystem::absolute(out->artifact_path), id = reader.artifact_id(),
++             vision = *out->config.vision, target = text] {
++                artifact::Reader source(path);
++                if (source.artifact_id() != id) {
++                    throw artifact::ArtifactError("CPU Vision artifact changed since model loading");
++                }
++                artifact::Binder source_bindings(source);
++                return loading::load_cpu_vision(source_bindings, vision, target);
++            }, std::chrono::seconds(options.cpu_vision_idle_seconds));
+     } else if (out->config.vision) {
+         out->weights.vision = loading::bind_vision(
+             bindings, *out->config.vision, text.hidden_size,
+@@ -256,6 +269,15 @@ std::vector<std::uint32_t> default_stage_layers(const artifact::Reader& reader,
              head_bytes += parameter_bytes(reader, bindings, WeightId{index});
          }
      }
@@ -4814,6 +5084,333 @@ index bf467a06fa108686c03f58f229e2a5805e050879..23cd5451e600a26418208511ede7c794
  }
  
  bool Bindings::transcode(WeightId id, QType target, std::string_view option) {
+diff --git a/src/models/qwen3_5/load/vision_cpu.cpp b/src/models/qwen3_5/load/vision_cpu.cpp
+index c41d7533e41f962dc51add57cadcac10c1c519ba..d91ffe49543f0f2be2006cd9aa626f81fa422247 100644
+--- a/src/models/qwen3_5/load/vision_cpu.cpp
++++ b/src/models/qwen3_5/load/vision_cpu.cpp
+@@ -266,17 +266,27 @@ std::vector<float> decode_tensor(const WeightGeometry& geometry, std::span<const
+ }
+ 
+ namespace loading {
+-
++namespace {
+ std::shared_ptr<const CpuVisionWeights>
+-load_cpu_vision(artifact::Binder& binder, const VisionConfig& config, const TextConfig& target) {
++load_cpu_vision_impl(artifact::Binder& binder, const VisionConfig& config, const TextConfig& target,
++                     bool materialize) {
+     const artifact::Reader& reader = binder.reader();
+     std::unordered_map<std::size_t, std::vector<float>> decoded;
+     const auto tensor = [&](const std::string& name, artifact::Shape shape) {
+         const artifact::ParameterReference reference =
+             binder.parameter(name, std::move(shape), artifact::Residency::Values);
+         std::vector<float> out;
+-        out.reserve(static_cast<std::size_t>(reference.binding.elements));
++        if (materialize) out.reserve(static_cast<std::size_t>(reference.binding.elements));
+         for (const artifact::Part& part : reference.binding.parts) {
++            const auto& geometry = reader.geometry(part.object);
++            const bool supported =
++                (geometry.layout == QuantLayout::Contiguous &&
++                    (geometry.format == QType::BF16 || geometry.format == QType::FP32)) ||
++                (geometry.layout == QuantLayout::RowSplit && code_bits(geometry.format) != 0) ||
++                (geometry.layout == QuantLayout::RowScale && geometry.format == QType::FP8_E4M3FN_ROW_BF16) ||
++                (geometry.layout == QuantLayout::BlockScaleK16M128x4 && geometry.format == QType::NVFP4);
++            if (!supported) throw std::invalid_argument("CPU Vision cannot decode this tensor representation");
++            if (!materialize) continue;
+             auto found = decoded.find(part.object.index);
+             if (found == decoded.end()) {
+                 found =
+@@ -308,6 +318,10 @@ load_cpu_vision(artifact::Binder& binder, const VisionConfig& config, const Text
+         return first;
+     };
+ 
++    if (!config.num_heads || config.hidden_size % config.num_heads != 0 ||
++        config.hidden_size / config.num_heads != kRotaryHeadDim) {
++        throw std::invalid_argument("CPU Vision requires 72-wide attention heads");
++    }
+     const auto h            = config.hidden_size;
+     const auto intermediate = config.intermediate_size;
+     const auto merger       = config.merger_width();
+@@ -355,9 +369,19 @@ load_cpu_vision(artifact::Binder& binder, const VisionConfig& config, const Text
+     weights->merger_fc2 =
+         projection("vision/merger/fc2", {target.hidden_size, merger}, "vision/merger/activation");
+     weights->merger_fc2_bias = tensor("vision/merger/fc2_bias", {target.hidden_size});
++    if (!materialize) return {};
+     weights->validate();
+     return weights;
+ }
++} // namespace
++
++void validate_cpu_vision(artifact::Binder& binder, const VisionConfig& config, const TextConfig& target) {
++    (void)load_cpu_vision_impl(binder, config, target, false);
++}
++std::shared_ptr<const CpuVisionWeights>
++load_cpu_vision(artifact::Binder& binder, const VisionConfig& config, const TextConfig& target) {
++    return load_cpu_vision_impl(binder, config, target, true);
++}
+ 
+ } // namespace loading
+ } // namespace ninfer::models::qwen3_5
+diff --git a/src/models/qwen3_5/load/vision_cpu.h b/src/models/qwen3_5/load/vision_cpu.h
+index 3d2e89f6a89c9c167598b300f3fd2685a89e0063..b642f53eaa69eb5961a3d096774801aa264ca927 100644
+--- a/src/models/qwen3_5/load/vision_cpu.h
++++ b/src/models/qwen3_5/load/vision_cpu.h
+@@ -1,7 +1,7 @@
+ #pragma once
+ 
+ // Host FP32 Vision weights for `--vision-residency cpu`: the tower's parameters are read from the
+-// artifact and decoded once at load, never placed on the device. The encoder that consumes them
++// artifact and decoded on demand, never placed on the device. The encoder that consumes them
+ // lives in execution/vision_cpu.h.
+ 
+ #include "artifact/binder.h"
+@@ -61,6 +61,8 @@ struct CpuVisionWeights {
+                                                std::span<const std::byte> bytes);
+ 
+ namespace loading {
++// Check logical shapes, use auxiliaries and supported formats without reading weight payloads.
++void validate_cpu_vision(artifact::Binder& binder, const VisionConfig& config, const TextConfig& target);
+ 
+ // Reads and decodes the tower without any device or Host placement demand. A projection whose
+ // Use carries a Hadamard rotation or an input gather is refused: the CPU encoder feeds every
+diff --git a/src/models/qwen3_5/load/vision_cpu_cache.cpp b/src/models/qwen3_5/load/vision_cpu_cache.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..2963ea6a539c472d4023c0b4d456fae5fdeb2620
+--- /dev/null
++++ b/src/models/qwen3_5/load/vision_cpu_cache.cpp
+@@ -0,0 +1,120 @@
++#include "models/qwen3_5/load/vision_cpu_cache.h"
++
++#include <condition_variable>
++#include <cstdio>
++#include <mutex>
++#include <stdexcept>
++#include <utility>
++
++namespace ninfer::models::qwen3_5 {
++
++struct CpuVisionCache::State {
++    std::mutex mutex;
++    std::condition_variable changed;
++    Loader loader;
++    std::shared_ptr<const CpuVisionWeights> weights;
++    std::chrono::steady_clock::time_point idle_since;
++    std::size_t users = 0;
++    std::uint64_t loads = 0, unloads = 0;
++    double last_load_seconds = 0;
++    bool stopping = false;
++    bool loading = false;
++};
++
++struct CpuVisionCache::Lease {
++    std::shared_ptr<State> state;
++    std::shared_ptr<const CpuVisionWeights> weights;
++    ~Lease() {
++        // Drop this lease's immutable owner before waking the reaper, so expiry frees the last
++        // weight allocation rather than reporting an unload with a surviving lease-owned copy.
++        weights.reset();
++        std::lock_guard lock(state->mutex);
++        if (--state->users == 0) state->idle_since = std::chrono::steady_clock::now();
++        state->changed.notify_all();
++    }
++};
++
++CpuVisionCache::CpuVisionCache(Loader loader, std::chrono::milliseconds idle_timeout)
++    : state_(std::make_shared<State>()) {
++    if (!loader || idle_timeout.count() < 0) {
++        throw std::invalid_argument("invalid CPU Vision weight cache configuration");
++    }
++    state_->loader = std::move(loader);
++    if (idle_timeout.count() == 0) return; // lazy load, retain until model unload
++    reaper_ = std::thread([state = state_, idle_timeout] {
++        std::unique_lock lock(state->mutex);
++        for (;;) {
++            state->changed.wait(lock, [&] {
++                return state->stopping || (state->weights && state->users == 0);
++            });
++            if (state->stopping) return;
++            const auto idle_since = state->idle_since;
++            if (state->changed.wait_until(lock, idle_since + idle_timeout, [&] {
++                    return state->stopping || state->users != 0 || state->idle_since != idle_since;
++                })) continue;
++            const auto bytes = state->weights->bytes();
++            state->weights.reset();
++            ++state->unloads;
++            std::fprintf(stderr, "CPU_VISION unloaded bytes=%zu idle_ms=%lld\n", bytes,
++                         static_cast<long long>(idle_timeout.count()));
++        }
++    });
++}
++
++CpuVisionCache::~CpuVisionCache() {
++    {
++        std::lock_guard lock(state_->mutex);
++        state_->stopping = true;
++    }
++    state_->changed.notify_all();
++    if (reaper_.joinable()) reaper_.join();
++    // Any outstanding lease keeps its immutable bytes and State alive independently.
++}
++
++std::shared_ptr<const CpuVisionWeights> CpuVisionCache::acquire() {
++    std::unique_lock lock(state_->mutex);
++    state_->changed.wait(lock, [&] { return !state_->loading; });
++    if (!state_->weights) {
++        state_->loading = true;
++        const auto started = std::chrono::steady_clock::now();
++        // One loader runs at a time, outside the metadata lock. Memory/status observers remain
++        // cheap while the image worker reads and decodes; other encoders wait for publication.
++        lock.unlock();
++        std::shared_ptr<const CpuVisionWeights> weights;
++        try {
++            weights = state_->loader();
++            if (!weights) throw std::runtime_error("CPU Vision loader returned no weights");
++        } catch (...) {
++            lock.lock();
++            state_->loading = false;
++            state_->changed.notify_all();
++            throw;
++        }
++        lock.lock();
++        state_->loading = false;
++        state_->last_load_seconds = std::chrono::duration<double>(
++            std::chrono::steady_clock::now() - started).count();
++        state_->weights = std::move(weights);
++        ++state_->loads;
++        state_->idle_since = std::chrono::steady_clock::now();
++        state_->changed.notify_all();
++        std::fprintf(stderr, "CPU_VISION loaded bytes=%zu seconds=%.3f\n",
++                     state_->weights->bytes(), state_->last_load_seconds);
++    }
++    // Allocate the control block before accounting the lease. Aliasing preserves the lifetime
++    // of the lease across arbitrary shared_ptr copies without retaining the Model itself.
++    auto lease = std::make_shared<Lease>();
++    lease->state = state_;
++    lease->weights = state_->weights;
++    ++state_->users;
++    state_->changed.notify_all();
++    return std::shared_ptr<const CpuVisionWeights>(std::move(lease), state_->weights.get());
++}
++
++CpuVisionCacheSummary CpuVisionCache::summary() const {
++    std::lock_guard lock(state_->mutex);
++    return {state_->weights ? state_->weights->bytes() : 0, state_->users,
++            state_->loads, state_->unloads, state_->last_load_seconds, state_->loading};
++}
++
++} // namespace ninfer::models::qwen3_5
+diff --git a/src/models/qwen3_5/load/vision_cpu_cache.h b/src/models/qwen3_5/load/vision_cpu_cache.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d042c3a5bf3180f8e6320477737c806726ac838
+--- /dev/null
++++ b/src/models/qwen3_5/load/vision_cpu_cache.h
+@@ -0,0 +1,40 @@
++#pragma once
++
++#include "models/qwen3_5/load/vision_cpu.h"
++
++#include <chrono>
++#include <functional>
++#include <memory>
++#include <thread>
++
++namespace ninfer::models::qwen3_5 {
++
++struct CpuVisionCacheSummary {
++    std::size_t bytes = 0;
++    std::size_t users = 0;
++    std::uint64_t loads = 0, unloads = 0;
++    double last_load_seconds = 0;
++    bool loading = false;
++};
++
++// Model-owned immutable weights with independent Host residency. An acquired shared pointer is
++// a read lease: its last copy starts the idle timer. The reaper never touches CUDA or live weights.
++class CpuVisionCache {
++public:
++    using Loader = std::function<std::shared_ptr<const CpuVisionWeights>()>;
++    CpuVisionCache(Loader loader, std::chrono::milliseconds idle_timeout);
++    ~CpuVisionCache();
++    CpuVisionCache(const CpuVisionCache&) = delete;
++    CpuVisionCache& operator=(const CpuVisionCache&) = delete;
++
++    [[nodiscard]] std::shared_ptr<const CpuVisionWeights> acquire();
++    [[nodiscard]] CpuVisionCacheSummary summary() const;
++
++private:
++    struct State;
++    struct Lease;
++    std::shared_ptr<State> state_;
++    std::thread reaper_;
++};
++
++} // namespace ninfer::models::qwen3_5
+diff --git a/src/models/qwen3_5/loading_sources.cmake b/src/models/qwen3_5/loading_sources.cmake
+index 2d4cfdc4bfd0e2b854decff3ebdb3510277c0b31..683ab7f02da8bfd70fbb04b2dd9228a959566db6 100644
+--- a/src/models/qwen3_5/loading_sources.cmake
++++ b/src/models/qwen3_5/loading_sources.cmake
+@@ -14,6 +14,7 @@ target_sources(ninfer_model_loading PRIVATE
+   "${CMAKE_CURRENT_LIST_DIR}/load/storage_trades.cpp"
+   "${CMAKE_CURRENT_LIST_DIR}/load/vision_overlay.cpp"
+   "${CMAKE_CURRENT_LIST_DIR}/load/vision_cpu.cpp"
++  "${CMAKE_CURRENT_LIST_DIR}/load/vision_cpu_cache.cpp"
+   "${CMAKE_CURRENT_LIST_DIR}/frontend/resources.cpp"
+   "${CMAKE_CURRENT_LIST_DIR}/frontend/tokenizer.cpp"
+ )
+diff --git a/src/models/qwen3_5/model.cpp b/src/models/qwen3_5/model.cpp
+index 64526959a29cf276e94f55c82a0164d404848638..695fc90552a40213e05e713ec3e2e246d6fdebd5 100644
+--- a/src/models/qwen3_5/model.cpp
++++ b/src/models/qwen3_5/model.cpp
+@@ -10,7 +10,7 @@ Model::Model(Config config, LoadOptions options, ModelWeights weights,
+              FrontendResources resources, InstanceInfo info,
+              artifact::MaterializedArtifact backing,
+              std::optional<VisionOverlayLayout> vision_overlay,
+-             std::shared_ptr<const CpuVisionWeights> cpu_vision, NativeExpertSources experts)
++             std::shared_ptr<CpuVisionCache> cpu_vision, NativeExpertSources experts)
+     : backing_(std::move(backing)), config_(std::move(config)), options_(options),
+       weights_(std::move(weights)), bound_(std::move(bound)), replicas_(std::move(replicas)),
+       resources_(std::move(resources)), info_(std::move(info)),
+diff --git a/src/models/qwen3_5/model.h b/src/models/qwen3_5/model.h
+index cfa4a5fdd6ffb8c3ab3d29b23d6faa6d43176825..da40b759a14b57ee70846b56a8c5bfa9df8c6ba8 100644
+--- a/src/models/qwen3_5/model.h
++++ b/src/models/qwen3_5/model.h
+@@ -16,7 +16,7 @@
+ 
+ namespace ninfer::models::qwen3_5 {
+ 
+-struct CpuVisionWeights;
++class CpuVisionCache;
+ 
+ struct InstanceInfo {
+     std::string name;
+@@ -98,8 +98,8 @@ public:
+         return backing_.upload_device_objects_again(device);
+     }
+ 
+-    // CPU Vision residency only: the tower decoded to host FP32, shared with every encode session.
+-    [[nodiscard]] const std::shared_ptr<const CpuVisionWeights>& cpu_vision() const noexcept {
++    // CPU Vision capability and lazy Host residency, independent of whether weights are loaded.
++    [[nodiscard]] const std::shared_ptr<CpuVisionCache>& cpu_vision() const noexcept {
+         return cpu_vision_;
+     }
+ 
+@@ -111,7 +111,7 @@ private:
+           AuxiliaryReplicas replicas, FrontendResources resources, InstanceInfo info,
+           artifact::MaterializedArtifact backing,
+           std::optional<VisionOverlayLayout> vision_overlay,
+-          std::shared_ptr<const CpuVisionWeights> cpu_vision,
++          std::shared_ptr<CpuVisionCache> cpu_vision,
+           NativeExpertSources experts);
+ 
+     // Destroy all borrowers before backing. The caller keeps DeviceContext alive through cleanup.
+@@ -124,7 +124,7 @@ private:
+     FrontendResources resources_;
+     InstanceInfo info_;
+     std::optional<VisionOverlayLayout> vision_overlay_;
+-    std::shared_ptr<const CpuVisionWeights> cpu_vision_;
++    std::shared_ptr<CpuVisionCache> cpu_vision_;
+     NativeExpertSources experts_;
+ };
+ 
 diff --git a/src/models/qwen3_5/program/context.h b/src/models/qwen3_5/program/context.h
 index 442974836ee29d614a28f67c582099610b4d80a6..8514d3b54732433a7efd29e9f8b1109b38c9644f 100644
 --- a/src/models/qwen3_5/program/context.h
@@ -5966,7 +6563,7 @@ index 120f013f4d4cc7e47114315ab6d61093d2855f79..f6fccb09d911bcafdc2fa769372017ed
      std::uint32_t main_page_groups          = 0;
      std::uint32_t max_concurrency           = 1;
 diff --git a/src/models/qwen3_5/program/prefill.cpp b/src/models/qwen3_5/program/prefill.cpp
-index 442687d14998a6aae1b98d9c2cf5aa4fc073d4a0..8a220dd392d748d0beea573c8b3e7a086bdea810 100644
+index 442687d14998a6aae1b98d9c2cf5aa4fc073d4a0..69da1acecf4222293b91a2d1a717e1e76fb232a0 100644
 --- a/src/models/qwen3_5/program/prefill.cpp
 +++ b/src/models/qwen3_5/program/prefill.cpp
 @@ -1,5 +1,6 @@
@@ -6463,7 +7060,7 @@ index 442687d14998a6aae1b98d9c2cf5aa4fc073d4a0..8a220dd392d748d0beea573c8b3e7a08
          const std::uint32_t prompt_tokens = staged.prompt_tokens;
  
          validate_licensed_tokens(std::span<const TokenId>(host_tokens, 1));
-@@ -1457,6 +1744,10 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1457,6 +1744,16 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
              .complete                = true,
              .timing                  = timing.finish(),
          };
@@ -6471,11 +7068,17 @@ index 442687d14998a6aae1b98d9c2cf5aa4fc073d4a0..8a220dd392d748d0beea573c8b3e7a08
 +        // Storage failures are request-local and are settled by Engine using
 +        // the still-valid sequence capability at a safe resource boundary.
 +        throw;
++    } catch (const runtime::RequestResourceError&) {
++        // Keep ownership for Engine's ordered abort. A multi-image unit may already have
++        // processed an earlier item: never publish this request's mutable endpoint on failure.
++        request.publish_continuation = false;
++        if (hybrid_) { hybrid_lanes_[sequence.lane].publish = false; }
++        throw;
      } catch (...) {
          timing.begin_wait();
          try {
 diff --git a/src/models/qwen3_5/program/prefix/hybrid_program.cpp b/src/models/qwen3_5/program/prefix/hybrid_program.cpp
-index 61d353abe294957057c7af59e262a7545660f509..d4696c749ee04895f4bf5ba337b0db5d6ef1d6c5 100644
+index 61d353abe294957057c7af59e262a7545660f509..621e7f848e678c20a99d3d26b79ece7cd3e0689a 100644
 --- a/src/models/qwen3_5/program/prefix/hybrid_program.cpp
 +++ b/src/models/qwen3_5/program/prefix/hybrid_program.cpp
 @@ -4,6 +4,7 @@
@@ -6519,6 +7122,14 @@ index 61d353abe294957057c7af59e262a7545660f509..d4696c749ee04895f4bf5ba337b0db5d
          request.logprobs = quote.logprobs;
          request.readout_tokens = quote.readout_tokens;
          install_sampling(sequence, request, quote.sampling);
+@@ -1023,6 +1021,7 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
+             .elapsed_seconds    = 0.0,
+             .prepare_mtp        = prepare_mtp,
+             .reuse              = quote.summary.prefix_reuse_path,
++            .reported_reuse_path = quote.summary.prefix_reuse_path,
+             .mtp_bridge =
+                 prepare_mtp && reuse != 0 ? MtpBridgeMode::BeforeSuffix : MtpBridgeMode::None,
+         };
 diff --git a/src/models/qwen3_5/program/prefix_identity.h b/src/models/qwen3_5/program/prefix_identity.h
 index d19092aea2d27d90f87275c63c95f6a11dcd66ca..ead8ddeef3b755214ceba767957eac597c65ac74 100644
 --- a/src/models/qwen3_5/program/prefix_identity.h
@@ -6606,15 +7217,18 @@ index 36af6e27ead9c3ce27d0c61d3f8be45f35972730..c631ffe55da38750d3abeadeee522602
      // Hybrid prefix cache mode (ContextCacheMode::Hybrid). Admission runs as the same context
      // transaction the Engine drives for Legacy materialization: quote, reserve, then
 diff --git a/src/models/qwen3_5/program/program_impl.cpp b/src/models/qwen3_5/program/program_impl.cpp
-index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38b7cb1007 100644
+index 90db2cdc8413681ad77608ef9cefe9d81f021568..5c67cea5d8b8912958acd26b17f9b9ae803069d4 100644
 --- a/src/models/qwen3_5/program/program_impl.cpp
 +++ b/src/models/qwen3_5/program/program_impl.cpp
-@@ -1,3 +1,4 @@
+@@ -1,5 +1,7 @@
 +#include "kvmem/spill_io.hpp"
  #include "models/qwen3_5/program/structured_round.h"
  #include "models/qwen3_5/program/program_impl.h"
++#include "models/qwen3_5/load/vision_cpu_cache.h"
  #include "models/qwen3_5/program/context_work.h"
-@@ -7,6 +8,7 @@
+ #include "models/qwen3_5/program/context.h"
+ #include "models/qwen3_5/execution/linear.h"
+@@ -7,6 +9,7 @@
  #include "core/host_kv_clamp.h"
  #include "core/startup.h"
  #include "core/device.h"
@@ -6622,7 +7236,7 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
  #include <cuda_runtime.h>
  #include "ninfer/ops/target_logprobs.h"
  
-@@ -230,7 +232,13 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -230,7 +233,13 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
                           DeviceContext& device_in, const StartupObserver& startup_observer,
                           std::unique_ptr<execution::NativeExpertRuntime> expert_runtime)
      : parameters(parameters_in), device(device_in), capacity(plan.capacity),
@@ -6637,7 +7251,7 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
        context_cache(plan.context_cache),
        continuation_capacity(normalized_private_capacity(plan.context_cache)),
        shared_prefix_capacity(plan.context_cache.max_shared_prefixes.value_or(0)),
-@@ -284,6 +292,14 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -284,6 +293,14 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
        context_transfer_timers_{CudaEventTimer(device_in, device_in.transfer_stream),
                                 CudaEventTimer(device_in, device_in.transfer_stream),
                                 CudaEventTimer(device_in, device_in.transfer_stream)} {
@@ -6652,7 +7266,7 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
      if (&parameters != plan.parameters || parameters.model.options() != plan.features) {
          throw std::invalid_argument("Program parameters do not match the frozen sequence plan");
      }
-@@ -469,6 +485,30 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -469,6 +486,30 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
              *backend_kv_pages, backend->execution_tables(), address_capacity,
              backend->execution_tables().logical_page_capacity());
      }
@@ -6683,7 +7297,7 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
      pressure_text_page_scratch_.resize(text_kv_pages->capacity());
      pressure_text_selected_pages_.reserve(text_kv_pages->capacity());
      if (backend_kv_pages) {
-@@ -594,6 +634,65 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -594,6 +635,65 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
          throw std::logic_error("DFlash decode frame does not match the sequence plan");
      }
      prefill_hidden = plan.persistent.prefill_hidden.bind(backing);
@@ -6749,7 +7363,7 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
      if (plan.persistent.score_hidden) {
          score_hidden = plan.persistent.score_hidden->bind(backing);
      }
-@@ -676,6 +775,12 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -676,6 +776,12 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
      }
      if (use_cuda_graph) {
          StartupPhaseScope graph_phase(startup_observer, StartupPhase::CudaGraphPrepare);
@@ -6762,7 +7376,7 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
          const std::size_t free_before = device.free_bytes();
          prepare_graphs();
          device.synchronize();
-@@ -685,6 +790,15 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -685,6 +791,15 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
              free_after == 0 ? std::nullopt
                              : std::optional<std::size_t>(
                                    free_before > free_after ? free_before - free_after : 0);
@@ -6778,7 +7392,7 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
          graph_phase.complete();
      }
      work.reset();
-@@ -921,6 +1035,67 @@ runtime::ContextTransferObservation ProgramImpl::context_transfer_observation(
+@@ -921,6 +1036,67 @@ runtime::ContextTransferObservation ProgramImpl::context_transfer_observation(
  
  MemorySummary ProgramImpl::memory_summary() const noexcept {
      MemorySummary out;
@@ -6846,6 +7460,25 @@ index 90db2cdc8413681ad77608ef9cefe9d81f021568..3bdb07468e5800cda3c310e5cbcdbc38
      out.device          = device.device;
      out.max_context     = capacity;
      out.kv_capacity     = kv_capacity;
+@@ -961,6 +1137,18 @@ MemorySummary ProgramImpl::memory_summary() const noexcept {
+                              : (workspace_plan.vision_resident ? VisionResidency::Resident
+                                                                : VisionResidency::Overlay),
+         };
++        if (const auto& cpu = parameters.model.cpu_vision()) {
++            const auto summary = cpu->summary();
++            auto& vision = *out.vision_workspace;
++            vision.cpu_weights_lazy = true;
++            vision.cpu_weights_loading = summary.loading;
++            vision.cpu_weight_bytes = summary.bytes;
++            vision.cpu_weight_users = summary.users;
++            vision.cpu_weight_loads = summary.loads;
++            vision.cpu_weight_unloads = summary.unloads;
++            vision.cpu_weight_last_load_seconds = summary.last_load_seconds;
++            vision.cpu_weight_idle_seconds = parameters.model.options().cpu_vision_idle_seconds;
++        }
+         if (const EvictableWeightPool* const pool = parameters.model.weight_pool();
+             !workspace_plan.vision_resident && pool != nullptr) {
+             out.vision_workspace->window_capacity_bytes = pool->window_capacity_bytes();
 diff --git a/src/models/qwen3_5/program/program_impl.h b/src/models/qwen3_5/program/program_impl.h
 index e68b8beb026133865ed7d1fc8410ffb48f1a093d..21544f8efde864f9f8dbb779ad6c2553233f5ff5 100644
 --- a/src/models/qwen3_5/program/program_impl.h
@@ -7514,7 +8147,7 @@ index 0000000000000000000000000000000000000000..72d2a1cfd6ca248d0e8c6870eecb56c6
 +};
 +} // namespace ninfer::models::qwen3_5::detail
 diff --git a/src/models/qwen3_5/program/storage/context.cpp b/src/models/qwen3_5/program/storage/context.cpp
-index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575d00e0217 100644
+index 9085edcc7beaa3649711d7695784d2494dea7755..f73045fde8504c21ec20e003810403fa37ae9014 100644
 --- a/src/models/qwen3_5/program/storage/context.cpp
 +++ b/src/models/qwen3_5/program/storage/context.cpp
 @@ -6,6 +6,8 @@
@@ -7538,7 +8171,7 @@ index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575
      sequence.mtp_draft_count         = 0;
      sequence.tail_hidden_valid       = false;
      sequence.endpoint_valid          = false;
-@@ -965,6 +969,10 @@ PrefillProgress ProgramImpl::advance_prefill(SequenceHandle sequence,
+@@ -965,6 +969,14 @@ PrefillProgress ProgramImpl::advance_prefill(SequenceHandle sequence,
          runtime::PrefillStepResult step = advance_prefill_raw(lane, failed_timing);
          if (failed_timing != nullptr) { *failed_timing += step.timing; }
          return wrap_prefill(lane, std::move(step));
@@ -7546,10 +8179,14 @@ index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575
 +        // Engine owns resource settlement. Keep the sequence capability valid
 +        // until it can abort this request outside any peer's open transaction.
 +        throw;
++    } catch (const runtime::RequestResourceError&) {
++        // Deferred CPU Vision loading can fail before this unit executes. Like a storage
++        // failure, it is request-local: preserve ownership for the Engine's ordered abort.
++        throw;
      } catch (...) {
          const Clock::time_point cleanup_started = Clock::now();
          clear_execution_failure_lanes(std::span<const std::uint32_t>(&lane, 1));
-@@ -1521,7 +1529,7 @@ void ProgramImpl::unbind_sequence_kv(SequenceState& sequence) noexcept {
+@@ -1521,7 +1533,7 @@ void ProgramImpl::unbind_sequence_kv(SequenceState& sequence) noexcept {
  
  void ProgramImpl::ensure_sequence_kv_lease(SequenceState& sequence, std::uint32_t main_tokens,
                                             std::uint32_t backend_tokens) {
@@ -7558,7 +8195,7 @@ index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575
      // Only a decode step may extend the lease: materialization during admission has to leave the
      // sequence holding exactly the entitlement its plan declared.
      RequestControl& request = requests[sequence.lane];
-@@ -1704,9 +1712,9 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
+@@ -1704,9 +1716,9 @@ void ProgramImpl::ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32
          throw std::logic_error("backend KV materialization requested without an allocation");
      }
      ensure_sequence_kv_lease(sequence, main_tokens, backend_tokens);
@@ -7570,7 +8207,7 @@ index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575
                                                        compute_streams);
      }
  }
-@@ -1717,9 +1725,9 @@ void ProgramImpl::commit_sequence_kv(SequenceState& sequence, std::uint32_t main
+@@ -1717,9 +1729,9 @@ void ProgramImpl::commit_sequence_kv(SequenceState& sequence, std::uint32_t main
          (backend_tokens != 0 && !sequence.kv->backend)) {
          throw std::logic_error("KV commit request is outside the sequence bundle");
      }
@@ -7582,7 +8219,7 @@ index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575
      }
      if (hybrid_) { hybrid_publish_blocks(sequence); }
  }
-@@ -1732,9 +1740,9 @@ void ProgramImpl::trim_sequence_kv(SequenceState& sequence, std::uint32_t main_t
+@@ -1732,9 +1744,9 @@ void ProgramImpl::trim_sequence_kv(SequenceState& sequence, std::uint32_t main_t
      if (backend_tokens != 0 && !sequence.kv->backend) {
          throw std::logic_error("backend KV trim requested without an allocation");
      }
@@ -7594,7 +8231,7 @@ index 9085edcc7beaa3649711d7695784d2494dea7755..8272702750457256fe32dc814164c575
      }
  }
  
-@@ -1831,9 +1839,11 @@ void ProgramImpl::ordered_reset(SequenceState& sequence) {
+@@ -1831,9 +1843,11 @@ void ProgramImpl::ordered_reset(SequenceState& sequence) {
      set_device_i32(io.rope_pos, 0);
      set_device_i32(io.rope_delta, 0);
      if (io.mtp) { set_device_i32(io.mtp->position, 0); }
@@ -11294,6 +11931,28 @@ index 0000000000000000000000000000000000000000..6aec9a7edb679d64ccf32c70ff4bd68a
 +}
 +
 +} // namespace ninfer::product
+diff --git a/src/runtime/contract/execution.h b/src/runtime/contract/execution.h
+index dd2740fe9aaea5adc0badc5857eceeb8b7593b1d..52efb5ae967dce1046a7422ee01ad2e58758b45d 100644
+--- a/src/runtime/contract/execution.h
++++ b/src/runtime/contract/execution.h
+@@ -5,9 +5,17 @@
+ #include <array>
+ #include <compare>
+ #include <span>
++#include <stdexcept>
+ 
+ namespace ninfer::runtime {
+ 
++// A deferred request asset could not be loaded before its consumer executed. The Engine aborts
++// only that request; this is distinct from an execution invariant or a device-wide failure.
++class RequestResourceError final : public std::runtime_error {
++public:
++    using std::runtime_error::runtime_error;
++};
++
+ // Prefill units a prompt may be passed over for shorter ones before it runs ahead of them: each
+ // unit goes to the shortest remaining prompt, so a short or prefix-cached request is not held
+ // behind a long prompt for its whole prefill, and this bound keeps the long one from starving.
 diff --git a/src/runtime/contract/grammar_masks.h b/src/runtime/contract/grammar_masks.h
 index 362100902e4b71a44187ca16d8e80f184d1b3989..61858a77d6e1e6f3a43b6c8bb2fd08fe3ae6def5 100644
 --- a/src/runtime/contract/grammar_masks.h
@@ -11503,7 +12162,7 @@ index 8fdf3d9368536d559b1b0b5c28bd701a85ff49a6..27b37f78fc47b0b1812160a272a3515d
  
  bool Engine::is_available() const {
 diff --git a/src/runtime/engine/engine_core.h b/src/runtime/engine/engine_core.h
-index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930bfd611e6 100644
+index 61433a91d20a1480130807f4c067ba9d70f0d637..250d87bfaca02321372630f23230e1506b94498b 100644
 --- a/src/runtime/engine/engine_core.h
 +++ b/src/runtime/engine/engine_core.h
 @@ -3,6 +3,7 @@
@@ -11639,7 +12298,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
      void run_prefill_step(const std::array<bool, kMaximumConcurrency>& cancelled_at_unit_start) {
          nvtx::ScopedRange prefill_range(nvtx::Name::Prefill, nvtx::Category::Prefill);
          EnginePhaseScope setup(*this, EngineHostPhase::CommitOutput);
-@@ -2151,18 +2188,22 @@ private:
+@@ -2151,18 +2188,25 @@ private:
          }
          setup.finish();
          ProgramCallScope program_call(*this);
@@ -11668,13 +12327,16 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
 +            // request can be admitted to a free lane while another request is still prefilling.
 +            if (!progress.complete && request->is_prefilling()) { request_admission_check(); }
 +            publish_runtime_stats();
++        } catch (const RequestResourceError& error) {
++            fail_storage_request(lane, std::make_exception_ptr(
++                RequestError(RequestErrorKind::Unavailable, error.what())));
 +        } catch (const kvmem::MemoryError&) {
 +            fail_storage_request(lane, std::current_exception());
 +        }
      }
  
      [[nodiscard]] FifoSnapshot pending_snapshot() const {
-@@ -2189,6 +2230,7 @@ private:
+@@ -2189,6 +2233,7 @@ private:
  
      void ensure_base_plan(const std::shared_ptr<Request>& request) {
          if (!request->base_plan) {
@@ -11682,7 +12344,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
              std::array<std::uint32_t, 2> anchors{};
              std::size_t anchor_count = 0;
              if constexpr (kLegacyContextCache) {
-@@ -2773,7 +2815,8 @@ private:
+@@ -2773,7 +2818,8 @@ private:
                  const OutputDecision decision =
                      request->output.preview_control(tokens, request->budget->remaining());
                  if (decision.accepted_tokens != membership.row_stride || decision.finished() ||
@@ -11692,7 +12354,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
                      (decision.prefix_execution_split_after &&
                       (*decision.prefix_execution_split_after == 0 ||
                        *decision.prefix_execution_split_after > decision.accepted_tokens))) {
-@@ -2819,7 +2862,8 @@ private:
+@@ -2819,7 +2865,8 @@ private:
              cumulative_stats_.committed_decode_tokens += membership.row_stride;
              auto timing = record_committed_output(request, membership.row_stride);
              append_output(request, commit_output(*request), std::move(timing));
@@ -11702,7 +12364,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
          }
          publish_runtime_stats();
      }
-@@ -3077,7 +3121,18 @@ private:
+@@ -3077,7 +3124,18 @@ private:
          published_residency_ = std::move(status);
      }
  
@@ -11721,7 +12383,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
          // Decode and control units executed since the last prefill unit; saturates.
          std::uint32_t decode_run = 0;
          for (;;) {
-@@ -3085,11 +3140,18 @@ private:
+@@ -3085,11 +3143,18 @@ private:
                  std::unique_lock lock(queue_mutex_);
                  if (!stopping_ && pending_.empty()) {
                      bool active = materializing_.has_value();
@@ -11741,7 +12403,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
                      }
                  }
                  if (stopping_) {
-@@ -3125,8 +3187,19 @@ private:
+@@ -3125,8 +3190,19 @@ private:
                  continue;
              }
              try {
@@ -11761,7 +12423,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
                  const bool have_pending       = expire_pending_requests();
                  // A pure queue wait changes no state that would publish, so the waits /stats
                  // reports are refreshed here.
-@@ -3150,6 +3223,7 @@ private:
+@@ -3150,6 +3226,7 @@ private:
                          have_pending, admission_check_pending, !membership.empty(), decode_run,
                          instance_.program->has_context_transaction()) &&
                      consume_admission_check()) {
@@ -11769,7 +12431,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
                      (void)try_admit_one();
                      membership = scheduler_.build_round_membership(slots_, max_concurrency_);
                  }
-@@ -3159,8 +3233,34 @@ private:
+@@ -3159,8 +3236,34 @@ private:
                  // not reinterpret an already-issued unit with a later atomic read.
                  const auto cancelled_at_unit_start = snapshot_cancellations();
                  cancel_active_requests(cancelled_at_unit_start, boundary);
@@ -11806,7 +12468,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
                  if (!control_membership.empty()) {
                      set_host_work_class(HostWorkClass::Control);
                      finish_engine_phase(boundary, EngineHostPhase::Boundary);
-@@ -3172,6 +3272,25 @@ private:
+@@ -3172,6 +3275,25 @@ private:
                  membership = scheduler_.build_round_membership(slots_, max_concurrency_);
                  admit_structured_lanes(membership, boundary);
  
@@ -11832,7 +12494,7 @@ index 61433a91d20a1480130807f4c067ba9d70f0d637..61e9ad1952d57d83d8f4bcdbb90e0930
                  const std::uint64_t prefill_mask = scheduler_.prefill_lane_mask();
                  for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
                      if ((prefill_mask & (1ULL << lane)) != 0 &&
-@@ -3293,6 +3412,7 @@ private:
+@@ -3293,6 +3415,7 @@ private:
      const std::uint32_t max_context_;
      const bool structured_output_;
      const std::uint32_t max_concurrency_;
@@ -12780,7 +13442,7 @@ index aa1000917bcc3f100c9a8c6ded2a0f31cc82a6c7..79ada33eadd5328193e659059ebd76cf
              for (std::size_t offset = 0; offset < batch.size(); ++offset) {
                  GenerationOutcome outcome;
 diff --git a/src/serve/generation_service.cpp b/src/serve/generation_service.cpp
-index 70b8c3ea8a92e18ef159cd3b9c4be77ce03293a3..0e8f5a89eb60f506edaaebbf9d9e7b6b9a9d523a 100644
+index 70b8c3ea8a92e18ef159cd3b9c4be77ce03293a3..a5e0cedc9e68c11daeaf8a65c6370b1a5526e062 100644
 --- a/src/serve/generation_service.cpp
 +++ b/src/serve/generation_service.cpp
 @@ -57,6 +57,11 @@ ApiError request_error_to_api_error(const ninfer::RequestError& exception) {
@@ -12840,7 +13502,15 @@ index 70b8c3ea8a92e18ef159cd3b9c4be77ce03293a3..0e8f5a89eb60f506edaaebbf9d9e7b6b
      engine_options.max_concurrency          = options.max_concurrency;
      engine_options.max_pending_requests     = options.max_pending_requests;
      engine_options.pending_timeout_ms       = options.pending_timeout_ms;
-@@ -296,6 +313,9 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
+@@ -276,6 +293,7 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
+     engine_options.enable_vision            = options.enable_vision;
+     engine_options.grafts                   = options.grafts;
+     engine_options.vision_residency         = options.vision_residency;
++    engine_options.cpu_vision_idle_seconds   = options.cpu_vision_idle_seconds;
+     engine_options.vision_max_merged_tokens = options.vision_max_merged_tokens;
+     engine_options.use_cuda_graph           = options.use_cuda_graph;
+     engine_options.gpu_clock_floor_mhz      = options.gpu_clock_floor_mhz;
+@@ -296,6 +314,9 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
      engine_options.cuda_graph_allowance_bytes =
          static_cast<std::size_t>(options.cuda_graph_allowance_mib) << 20;
      engine_options.wddm_evictable_budget    = options.wddm_evictable_budget;
@@ -12850,7 +13520,7 @@ index 70b8c3ea8a92e18ef159cd3b9c4be77ce03293a3..0e8f5a89eb60f506edaaebbf9d9e7b6b
      engine_options.suspend                  = options.suspend;
      engine_options.mlp_a8_decode            = options.mlp_a8_decode;
      engine_options.prefill_a8               = options.prefill_a8;
-@@ -406,6 +426,10 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
+@@ -406,6 +427,10 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
                                             ninfer::GenerationObservationOptions observation,
                                             std::function<bool()> is_cancelled,
                                             ContextCacheHints context_cache) const {
@@ -12861,7 +13531,7 @@ index 70b8c3ea8a92e18ef159cd3b9c4be77ce03293a3..0e8f5a89eb60f506edaaebbf9d9e7b6b
      return prepare_impl(
          request, consumer_mode, observation, std::move(is_cancelled), std::move(context_cache),
          options_.allow_prefix_reuse ? CacheParticipation::ReadWrite : CacheParticipation::Disabled,
-@@ -614,7 +638,7 @@ std::string GenerationService::render_prompt(const GenerationRequest& request,
+@@ -614,7 +639,7 @@ std::string GenerationService::render_prompt(const GenerationRequest& request,
  GenerationOutcome GenerationService::run(PreparedRequest& prepared, const StreamSink* sink,
                                           std::function<bool()> is_cancelled) {
      std::unique_ptr<ServiceOutputSink> output_sink;
@@ -12891,7 +13561,7 @@ index b2544e2537f973e5ed8fb8e899659fa141fd7f99..64336c8c3966c471dde1e234505bc343
      ninfer::ResolvedSamplingParameters sampling;
      double prepare_seconds     = 0.0;
 diff --git a/src/serve/http_server.cpp b/src/serve/http_server.cpp
-index 2b7618ca5d9ef2ef19694e01387054279d57ea75..9dc91013aecb5553fb827b6ab9c6730876e0552f 100644
+index 2b7618ca5d9ef2ef19694e01387054279d57ea75..0a867b65faba3b94f78b0216f67829d7c5053df6 100644
 --- a/src/serve/http_server.cpp
 +++ b/src/serve/http_server.cpp
 @@ -1,9 +1,13 @@
@@ -13027,7 +13697,7 @@ index 2b7618ca5d9ef2ef19694e01387054279d57ea75..9dc91013aecb5553fb827b6ab9c67308
          {"default_generation_settings",
           {{"n_ctx", facts.capacity.max_context},
            {"speculative",
-@@ -1068,6 +1101,46 @@ void HttpServer::handle_props(const httplib::Request& req, httplib::Response& re
+@@ -1068,6 +1101,57 @@ void HttpServer::handle_props(const httplib::Request& req, httplib::Response& re
          // The WebUI ungreys its "Use llama-server proxy" option from this flag alone.
          {"cors_proxy_enabled", options_.webui_mcp_proxy},
      };
@@ -13046,6 +13716,17 @@ index 2b7618ca5d9ef2ef19694e01387054279d57ea75..9dc91013aecb5553fb827b6ab9c67308
 +    props["execution"] = {{"mode", execution.devices.size() > 1 ? "layer" : "single"},
 +        {"devices", execution.devices.empty() ? std::vector<int>{execution.device} : execution.devices},
 +        {"stage_layers", execution.stage_layers}, {"monitor_devices", facts.monitor_devices}};
++    if (options.enable_vision && options.vision_residency == VisionResidency::Cpu) {
++        const auto memory = service.memory_summary();
++        if (memory.vision_workspace && memory.vision_workspace->cpu_weights_lazy) {
++            const auto& vision = *memory.vision_workspace;
++            props["cpu_vision"] = {{"resident", vision.cpu_weight_bytes != 0}, {"loading", vision.cpu_weights_loading},
++                {"weight_bytes", vision.cpu_weight_bytes}, {"active_encoders", vision.cpu_weight_users},
++                {"load_count", vision.cpu_weight_loads}, {"unload_count", vision.cpu_weight_unloads},
++                {"last_load_seconds", vision.cpu_weight_last_load_seconds},
++                {"idle_timeout_seconds", vision.cpu_weight_idle_seconds}};
++        }
++    }
 +    props["kvmem"] = {{"enabled", options.kvmem.selected_tokens != 0},
 +        {"selected_tokens", options.kvmem.selected_tokens},
 +        {"reserve_tokens", options.kvmem.reserve_tokens},
@@ -13074,7 +13755,7 @@ index 2b7618ca5d9ef2ef19694e01387054279d57ea75..9dc91013aecb5553fb827b6ab9c67308
      res.set_content(props.dump(), "application/json");
  }
  
-@@ -1362,6 +1435,26 @@ HttpServer::ModelFacts HttpServer::model_facts(const ModelRegistry::Lease& lease
+@@ -1362,6 +1446,26 @@ HttpServer::ModelFacts HttpServer::model_facts(const ModelRegistry::Lease& lease
      }
      // memory_summary() takes the Engine execution lock: computed once per Engine instance.
      ModelFacts facts;
@@ -13701,7 +14382,7 @@ index d05ed8f4946870e7913e4c21ec58ce216d0f162d..aa0b68c6d64e8c18ea27e3d8ab69b522
      // kMaximumTokenLogprobs) of its most likely alternatives in the response.
      bool logprobs    = false;
 diff --git a/src/serve/request_log.cpp b/src/serve/request_log.cpp
-index aacbead74b16a19339d171137f5369965c2e8150..3112a9934e10f4b7b6666e2ac52857ed60c7d42f 100644
+index aacbead74b16a19339d171137f5369965c2e8150..b32850209b404112e7b7bfc93b47f67f9521af3a 100644
 --- a/src/serve/request_log.cpp
 +++ b/src/serve/request_log.cpp
 @@ -1,4 +1,6 @@
@@ -13720,7 +14401,39 @@ index aacbead74b16a19339d171137f5369965c2e8150..3112a9934e10f4b7b6666e2ac52857ed
      }
      return "unknown";
  }
-@@ -808,6 +812,13 @@ std::string format_server_start_json(
+@@ -332,7 +336,7 @@ const char* vision_residency_name(ninfer::VisionResidency residency) {
+ 
+ Json vision_workspace_json(const std::optional<ninfer::VisionWorkspaceMemorySummary>& vision) {
+     if (!vision) { return nullptr; }
+-    return Json{{"residency", vision_residency_name(vision->residency)},
++    Json out{{"residency", vision_residency_name(vision->residency)},
+                 {"aggregate_prompt_tokens", vision->aggregate_prompt_tokens},
+                 {"max_item_tokens", vision->max_item_tokens},
+                 {"general_capacity_bytes", vision->general_capacity_bytes},
+@@ -341,6 +345,14 @@ Json vision_workspace_json(const std::optional<ninfer::VisionWorkspaceMemorySumm
+                 {"handoff_capacity_bytes", vision->handoff_capacity_bytes},
+                 {"handoff_active_bytes", vision->handoff_active_bytes},
+                 {"handoff_peak_bytes", vision->handoff_peak_bytes}};
++    if (vision->cpu_weights_lazy) {
++        out["cpu_weights"] = {{"bytes", vision->cpu_weight_bytes},
++            {"loading", vision->cpu_weights_loading}, {"users", vision->cpu_weight_users},
++            {"loads", vision->cpu_weight_loads}, {"unloads", vision->cpu_weight_unloads},
++            {"last_load_seconds", vision->cpu_weight_last_load_seconds},
++            {"idle_timeout_seconds", vision->cpu_weight_idle_seconds}};
++    }
++    return out;
+ }
+ 
+ Json speculative_json(const GenerationMetrics& metrics) {
+@@ -741,6 +753,7 @@ std::string format_server_start_json(
+         {"lenient_assistant_history", options.lenient_assistant_history},
+         {"lenient_image_detail", options.lenient_image_detail},
+         {"max_request_bytes", options.max_request_bytes},
++        {"cpu_vision_idle_seconds", options.cpu_vision_idle_seconds},
+         {"media_cache_bytes", options.media_cache_bytes},
+         {"media_live_bytes", options.media_live_bytes},
+         {"media_preprocess_threads", options.media_preprocess_threads},
+@@ -808,6 +821,13 @@ std::string format_server_start_json(
          {"concurrent_prefill", engine_options.concurrent_prefill},
          {"recover_invariant_failures", engine_options.recover_invariant_failures},
          {"wddm_evictable_budget", engine_options.wddm_evictable_budget},
@@ -13734,7 +14447,7 @@ index aacbead74b16a19339d171137f5369965c2e8150..3112a9934e10f4b7b6666e2ac52857ed
          {"model_suspend", engine_options.suspend.enabled},
          {"suspend_snapshot",
           engine_options.suspend.snapshot_memory == SuspendSnapshotMemory::Pinned ? "pinned"
-@@ -884,6 +895,7 @@ std::string format_server_start_json(
+@@ -884,6 +904,7 @@ std::string format_server_start_json(
               {"greedy", options.greedy}};
      record["memory"] =
          Json{{"weights", arena_json(memory.weights)},
@@ -13838,7 +14551,7 @@ index e8245d645c1419441c2397bd7381edf216c75a57..ddf618d92b29234a35f6bf5a05456dcb
      std::uint64_t requests_failed_total_         = 0;
      std::uint64_t requests_rejected_total_       = 0;
 diff --git a/src/serve/serve_options.cpp b/src/serve/serve_options.cpp
-index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb86f02bb1a 100644
+index 77b17f26c53f1f55eff63da5da1299743832e53a..76e50b062b161da7cced247ac0a60b29c83f6430 100644
 --- a/src/serve/serve_options.cpp
 +++ b/src/serve/serve_options.cpp
 @@ -2,6 +2,9 @@
@@ -13947,7 +14660,15 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
             "\n"
             "VISION (off by default)\n"
             "  --vision                      accept images and video and load the Vision GPU\n"
-@@ -439,10 +493,9 @@ std::string serve_usage_text(const char* argv0) {
+@@ -384,6 +438,7 @@ std::string serve_usage_text(const char* argv0) {
+            "                                with no device Vision memory, and caps\n"
+            "                                --vision-max-merged at 256 unless given\n"
+            "  --vision-cpu                  --vision with --vision-residency cpu\n"
++           "  --cpu-vision-idle-seconds N    Qwen CPU Vision unload after N idle seconds (300; 0 retains)\n"
+            "  --vision-max-merged N         merged tokens of one media item, 64..16384\n"
+            "                                (default 16384); larger media is downscaled\n"
+            "  --media-cache-mib N           retained prepared media (default 1024; 0\n"
+@@ -439,10 +494,9 @@ std::string serve_usage_text(const char* argv0) {
             "                                none; a request opts out with \"graft\": \"\"\n"
             "\n"
             "API BEHAVIOR\n"
@@ -13961,7 +14682,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
             "  --unconstrained-response-format\n"
             "                                without --structured-output, generate such a\n"
             "                                request unconstrained instead of refusing it\n"
-@@ -554,6 +607,7 @@ std::vector<std::uint32_t> parse_stage_layers(std::string_view text) {
+@@ -554,6 +608,7 @@ std::vector<std::uint32_t> parse_stage_layers(std::string_view text) {
  
  ServeOptions parse_serve_options(int argc, char** argv) {
      ServeOptions options;
@@ -13969,7 +14690,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
      options.startup_argv.reserve(static_cast<std::size_t>(argc));
      bool redact_next = false;
      for (int i = 0; i < argc; ++i) {
-@@ -648,6 +702,20 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -648,6 +703,20 @@ ServeOptions parse_serve_options(int argc, char** argv) {
              options.kv_capacity  = parse_kv_capacity(require_value("--kv-capacity"));
              kv_capacity_explicit = true;
              continue;
@@ -13990,7 +14711,23 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
          }
          if (arg == "--kv-headroom-mib" || arg == "--vram-headroom-mib") {
              // --vram-headroom-mib is the Wallawalla47 fork's name for the same headroom.
-@@ -1264,7 +1332,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1201,6 +1270,15 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+             }
+             continue;
+         }
++        if (arg == "--cpu-vision-idle-seconds") {
++            const auto seconds = parse_u64(require_value("--cpu-vision-idle-seconds"),
++                                           "cpu-vision-idle-seconds");
++            if (seconds > std::numeric_limits<std::uint32_t>::max()) {
++                throw std::invalid_argument("cpu-vision-idle-seconds exceeds uint32 range");
++            }
++            options.cpu_vision_idle_seconds = static_cast<std::uint32_t>(seconds);
++            continue;
++        }
+         if (arg == "--vision-cpu") {
+             // The gzenz fork's switch for Vision on CPU threads.
+             options.enable_vision    = true;
+@@ -1264,7 +1342,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
              continue;
          }
          if (arg == "--derive-session-keys") {
@@ -13999,7 +14736,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
              options.derive_session_keys = true;
              continue;
          }
-@@ -1348,6 +1416,13 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1348,6 +1426,13 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                  require_value("--rope-scaling-original-context"));
              continue;
          }
@@ -14013,7 +14750,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
          if (arg == "--wddm-evictable-budget") {
              options.wddm_evictable_budget = true;
              continue;
-@@ -1566,6 +1641,26 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1566,6 +1651,26 @@ ServeOptions parse_serve_options(int argc, char** argv) {
          throw std::invalid_argument("--default-graft '" + options.default_graft +
                                      "' does not name a --graft");
      }
@@ -14040,7 +14777,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
      if (original_cache_selected && hybrid_cache_selected) {
          throw std::invalid_argument(
              "--use-original-prefix-caching and --use-alt-prefix-caching select different prefix "
-@@ -1581,10 +1676,38 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1581,10 +1686,38 @@ ServeOptions parse_serve_options(int argc, char** argv) {
          catalog_option = "--no-prefix-reuse";
      }
      if (catalog_option == nullptr && !options.grafts.empty()) { catalog_option = "--graft"; }
@@ -14079,7 +14816,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
      if (!kv_capacity_explicit) {
          // The hybrid cache turns every Device page no active request holds into block cache, so
          // it sizes the KV pool to free VRAM unless a capacity is given.
-@@ -1593,8 +1716,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1593,8 +1726,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                                    : KvCapacityPolicy::explicit_capacity(options.max_context);
      }
      if (options.context_cache.mode == ContextCacheMode::Hybrid) {
@@ -14090,7 +14827,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
                                          " configures the checkpoint catalog and cannot be "
                                          "combined with --use-alt-prefix-caching");
          }
-@@ -1635,10 +1758,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1635,10 +1768,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
              " selects the checkpoint catalog");
      }
      if (kv_headroom_mib.has_value()) {
@@ -14107,7 +14844,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
      }
      if (long_anchor_spacing_explicit && !options.context_cache.automatic_long_anchors) {
          throw std::invalid_argument("--long-anchor-spacing requires --auto-long-anchors");
-@@ -1709,7 +1838,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1709,7 +1848,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
          throw std::invalid_argument("--stats-port must be in [1,65535] and differ from --port");
      }
      if (options.max_context == 0) { throw std::invalid_argument("--max-context must be positive"); }
@@ -14116,7 +14853,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
          options.kv_capacity.explicit_tokens < options.max_context) {
          throw std::invalid_argument("--kv-capacity must be at least --max-context");
      }
-@@ -1751,10 +1880,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1751,10 +1890,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
          throw std::invalid_argument(
              "--cuda-graph-allowance-mib requires CUDA graphs (omit --no-cuda-graph)");
      }
@@ -14132,7 +14869,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
      }
      if (options.ngram_native_sessions && options.speculative.ngram_archive_bytes == 0) {
          throw std::invalid_argument("--ngram-native-sessions requires --ngram-archive-mib");
-@@ -1774,6 +1904,88 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+@@ -1774,6 +1914,88 @@ ServeOptions parse_serve_options(int argc, char** argv) {
      if (options.sleep_idle_seconds != 0 && !options.suspend.enabled && !options.router()) {
          throw std::invalid_argument("--sleep-idle-seconds requires --model-suspend");
      }
@@ -14222,7 +14959,7 @@ index 77b17f26c53f1f55eff63da5da1299743832e53a..126d71b351d54fc743e1798724fa9fb8
  }
  
 diff --git a/src/serve/serve_options.h b/src/serve/serve_options.h
-index d4c3053e4167d6958a6ebf4e38a45bd34cc1e6e7..4ad8260fe06569094060a27f969673e1ef2ed7bb 100644
+index d4c3053e4167d6958a6ebf4e38a45bd34cc1e6e7..af7dd3b9c7e85c4171145c1986d69f88ec595ab8 100644
 --- a/src/serve/serve_options.h
 +++ b/src/serve/serve_options.h
 @@ -19,6 +19,8 @@ inline constexpr std::size_t kDefaultResponseStoreRecords = 1024;
@@ -14242,7 +14979,15 @@ index d4c3053e4167d6958a6ebf4e38a45bd34cc1e6e7..4ad8260fe06569094060a27f969673e1
      std::optional<std::size_t> kv_headroom_mib;
      std::uint32_t max_concurrency      = 1;
      std::uint32_t max_pending_requests = 16;
-@@ -94,6 +97,9 @@ struct ServeOptions {
+@@ -80,6 +83,7 @@ struct ServeOptions {
+     ContextCacheOptions context_cache;
+     bool enable_vision      = false;
+     VisionResidency vision_residency       = VisionResidency::Resident;
++    std::uint32_t cpu_vision_idle_seconds = 300; // 0: retain lazily loaded Qwen CPU Vision weights
+     std::uint32_t vision_max_merged_tokens = 16384;
+     bool use_cuda_graph     = true;
+     std::uint32_t gpu_clock_floor_mhz = 0;
+@@ -94,6 +98,9 @@ struct ServeOptions {
      float rope_scaling_factor                   = 1.0F;
      std::uint32_t rope_scaling_original_context = 0;
      bool wddm_evictable_budget = false;
@@ -14427,10 +15172,10 @@ index 66296b1e251c1892f30539994ae761be8547cae0..dd6c6da603062a6fd3927a937c6d2407
      struct Impl;
      std::unique_ptr<Impl> impl_;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..5aaf6363374cf9238709ed09c7966e992bb1ebfd 100644
+index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..d55f6b9e6bed1a9b0d682c111ebfecc7d14ebca2 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -9,10 +9,46 @@ include(cmake/BenchSupportTests.cmake)
+@@ -9,10 +9,56 @@ include(cmake/BenchSupportTests.cmake)
  include(models/qwen3_5/tests.cmake)
  include(models/qwen4_exp/tests.cmake)
  include(models/gemma4/tests.cmake)
@@ -14455,6 +15200,16 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..5aaf6363374cf9238709ed09c7966e99
 +ninfer_finalize_bundle(ninfer_memory_policy_tests)
 +ninfer_stage_runtime_dlls(ninfer_memory_policy_tests)
 +
++# Native prefix admission must agree with the actual Device/Host restore path.
++set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_prefix_cache_tests_PROGRAMS
++  ninfer_qwen3_5_hybrid_prefix_real_test)
++ninfer_finalize_bundle(ninfer_prefix_cache_tests)
++ninfer_stage_runtime_dlls(ninfer_prefix_cache_tests)
++add_test(NAME ninfer_hybrid_prefix_admission_test
++  COMMAND ninfer_prefix_cache_tests ninfer_qwen3_5_hybrid_prefix_real_test)
++set_tests_properties(ninfer_hybrid_prefix_admission_test PROPERTIES
++  ENVIRONMENT "NINFER_HYBRID_REAL_SCENARIO=restore-admission" SKIP_RETURN_CODE 77)
++
 +# Focused Query/Pressure frontend and replay-budget option contracts.
 +ninfer_add_test(ninfer_kvmem_checkpoint_pool_test
 +  SOURCES models/qwen3_5/test_checkpoint_buffer_pool.cpp LIBRARIES ninfer_core)
@@ -14477,7 +15232,7 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..5aaf6363374cf9238709ed09c7966e99
  # Exit code 77 is a skip for every test (tests/cuda_availability.h). Without a usable CUDA device --
  # no GPU, no driver, or only the toolkit's stub driver, as on a CI runner -- a test that has no check
  # of its own fails on its first CUDA call with one of these runtime messages; report that as skipped
-@@ -21,8 +57,117 @@ ninfer_finalize_bundle(ninfer_tests)
+@@ -21,8 +67,124 @@ ninfer_finalize_bundle(ninfer_tests)
  get_property(_ninfer_all_tests DIRECTORY PROPERTY TESTS)
  set_tests_properties(${_ninfer_all_tests} PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION
    "CUDA driver is a stub library;no CUDA-capable device is detected;CUDA driver version is insufficient for CUDA runtime version")
@@ -14595,6 +15350,13 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..5aaf6363374cf9238709ed09c7966e99
 +  ninfer_qwen3_5_mtp_graph_profiles_test ninfer_serve_options_test)
 +ninfer_finalize_bundle(ninfer_kvmem_nvfp4_tests)
 +ninfer_stage_runtime_dlls(ninfer_kvmem_nvfp4_tests)
++
++# Focused CPU Vision lifecycle and existing numerical/options/loading qualification.
++set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_cpu_vision_tests_PROGRAMS
++  ninfer_qwen3_5_vision_cpu_test ninfer_cli_options_test ninfer_serve_options_test
++  ninfer_qwen3_5_loading_test ninfer_request_log_test)
++ninfer_finalize_bundle(ninfer_cpu_vision_tests)
++ninfer_stage_runtime_dlls(ninfer_cpu_vision_tests)
 diff --git a/tests/README.md b/tests/README.md
 index 2a5ca0eb92d7c45741eaad388f0d2f9f789b00c7..3b08dd8bc9453c23c33ad381729ba8a4b6fcc740 100644
 --- a/tests/README.md
@@ -19515,6 +20277,207 @@ index 0000000000000000000000000000000000000000..0642f45796a83515db3ea13b7505940d
 +    last.reset();
 +    return 0;
 +}
+diff --git a/tests/models/qwen3_5/test_cpu_vision_cache.cpp b/tests/models/qwen3_5/test_cpu_vision_cache.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..3ff8ace0f78c2856dd558e76e47f4fcffa682597
+--- /dev/null
++++ b/tests/models/qwen3_5/test_cpu_vision_cache.cpp
+@@ -0,0 +1,128 @@
++#include "models/qwen3_5/load/vision_cpu_cache.h"
++
++#include <atomic>
++#include <barrier>
++#include <chrono>
++#include <iostream>
++#include <future>
++#include <stdexcept>
++#include <thread>
++#include <vector>
++
++using namespace std::chrono_literals;
++using ninfer::models::qwen3_5::CpuVisionCache;
++using ninfer::models::qwen3_5::CpuVisionWeights;
++
++namespace {
++void require(bool value, const char* message) {
++    if (!value) throw std::runtime_error(message);
++}
++template<class Predicate> void wait_until(Predicate ready) {
++    const auto deadline = std::chrono::steady_clock::now() + 3s;
++    while (!ready()) {
++        require(std::chrono::steady_clock::now() < deadline, "idle eviction did not complete");
++        std::this_thread::sleep_for(2ms);
++    }
++}
++std::shared_ptr<const CpuVisionWeights> weights() {
++    auto out = std::make_shared<CpuVisionWeights>();
++    out->patch_embedding.assign(1024, 0.25F);
++    return out;
++}
++
++void lazy_release_reload() {
++    std::atomic<unsigned> loads{0};
++    std::weak_ptr<const CpuVisionWeights> allocation;
++    CpuVisionCache cache([&] { ++loads; auto w = weights(); allocation = w; return w; }, 40ms);
++    std::this_thread::sleep_for(80ms);
++    require(loads == 0 && cache.summary().bytes == 0, "construction loaded CPU weights");
++    auto first = cache.acquire();
++    std::weak_ptr<const CpuVisionWeights> weak = first;
++    auto copy = first;
++    first.reset();
++    std::this_thread::sleep_for(80ms);
++    require(cache.summary().unloads == 0 && !weak.expired(), "live reader lost its weights");
++    require(copy->patch_embedding.front() == 0.25F, "live weights changed");
++    copy.reset();
++    wait_until([&] { return cache.summary().unloads == 1; });
++    require(weak.expired() && allocation.expired() && cache.summary().bytes == 0, "idle eviction retained weight storage");
++    auto again = cache.acquire();
++    require(loads == 2 && again->patch_embedding.front() == 0.25F, "reload failed");
++}
++
++void concurrent_readers() {
++    std::atomic<unsigned> loads{0};
++    CpuVisionCache cache([&] { ++loads; std::this_thread::sleep_for(15ms); return weights(); }, 30ms);
++    std::barrier start(8);
++    std::vector<std::shared_ptr<const CpuVisionWeights>> leases(8);
++    std::vector<std::thread> threads;
++    for (unsigned i = 0; i < leases.size(); ++i) {
++        threads.emplace_back([&, i] { start.arrive_and_wait(); leases[i] = cache.acquire(); });
++    }
++    for (auto& thread : threads) thread.join();
++    require(loads == 1 && cache.summary().users == 8, "concurrent first users duplicated weights");
++    for (const auto& lease : leases) require(lease.get() == leases.front().get(), "readers differ");
++    leases.clear();
++    wait_until([&] { return cache.summary().unloads == 1; });
++}
++
++void failed_load_retry_and_owner_lifetime() {
++    unsigned calls = 0;
++    auto cache = std::make_unique<CpuVisionCache>([&] {
++        if (++calls == 1) throw std::runtime_error("injected read failure");
++        return weights();
++    }, 20ms);
++    bool failed = false;
++    try { (void)cache->acquire(); } catch (const std::runtime_error&) { failed = true; }
++    require(failed && cache->summary().bytes == 0 && cache->summary().loads == 0,
++            "failed load published partial weights");
++    auto lease = cache->acquire();
++    cache.reset();
++    require(lease->patch_embedding.front() == 0.25F, "owner destruction invalidated a reader");
++    lease.reset();
++}
++
++void status_during_load() {
++    std::atomic<bool> started{false}, proceed{false};
++    CpuVisionCache cache([&] {
++        started.store(true);
++        while (!proceed.load()) std::this_thread::sleep_for(1ms);
++        return weights();
++    }, 0ms);
++    auto loading = std::async(std::launch::async, [&] { return cache.acquire(); });
++    wait_until([&] { return started.load(); });
++    auto status = std::async(std::launch::async, [&] { return cache.summary(); });
++    const bool ready = status.wait_for(1s) == std::future_status::ready;
++    proceed.store(true); // always release the blocked loader before reporting a failed check
++    const auto snapshot = status.get();
++    auto lease = loading.get();
++    require(ready && snapshot.loading && snapshot.bytes == 0,
++            "status observation waited for the complete weight load");
++}
++
++void retention_and_reuse() {
++    CpuVisionCache cache(weights, 0ms);
++    auto first = cache.acquire();
++    const auto* address = first.get();
++    first.reset();
++    std::this_thread::sleep_for(80ms);
++    require(cache.summary().bytes == 4096 && cache.summary().unloads == 0, "zero timeout evicted weights");
++    auto second = cache.acquire();
++    require(cache.summary().loads == 1 && second.get() == address, "hot reuse loaded weights again");
++}
++} // namespace
++
++int main() {
++    try {
++        lazy_release_reload();
++        concurrent_readers();
++        failed_load_retry_and_owner_lifetime();
++        retention_and_reuse();
++        status_during_load();
++        std::cout << "CPU Vision cache lifetime/concurrency checks passed\n";
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++    return 0;
++}
+diff --git a/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp b/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp
+index bf5f21854655457d1f76693f0d7b4ca0879295f4..901e3df2b27d96fbea060ab28d6dffb3dedf64c6 100644
+--- a/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp
++++ b/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp
+@@ -113,7 +113,8 @@ struct Observed {
+ // constrained engine is first forced to evict the snapshot image and most of its blocks, so the
+ // same snapshot comes back through the Host slabs. Both restores carry identical bytes and resume
+ // at the same frontier with the same chunking, so greedy generation must match token for token.
+-int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend backend) {
++int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend backend,
++                           bool fixed_fixture = true) {
+     const std::vector<ninfer::TokenId> first = synthetic_tokens(1500, 1);
+     std::vector<ninfer::TokenId> second(first.begin(), first.begin() + 1400);
+     const std::vector<ninfer::TokenId> suffix = synthetic_tokens(300, 2);
+@@ -123,6 +124,11 @@ int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend back
+     const std::vector<ninfer::TokenId> pressure = synthetic_tokens(3900, 3);
+ 
+     const auto run = [&](ninfer::EngineOptions options, bool apply_pressure) {
++        // The general admission scenario accepts an ordinary full MTP head and
++        // measures the captured frontier instead of assuming a fixture's tap layout.
++        if (!fixed_fixture && backend == ninfer::SpeculativeBackend::Mtp) {
++            options.speculative.proposal_head = ninfer::ProposalHead::Full;
++        }
+         ninfer::Engine engine(std::move(options));
+         (void)engine.generate(engine.prepare_tokens(first), greedy(8));
+         if (apply_pressure) { (void)engine.generate(engine.prepare_tokens(pressure), greedy(4)); }
+@@ -138,11 +144,18 @@ int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend back
+     // flexible prompt-tail tap, realized at its start.
+     constexpr std::uint32_t kExpectedReuse = 2 * kPrefillChunk;
+     int failures                           = 0;
+-    if (device.reused != kExpectedReuse || host.reused != kExpectedReuse) {
++    if (fixed_fixture && (device.reused != kExpectedReuse || host.reused != kExpectedReuse)) {
+         std::cerr << "restore-exact: reused device=" << device.reused << " host=" << host.reused
+                   << ", expected the prompt-tail snapshot at " << kExpectedReuse << '\n';
+         ++failures;
+     }
++    if (!fixed_fixture && (device.reused == 0 || device.reused > 1400 ||
++                           device.reused % kBlock != 0 || host.reused != device.reused)) {
++        std::cerr << "restore-admission: Device/Host frontier must match, be block-aligned, "
++                     "and remain inside the shared 1400-token prefix; device="
++                  << device.reused << " host=" << host.reused << '\n';
++        ++failures;
++    }
+     if (device.stats.hybrid_host_image_restores != 0 ||
+         device.stats.hybrid_host_block_restores != 0) {
+         std::cerr << "restore-exact: the Device-resident engine restored from Host\n";
+@@ -643,7 +656,8 @@ int main() {
+     }
+     const char* selected            = std::getenv("NINFER_HYBRID_REAL_SCENARIO");
+     const std::string_view scenario = selected != nullptr && *selected != '\0' ? selected : "all";
+-    constexpr std::array<std::string_view, 11> kScenarios{"all",
++    constexpr std::array<std::string_view, 12> kScenarios{"all",
++                                                          "restore-admission",
+                                                           "restore-exact",
+                                                           "restore-exact-mtp",
+                                                           "restore-exact-dflash2",
+@@ -661,6 +675,10 @@ int main() {
+     int failures = 0;
+     try {
+         const bool all = scenario == "all";
++        if (scenario == "restore-admission") {
++            failures += exercise_restore_exact(artifact, ninfer::SpeculativeBackend::None, false);
++            failures += exercise_restore_exact(artifact, ninfer::SpeculativeBackend::Mtp, false);
++        }
+         if (all || scenario == "restore-exact") {
+             failures += exercise_restore_exact(artifact, ninfer::SpeculativeBackend::None);
+         }
 diff --git a/tests/models/qwen3_5/test_engine_stages_real.cpp b/tests/models/qwen3_5/test_engine_stages_real.cpp
 index d439f60af8281a67ae30852cb78915e417f8b242..f73303ed76881c1fb6a5682967f507636bf29452 100644
 --- a/tests/models/qwen3_5/test_engine_stages_real.cpp
@@ -20400,6 +21363,63 @@ index 0000000000000000000000000000000000000000..81fe5b53bd9720e1dcc49727d35ecacd
 +              << ")\n";
 +    return 0;
 +} catch (const std::exception& e) { std::cerr << e.what()<<"\n"; return 1; }
+diff --git a/tests/models/qwen3_5/test_vision_cpu.cpp b/tests/models/qwen3_5/test_vision_cpu.cpp
+index 2e18f7f4b183e09a762862e1bb262c86f82581af..eff9247d68cf71ece84c786f72008d6e46e4c475 100644
+--- a/tests/models/qwen3_5/test_vision_cpu.cpp
++++ b/tests/models/qwen3_5/test_vision_cpu.cpp
+@@ -1,4 +1,5 @@
+ #include "models/qwen3_5/execution/vision_cpu.h"
++#include "runtime/contract/execution.h"
+ #include "models/qwen3_5/load/vision_cpu.h"
+ #include "ops/quantized_weight.h"
+ 
+@@ -330,7 +331,8 @@ void test_encoder_matches_reference() {
+     check(exec::encode_vision_on_cpu(w, patches, ct, 2, &cancelled).empty(),
+           "a cancelled encode returned embeddings");
+ 
+-    auto shared             = std::make_shared<const CpuVisionWeights>(w);
++    auto shared = std::make_shared<ninfer::models::qwen3_5::CpuVisionCache>(
++        [w] { return std::make_shared<const CpuVisionWeights>(w); }, std::chrono::milliseconds(0));
+     auto payload            = std::make_shared<ninfer::models::qwen3_5::PreparedMediaPayload>();
+     payload->patches        = std::make_unique<std::uint16_t[]>(patches.size());
+     payload->patch_elements = patches.size();
+@@ -350,6 +352,22 @@ void test_encoder_matches_reference() {
+         exec::CpuVisionSession session(shared);
+         session.submit_item(payload, ct);
+     }
++    {
++        unsigned calls = 0;
++        auto retry = std::make_shared<ninfer::models::qwen3_5::CpuVisionCache>([&] {
++            if (++calls == 1) throw std::runtime_error("injected CPU Vision read failure");
++            return std::make_shared<const CpuVisionWeights>(w);
++        }, std::chrono::milliseconds(0));
++        exec::CpuVisionSession session(retry);
++        bool failed = false;
++        try { (void)session.encode_item(payload, ct); }
++        catch (const ninfer::runtime::RequestResourceError&) { failed = true; }
++        check(failed && retry->summary().bytes == 0, "failed image load published weights");
++        const auto recovered = session.encode_item(payload, ct);
++        check(recovered.size() == single.size() * 2 &&
++                  std::memcmp(recovered.data(), single.data(), recovered.size()) == 0,
++              "image encode did not recover from a failed weight load");
++    }
+     VisionItemControl mismatched = ct;
+     mismatched.patch_count       = ct.patch_count - 4;
+     bool rejected                = false;
+diff --git a/tests/models/qwen3_5/tests.cmake b/tests/models/qwen3_5/tests.cmake
+index db17b951229bdb6be451bbed9e29a4b1263d0fa4..8ff5923b5afb0cb98d7a434512d060f3ccb48bfc 100644
+--- a/tests/models/qwen3_5/tests.cmake
++++ b/tests/models/qwen3_5/tests.cmake
+@@ -225,3 +225,9 @@ ninfer_add_test(ninfer_qwen3_5_structured_round_test
+   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_structured_round.cpp"
+   LIBRARIES ninfer_model_runtime ninfer_core)
+ set_tests_properties(ninfer_qwen3_5_structured_round_test PROPERTIES SKIP_RETURN_CODE 77)
++
++# Lazy CPU Vision ownership, timed idle release, failure retry, and concurrent first users.
++ninfer_add_test(ninfer_cpu_vision_cache_test STANDALONE
++  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_cpu_vision_cache.cpp"
++  LIBRARIES ninfer_model_loading)
++ninfer_stage_runtime_dlls(ninfer_cpu_vision_cache_test)
 diff --git a/tests/ops/linear/test_gguf.cpp b/tests/ops/linear/test_gguf.cpp
 index 363d4a13f1f02b2728b9328f2dc3d66edf95ce69..db12cf51e50554483e5ba3939b247ccfeb2d9e46 100644
 --- a/tests/ops/linear/test_gguf.cpp
@@ -21064,7 +22084,7 @@ index 8ee181fa8248ae37210a79ed7200da3e0e24b1a5..833c8071411d2bac6a036405f6660093
      for (const Json& choice : {Json{{"type", "auto"}, {"disable_parallel_tool_use", true}},
                                 Json{{"type", "any"}, {"disable_parallel_tool_use", true}}}) {
 diff --git a/tests/test_cli_options.cpp b/tests/test_cli_options.cpp
-index 5d549d90676c326e942b33860f647a3fc1a745ed..8bbcda0722b2789433fdbc0f24083f38de799d9f 100644
+index 5d549d90676c326e942b33860f647a3fc1a745ed..c5cb29246689d2a6623255cf1c02a493240bf502 100644
 --- a/tests/test_cli_options.cpp
 +++ b/tests/test_cli_options.cpp
 @@ -2,6 +2,7 @@
@@ -21075,7 +22095,21 @@ index 5d549d90676c326e942b33860f647a3fc1a745ed..8bbcda0722b2789433fdbc0f24083f38
  #include <stdexcept>
  #include <string>
  #include <string_view>
-@@ -166,6 +167,91 @@ int run_tests() {
+@@ -33,6 +34,13 @@ int check(bool condition, const char* message) {
+ 
+ int run_tests() {
+     int failures = 0;
++    failures += check(parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--vision-cpu"}).cpu_vision_idle_seconds == 300,
++                      "CPU Vision CLI default idle timeout is not five minutes");
++    failures += check(parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--vision-cpu", "--cpu-vision-idle-seconds", "0"}).cpu_vision_idle_seconds == 0,
++                      "CPU Vision CLI cannot disable idle eviction");
++    failures += check(rejects([] { (void)parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--cpu-vision-idle-seconds", "-1"}); }),
++                      "CLI accepted a negative CPU Vision idle timeout");
++
+     failures += check(parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--gpu-clock-floor",
+                              "1500"}).gpu_clock_floor_mhz == 1500 &&
+                           parse({"ninfer-cli", "model.ninfer", "--prompt", "x"})
+@@ -166,6 +174,91 @@ int run_tests() {
              (void)parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--ngram-ram-mib", budget});
          }), "CLI accepted an invalid row-cache budget");
      }
@@ -22166,7 +23200,7 @@ index ef2c8852f72fbb3d49f227b3bd58ffde16c9c7d6..4527efc14529f5f44f36539f5016f70d
      run_test("admission waits for Program boundary", test_admission_waits_for_program_boundary);
      run_test("session publication order", test_session_publication_order_controls_tied_source);
 diff --git a/tests/test_serve_options.cpp b/tests/test_serve_options.cpp
-index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..85f1c236abfb49973d7a4b02f3225ba919ae5bc0 100644
+index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..5140031e45b2d315145de5b7f851018a6f1d8b92 100644
 --- a/tests/test_serve_options.cpp
 +++ b/tests/test_serve_options.cpp
 @@ -2,9 +2,12 @@
@@ -22182,7 +23216,7 @@ index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..85f1c236abfb49973d7a4b02f3225ba9
  #include <string>
  #include <string_view>
  #include <utility>
-@@ -24,13 +27,31 @@ ServeOptions parse(std::vector<std::string> arguments) {
+@@ -24,13 +27,45 @@ ServeOptions parse(std::vector<std::string> arguments) {
      std::vector<char*> argv;
      argv.reserve(arguments.size());
      for (std::string& argument : arguments) { argv.push_back(argument.data()); }
@@ -22213,10 +23247,24 @@ index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..85f1c236abfb49973d7a4b02f3225ba9
 +        catch(const std::invalid_argument&) {rejected=true;}
 +        failures+=check(rejected,"invalid replay limit accepted");
 +    }
++    failures += check(parse({"ninfer-serve", "model.ninfer", "--vision-cpu"}).cpu_vision_idle_seconds == 300,
++                      "CPU Vision default idle timeout is not five minutes");
++    for (const char* seconds : {"0", "2", "900", "4294967295"}) {
++        const auto parsed = parse({"ninfer-serve", "model.ninfer", "--vision-cpu", "--cpu-vision-idle-seconds", seconds});
++        failures += check(make_engine_options(parsed).cpu_vision_idle_seconds == std::stoul(seconds),
++                          "CPU Vision idle timeout was not passed to the Engine");
++    }
++    for (const char* seconds : {"-1", "abc", "1.5", "4294967296", "18446744073709551616"}) {
++        bool rejected = false;
++        try { (void)parse({"ninfer-serve", "model.ninfer", "--vision-cpu", "--cpu-vision-idle-seconds", seconds}); }
++        catch (const std::invalid_argument&) { rejected = true; }
++        failures += check(rejected, "invalid CPU Vision idle timeout was accepted");
++    }
++
      failures += check(parse({"ninfer-serve", "model.ninfer"}).speculative.draft_min_p == 0,
                        "draft confidence must be opt-in");
      for (const auto* floor : {"0", "0.3", "1"}) {
-@@ -83,6 +104,559 @@ int main() {
+@@ -83,6 +118,559 @@ int main() {
                               "--expert-dma-share", "auto", "--expert-dma-share", "0.5",
                               "--expert-dma-share", "auto"}).hybrid_experts.dma_share.has_value() == false,
                        "server did not preserve an automatic hybrid DMA share");
@@ -22776,7 +23824,7 @@ index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..85f1c236abfb49973d7a4b02f3225ba9
      const auto archive = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens",
                                  "5", "--ngram-draft-tokens", "63", "--ngram-archive-mib", "512",
                                  "--ngram-session-mib", "128", "--ngram-native-sessions"});
-@@ -119,7 +693,6 @@ int main() {
+@@ -119,7 +707,6 @@ int main() {
      for (const auto& tail : std::vector<std::vector<std::string>>{
               {"--ngram-draft-tokens", "64"},
               {"--ngram-min-match", "3"},
@@ -22784,7 +23832,7 @@ index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..85f1c236abfb49973d7a4b02f3225ba9
               {"--spec", "none"}}) {
          std::vector<std::string> arguments{"ninfer-serve",
                                             "model.ninfer",
-@@ -155,15 +728,11 @@ int main() {
+@@ -155,15 +742,11 @@ int main() {
      }
      failures += check(parse({"ninfer-serve", "model.ninfer"}).speculative.ngram_draft_tokens == 0,
                        "ngram default needs a neural backend");
@@ -22805,7 +23853,7 @@ index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..85f1c236abfb49973d7a4b02f3225ba9
  
      const auto mtp_ngram = parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens",
                                    "3", "--ngram-draft-tokens", "15"});
-@@ -202,14 +771,12 @@ int main() {
+@@ -202,14 +785,12 @@ int main() {
              } catch (const std::invalid_argument&) { rejected = true; }
              failures += check(rejected, "unsupported neural/ngram pair admitted");
          }
@@ -22826,7 +23874,7 @@ index 775eee9de3d9b38afcc7cad12d9c7f15c68d3c29..85f1c236abfb49973d7a4b02f3225ba9
          const auto wide_single =
              parse({"ninfer-serve", "model.ninfer", "--spec", backend, "--draft-tokens", "3",
                     "--ngram-draft-tokens", "63", "--max-concurrency", "1"});
-@@ -1732,3 +2299,11 @@ int main() {
+@@ -1732,3 +2313,11 @@ int main() {
  
      return failures == 0 ? 0 : 1;
  }

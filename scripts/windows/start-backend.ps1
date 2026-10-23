@@ -44,6 +44,7 @@ param(
     [ValidateRange(1, 16)][int]$RetainedSessions = 4,
     [switch]$Vision,
     [ValidateSet('resident', 'cpu')][string]$VisionResidency = 'resident',
+    [ValidateRange(0, 2147483647)][int]$CpuVisionIdleSeconds = 300,
     [ValidateRange(1, 16384)][int]$VisionTokens = 1024,
     [ValidateSet('off', 'auto')][string]$DeviceProfile = 'off',
     [ValidateRange(0, 2147483647)][int]$ThinkingBudget = 0,
@@ -163,6 +164,7 @@ foreach ($setting in @(
     @('ThinkingMode', '^--(enable-thinking|no-think(ing)?)(=|$)'),
     @('ReasoningEffort', '^--default-reasoning-effort(=|$)'),
     @('PreserveThinking', '^--preserve-thinking(=|$)'),
+    @('CpuVisionIdleSeconds', '^--cpu-vision-idle-seconds(=|$)'),
     @('Concurrency', '^(-np|--parallel|--max-concurrency)(=|$)')
 )) {
     if ($PSBoundParameters.ContainsKey($setting[0]) -and @($WorkerArgs | Where-Object { $_ -match $setting[1] }).Count) {
@@ -260,6 +262,7 @@ if ($Backend -eq 'ninfer') {
     if ($AdaptiveMtp) { $nativeArgs += '--adaptive-mtp' }
     if ($FastPrefill) { $nativeArgs += '--fast-prefill-kernel' }
     if ($Vision) { $nativeArgs += @('--vision', '--vision-residency', $VisionResidency, '--vision-max-merged', "$VisionTokens") }
+    if ($Vision -and $VisionResidency -eq 'cpu') { $nativeArgs += @('--cpu-vision-idle-seconds', "$CpuVisionIdleSeconds") }
     if ($ThinkingBudget -gt 0) { $nativeArgs += @('--default-thinking-budget', "$ThinkingBudget") }
     if ($ReasoningEffort) { $nativeArgs += @('--default-reasoning-effort', $ReasoningEffort) }
     if ($PreserveThinking) { $nativeArgs += '--preserve-thinking' }
@@ -280,7 +283,7 @@ if ($Backend -eq 'ninfer') {
     if (($effectiveK -in $quantized) -ne ($effectiveV -in $quantized)) {
         throw 'llama.cpp cannot mix floating-point and quantized K/V; choose q8_0/q5_0/q4_0 for both, or f16/f32 for both'
     }
-    foreach ($name in @('StageLayers', 'FastPrefill', 'NgramDrafts', 'NgramMinMatch', 'Vision', 'VisionResidency', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'ReasoningEffort', 'PreserveThinking')) {
+    foreach ($name in @('StageLayers', 'FastPrefill', 'NgramDrafts', 'NgramMinMatch', 'Vision', 'VisionResidency', 'CpuVisionIdleSeconds', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'ReasoningEffort', 'PreserveThinking')) {
         if ($PSBoundParameters.ContainsKey($name)) { throw "-$name configures ninfer; use llama native options in -WorkerArgs" }
     }
     if ($SpeculativeMode -ne 'none') {

@@ -38,6 +38,7 @@ param(
     [switch]$Vision = $true,
     [switch]$NoVision,
     [ValidateSet('resident', 'cpu')][string]$VisionResidency = 'cpu',
+    [ValidateRange(0, 2147483647)][int]$CpuVisionIdleSeconds = 300,
     [ValidateRange(1, 16384)][int]$VisionTokens = 1024,
     [ValidateSet('off', 'auto')][string]$DeviceProfile = 'off',
     [ValidateRange(0, 2147483647)][int]$ThinkingBudget = 8192,
@@ -68,7 +69,7 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) { $forward[$entry.Key] = 
 foreach ($name in @('WorkerArgs', 'WorkerArgsFile', 'WorkerArgsTail')) { $null = $forward.Remove($name) }
 $forward['WorkerArgs'] = $resolvedArgs
 $forward['Backend'] = 'ninfer'
-foreach ($parameterName in @('Gpu', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'KvType', 'MtpDrafts', 'AdaptiveMtp', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions', 'Vision', 'VisionResidency', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'SinkTokens', 'RecentTokens')) {
+foreach ($parameterName in @('Gpu', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'KvType', 'MtpDrafts', 'AdaptiveMtp', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions', 'Vision', 'VisionResidency', 'CpuVisionIdleSeconds', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'SinkTokens', 'RecentTokens')) {
     if (!$forward.ContainsKey($parameterName)) { $forward[$parameterName] = Get-Variable -Name $parameterName -ValueOnly }
 }
 $null = $forward.Remove('NoVision')
