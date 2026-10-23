@@ -40,6 +40,8 @@ module.exports = async function settingsChecks({browser,base,info}) {
  try {
   await page.goto(base+'/monitor/');await field('Backend').waitFor();
   await page.locator('[data-language-select]').selectOption('zh-CN');
+  // Let the asynchronous inspection card settle before measuring tooltip layout.
+  await page.waitForFunction(()=>document.querySelector('[data-model-health]')?.getAttribute('aria-busy')==='false');
   assert.equal(await page.locator('.l-core [data-param=Reserve]').count(),1,'R is a primary resource');
   assert.equal(await page.locator('#launch-panel-0 [data-param=HostMiB]').count(),1,'RAM is in cache settings');
   assert.equal(await page.locator('.l-field-help').count(),0,'help does not occupy form rows');
@@ -165,7 +167,7 @@ module.exports = async function settingsChecks({browser,base,info}) {
   assert.equal((await preview()).Concurrency,8);
   await field('Concurrency').fill('9');
   assert.equal(await field('SpeculativeMode').evaluate(el=>el.validity.valid),false,'llama.cpp concurrency above eight is blocked');
-  assert.ok(mutations.every(url=>['/api/launcher/preview','/api/launcher/browse-template'].includes(url)),'settings checks never start/save/stop inference');
+  assert.ok(mutations.every(url=>['/api/launcher/preview','/api/launcher/browse-template','/api/launcher/inspect-model'].includes(url)),'settings checks never start/save/stop inference');
   assert.deepEqual(errors,[]);
   console.log('PASS: help, resource placement, feature dependencies, draft/template retention, credentials, native settings and active preview payloads (no inference)');
  } finally { await context.close(); }

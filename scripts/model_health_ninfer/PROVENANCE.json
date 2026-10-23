@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/iamwavecut/ninfer-all",
+  "revision": "08fd7019925f43b4b42539400afd461b70f7144a",
+  "source": "tools/artifact",
+  "purpose": "CPU-only static inspection, not worker compatibility certification",
+  "sha256": {
+    "reader.py": "5fbff7696b229be638287caa8a8943b3fcba7becc02bba0553e9a967d95cc2f2",
+    "schema.py": "70e0ce75660c63f2d9fa27ae37321865e91ead22283ae9b809680a689b567edc",
+    "layouts.py": "d79c110d640a78ab6aadc616314bee3f493b6de61960365419d00d376937ac05",
+    "formats.py": "6359da40290a3584ed2e809fd240b51daa8c369a906dd6d9c04882a7ed12fe98",
+    "framing.py": "db8792006a1c5457b03b80fb83922dde287073d9c597025546fcc3cd55326e77",
+    "file_io.py": "13836ef9ba539b6fdd0b1cf0f9109a4e47faa26d9c08fd4f1a470705f293acf5"
+  }
+}

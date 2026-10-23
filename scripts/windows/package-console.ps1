@@ -36,6 +36,10 @@ $files = @('START-HERE-CN.bat', 'START-HERE-EN.bat', 'scripts/local-console.py',
            'scripts/windows/describe-launch-json.ps1', 'scripts/windows/start-backend.ps1',
            'scripts/windows/start-ninfer.ps1', 'scripts/windows/start-dflash2.ps1','scripts/windows/start-polystrata.ps1','tools/polystrata/server.py','tools/polystrata/assets.py',
            'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/select-model.ps1', 'scripts/speculative-capabilities.json')
+$files += 'scripts/model_health.py'
+foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'formats.py', 'framing.py', 'file_io.py', 'LICENSE', 'PROVENANCE.json') {
+    $files += 'scripts/model_health_ninfer/' + $name
+}
 foreach ($name in 'index.html', 'monitor.css', 'monitor.js', 'i18n.js', 'launcher.css', 'launcher.js',
                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html') {
     $files += 'ui/monitor/' + $name
@@ -74,7 +78,7 @@ $runtime = Join-Path $output 'runtime/python'
 $null = New-Item -ItemType Directory -Path (Split-Path $runtime) -Force
 [IO.Compression.ZipFile]::ExtractToDirectory($archive, $runtime)
 $python = Join-Path $runtime 'python.exe'
-$version = @(& $python -I -S -c 'import sys,ctypes,json,http.server,urllib.request,webbrowser; assert sys.version_info >= (3,9); assert sys.maxsize > 2**32; print(sys.version.split()[0])')
+$version = @(& $python -I -S -c 'import sys,ctypes,json,http.server,urllib.request,webbrowser; assert sys.version_info >= (3,10); assert sys.maxsize > 2**32; print(sys.version.split()[0])')
 if ($LASTEXITCODE -ne 0) { throw 'Bundled Python failed its x64 standard-library check' }
 foreach ($relative in $files) {
     $destination = Join-Path $output $relative

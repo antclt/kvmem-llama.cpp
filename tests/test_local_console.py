@@ -582,7 +582,7 @@ class ConsoleTests(unittest.TestCase):
         for host in ('127.0.0.1', '0.0.0.0'):
             self.config['parameters']['ListenHost'] = host
             self.assertEqual(console.normalize(self.config, self.controller.backends), self.config)
-        with patch.object(self.controller, 'plan', return_value={'argv': ['unused']}), patch.object(console.socket, 'socket') as factory:
+        with patch.object(self.controller, 'inspect_model', return_value={'can_start': True}), patch.object(self.controller, 'plan', return_value={'argv': ['unused']}), patch.object(console.socket, 'socket') as factory:
             probe = factory.return_value.__enter__.return_value
             probe.bind.side_effect = OSError('occupied')
             with self.assertRaisesRegex(ValueError, '端口'):

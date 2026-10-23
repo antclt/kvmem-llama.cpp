@@ -153,7 +153,8 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  for(const [key,value] of Object.entries(expected))assert.equal(releaseDraft[key],value,'persisted '+key);
  await page.locator('[data-preset-undo]').click();
  assert.equal(await page.locator('[data-param=Model]').inputValue(),'C:/models/my-existing-model.ninfer');
- assert.deepEqual(mutations,[],'select/undo must not mutate the server');
+ assert.ok(mutations.every(url=>new URL(url).pathname==='/api/launcher/inspect-model'),
+  'select/undo may inspect the draft but must not mutate the server');
  assert.equal(await page.locator('[data-preset]').count(),1,'only the 0.18.0 release recipe');
  await page.locator('[data-preset=ninfer-v018]').click();
  await page.getByRole('tab',{name:'服务与并发'}).click();
@@ -244,6 +245,10 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  const lifecycleGpu={uuid:'GPU-browser-lifecycle-fixture',name:'Browser lifecycle fixture'};
  const lifecycleInfo=async route=>route.fulfill({json:{...info,gpus:[lifecycleGpu]}});
  await page.route('**/api/launcher/info',lifecycleInfo);
+ // This section simulates a worker with a fictional model path. Real-file
+ // inspection and launch blocking are covered by test-model-health.cjs.
+ const lifecycleInspection=route=>route.fulfill({json:{schema_version:1,status:'ready',can_start:true,model:{},features:{},checks:[]}});
+ await page.route('**/api/launcher/inspect-model',lifecycleInspection);
  await page.reload();await page.locator('[data-param=Backend]').waitFor();
  await page.locator('[data-param=Backend]').selectOption('llamacpp');
  const navBefore=await page.locator('.s-nav').boundingBox();
@@ -283,6 +288,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.locator('[data-dialog=error] [data-dialog-close]').click();
  await page.unroute('**/api/launcher/start');await page.unroute('**/api/launcher/status');
  await page.unroute('**/api/launcher/info',lifecycleInfo);
+ await page.unroute('**/api/launcher/inspect-model',lifecycleInspection);
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  await page.locator('[data-template-tab=builtin]').click();
  assert.deepEqual(await page.locator('.s-nav [data-page]').evaluateAll(items=>items.map(el=>el.dataset.page)),['config','chat','monitor','about']);

@@ -62,10 +62,14 @@ foreach($file in Get-ChildItem -LiteralPath (Join-Path $poly 'serve') -Recurse -
     New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     Copy-Item -LiteralPath $file.FullName -Destination $dest
 }
-foreach($relative in @('tools/polystrata/server.py','tools/polystrata/assets.py','scripts/local-console.py','scripts/console_chat.py','scripts/speculative-capabilities.json',
+$consoleInspection = @('scripts/model_health.py')
+foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'formats.py', 'framing.py', 'file_io.py', 'LICENSE', 'PROVENANCE.json') {
+    $consoleInspection += 'scripts/model_health_ninfer/' + $name
+}
+foreach($relative in (@('tools/polystrata/server.py','tools/polystrata/assets.py','scripts/local-console.py','scripts/console_chat.py','scripts/speculative-capabilities.json',
  'scripts/windows/start-backend.ps1','scripts/windows/start-polystrata.ps1','scripts/windows/native-process.ps1',
  'scripts/windows/query-scoring.ps1','scripts/windows/start-ui.ps1','scripts/windows/describe-launch-json.ps1',
- 'scripts/windows/select-model.ps1','START-HERE-CN.bat','START-HERE-EN.bat','backends/versions.json')) {
+ 'scripts/windows/select-model.ps1','START-HERE-CN.bat','START-HERE-EN.bat','backends/versions.json') + $consoleInspection)) {
     $dest=Join-Path $out $relative;New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     if((Test-Path -LiteralPath $dest) -and (Get-FileHash -LiteralPath $dest).Hash -ne (Get-FileHash -LiteralPath (Join-Path $root $relative)).Hash) {throw "Conflicting common package file: $relative"}
     Copy-Item -LiteralPath (Join-Path $root $relative) -Destination $dest
