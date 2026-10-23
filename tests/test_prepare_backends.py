@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -119,6 +120,26 @@ class PatchSeriesTest(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             prepare.prepare('test', self.entry, True)
         self.assertEqual(self.source.read_text(), 'kernel\n')
+
+    def test_polystrata_export_updates_series_and_preserves_real_index(self):
+        script = self.root/'tools/polystrata/export_patch.py'
+        script.parent.mkdir(parents=True)
+        script.write_bytes((Path(__file__).resolve().parents[1]/'tools/polystrata/export_patch.py').read_bytes())
+        self.entry['patches'] = [dict(self.entry['patches'][0], id='kvmem')]
+        self.entry['patched_tree'] = self.entry['patches'][0]['after_tree']
+        manifest = self.root/'backends/versions.json'
+        manifest.write_text(json.dumps({'polystrata':self.entry}), encoding='utf-8')
+        self.source.write_text('latest backend development\n', encoding='utf-8')
+        (self.repo/'added.txt').write_text('new content\n', encoding='utf-8')
+        index = (self.repo/'.git/index').read_bytes()
+        run = subprocess.run([sys.executable,str(script)],capture_output=True,text=True,check=True)
+        self.assertTrue(json.loads(run.stdout)['roundtrip'])
+        exported = json.loads(manifest.read_text(encoding='utf-8'))['polystrata']
+        self.assertNotIn('patch',exported)
+        self.assertNotIn('patch_sha256',exported)
+        self.assertEqual(exported['patched_tree'],exported['patches'][0]['after_tree'])
+        prepare.prepare('polystrata',exported,True)
+        self.assertEqual((self.repo/'.git/index').read_bytes(),index)
 
     def test_source_bundle_verifies_all_patches_and_files_without_git(self):
         # Renaming only this test fixture's marker selects exported-source verification.
