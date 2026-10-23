@@ -144,7 +144,7 @@ def main():
         entry_files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                        for p in sorted((ROOT / 'ui/lightweight').iterdir()) if p.is_file()}
         mode = 'lightweight'
-    manifest = {'llama_commit': pin, 'backend_patch_sha256': versions['llamacpp']['patch_sha256'],
+    manifest = {'llama_commit': pin, 'backend_sources': versions['llamacpp'],
                 'mode': mode, 'console_chat_protocol': None if args.full_ui else 1, 'entry_files': entry_files}
     (output / 'ui-build.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(output)

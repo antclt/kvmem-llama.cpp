@@ -12,6 +12,8 @@ Windows 入口 `scripts/windows/start-backend.ps1` 在当前源码可选择 `lla
 
 Qwen3.5 dense 的 0.8B/2B/4B/9B/27B 规格与原生 MTP 适配范围、4B 两后端验收及模型复用方法见 [家族适配记录](qwen35-dense-family.md)。
 
+Bonsai 2 27B 的 PQ2/PTQ1 作为两个现有后端的独立补丁接入，继续使用普通 llama.cpp／ninfer worker，不新增 Prism 引擎。当前实现、5050 8GB 的 PTQ1＋MTP 预算验证、限制和未来上游接管办法见 [Bonsai 接入记录](bonsai-integration.md)。此说明针对源码，不改变历史发布包。
+
 ## 启动
 
 ninfer 预编译包可直接运行默认脚本。将包含文本、视觉和 MTP 组件的模型放到包根目录，命名为 `model.ninfer`；包和模型的完整路径不能含中文字符。

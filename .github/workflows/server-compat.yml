@@ -54,6 +54,7 @@ jobs:
         run: |
           python3 tests/test_local_console.py
           python3 tests/test_model_health.py
+          python3 tests/test_prepare_backends.py
           python3 tests/test_console_chat.py
           python3 tests/test_one_click.py
           python3 tests/test_webui_builder.py
@@ -100,6 +101,7 @@ jobs:
         run: |
           python tests/test_local_console.py
           python tests/test_model_health.py
+          python tests/test_prepare_backends.py
           python tests/test_console_chat.py
           python tests/test_windows_worker_args.py
           python tests/test_one_click.py
