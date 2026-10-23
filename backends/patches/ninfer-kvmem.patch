@@ -6475,7 +6475,7 @@ index 442687d14998a6aae1b98d9c2cf5aa4fc073d4a0..8a220dd392d748d0beea573c8b3e7a08
          timing.begin_wait();
          try {
 diff --git a/src/models/qwen3_5/program/prefix/hybrid_program.cpp b/src/models/qwen3_5/program/prefix/hybrid_program.cpp
-index 61d353abe294957057c7af59e262a7545660f509..d4696c749ee04895f4bf5ba337b0db5d6ef1d6c5 100644
+index 61d353abe294957057c7af59e262a7545660f509..621e7f848e678c20a99d3d26b79ece7cd3e0689a 100644
 --- a/src/models/qwen3_5/program/prefix/hybrid_program.cpp
 +++ b/src/models/qwen3_5/program/prefix/hybrid_program.cpp
 @@ -4,6 +4,7 @@
@@ -6519,6 +6519,14 @@ index 61d353abe294957057c7af59e262a7545660f509..d4696c749ee04895f4bf5ba337b0db5d
          request.logprobs = quote.logprobs;
          request.readout_tokens = quote.readout_tokens;
          install_sampling(sequence, request, quote.sampling);
+@@ -1023,6 +1021,7 @@ StartResult ProgramImpl::hybrid_activate(HybridMaterializationTransaction& trans
+             .elapsed_seconds    = 0.0,
+             .prepare_mtp        = prepare_mtp,
+             .reuse              = quote.summary.prefix_reuse_path,
++            .reported_reuse_path = quote.summary.prefix_reuse_path,
+             .mtp_bridge =
+                 prepare_mtp && reuse != 0 ? MtpBridgeMode::BeforeSuffix : MtpBridgeMode::None,
+         };
 diff --git a/src/models/qwen3_5/program/prefix_identity.h b/src/models/qwen3_5/program/prefix_identity.h
 index d19092aea2d27d90f87275c63c95f6a11dcd66ca..ead8ddeef3b755214ceba767957eac597c65ac74 100644
 --- a/src/models/qwen3_5/program/prefix_identity.h
@@ -14427,10 +14435,10 @@ index 66296b1e251c1892f30539994ae761be8547cae0..dd6c6da603062a6fd3927a937c6d2407
      struct Impl;
      std::unique_ptr<Impl> impl_;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..5aaf6363374cf9238709ed09c7966e992bb1ebfd 100644
+index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..63e0128887a7b80c7daa77e9a96d7ffb5d3c7fce 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -9,10 +9,46 @@ include(cmake/BenchSupportTests.cmake)
+@@ -9,10 +9,56 @@ include(cmake/BenchSupportTests.cmake)
  include(models/qwen3_5/tests.cmake)
  include(models/qwen4_exp/tests.cmake)
  include(models/gemma4/tests.cmake)
@@ -14455,6 +14463,16 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..5aaf6363374cf9238709ed09c7966e99
 +ninfer_finalize_bundle(ninfer_memory_policy_tests)
 +ninfer_stage_runtime_dlls(ninfer_memory_policy_tests)
 +
++# Native prefix admission must agree with the actual Device/Host restore path.
++set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_prefix_cache_tests_PROGRAMS
++  ninfer_qwen3_5_hybrid_prefix_real_test)
++ninfer_finalize_bundle(ninfer_prefix_cache_tests)
++ninfer_stage_runtime_dlls(ninfer_prefix_cache_tests)
++add_test(NAME ninfer_hybrid_prefix_admission_test
++  COMMAND ninfer_prefix_cache_tests ninfer_qwen3_5_hybrid_prefix_real_test)
++set_tests_properties(ninfer_hybrid_prefix_admission_test PROPERTIES
++  ENVIRONMENT "NINFER_HYBRID_REAL_SCENARIO=restore-admission" SKIP_RETURN_CODE 77)
++
 +# Focused Query/Pressure frontend and replay-budget option contracts.
 +ninfer_add_test(ninfer_kvmem_checkpoint_pool_test
 +  SOURCES models/qwen3_5/test_checkpoint_buffer_pool.cpp LIBRARIES ninfer_core)
@@ -14477,7 +14495,7 @@ index 02cfe0513466f9f1e78a264eb9a01e360c7542c2..5aaf6363374cf9238709ed09c7966e99
  # Exit code 77 is a skip for every test (tests/cuda_availability.h). Without a usable CUDA device --
  # no GPU, no driver, or only the toolkit's stub driver, as on a CI runner -- a test that has no check
  # of its own fails on its first CUDA call with one of these runtime messages; report that as skipped
-@@ -21,8 +57,117 @@ ninfer_finalize_bundle(ninfer_tests)
+@@ -21,8 +67,117 @@ ninfer_finalize_bundle(ninfer_tests)
  get_property(_ninfer_all_tests DIRECTORY PROPERTY TESTS)
  set_tests_properties(${_ninfer_all_tests} PROPERTIES SKIP_RETURN_CODE 77 SKIP_REGULAR_EXPRESSION
    "CUDA driver is a stub library;no CUDA-capable device is detected;CUDA driver version is insufficient for CUDA runtime version")
@@ -19515,6 +19533,73 @@ index 0000000000000000000000000000000000000000..0642f45796a83515db3ea13b7505940d
 +    last.reset();
 +    return 0;
 +}
+diff --git a/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp b/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp
+index bf5f21854655457d1f76693f0d7b4ca0879295f4..901e3df2b27d96fbea060ab28d6dffb3dedf64c6 100644
+--- a/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp
++++ b/tests/models/qwen3_5/test_engine_hybrid_prefix_real.cpp
+@@ -113,7 +113,8 @@ struct Observed {
+ // constrained engine is first forced to evict the snapshot image and most of its blocks, so the
+ // same snapshot comes back through the Host slabs. Both restores carry identical bytes and resume
+ // at the same frontier with the same chunking, so greedy generation must match token for token.
+-int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend backend) {
++int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend backend,
++                           bool fixed_fixture = true) {
+     const std::vector<ninfer::TokenId> first = synthetic_tokens(1500, 1);
+     std::vector<ninfer::TokenId> second(first.begin(), first.begin() + 1400);
+     const std::vector<ninfer::TokenId> suffix = synthetic_tokens(300, 2);
+@@ -123,6 +124,11 @@ int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend back
+     const std::vector<ninfer::TokenId> pressure = synthetic_tokens(3900, 3);
+ 
+     const auto run = [&](ninfer::EngineOptions options, bool apply_pressure) {
++        // The general admission scenario accepts an ordinary full MTP head and
++        // measures the captured frontier instead of assuming a fixture's tap layout.
++        if (!fixed_fixture && backend == ninfer::SpeculativeBackend::Mtp) {
++            options.speculative.proposal_head = ninfer::ProposalHead::Full;
++        }
+         ninfer::Engine engine(std::move(options));
+         (void)engine.generate(engine.prepare_tokens(first), greedy(8));
+         if (apply_pressure) { (void)engine.generate(engine.prepare_tokens(pressure), greedy(4)); }
+@@ -138,11 +144,18 @@ int exercise_restore_exact(const char* artifact, ninfer::SpeculativeBackend back
+     // flexible prompt-tail tap, realized at its start.
+     constexpr std::uint32_t kExpectedReuse = 2 * kPrefillChunk;
+     int failures                           = 0;
+-    if (device.reused != kExpectedReuse || host.reused != kExpectedReuse) {
++    if (fixed_fixture && (device.reused != kExpectedReuse || host.reused != kExpectedReuse)) {
+         std::cerr << "restore-exact: reused device=" << device.reused << " host=" << host.reused
+                   << ", expected the prompt-tail snapshot at " << kExpectedReuse << '\n';
+         ++failures;
+     }
++    if (!fixed_fixture && (device.reused == 0 || device.reused > 1400 ||
++                           device.reused % kBlock != 0 || host.reused != device.reused)) {
++        std::cerr << "restore-admission: Device/Host frontier must match, be block-aligned, "
++                     "and remain inside the shared 1400-token prefix; device="
++                  << device.reused << " host=" << host.reused << '\n';
++        ++failures;
++    }
+     if (device.stats.hybrid_host_image_restores != 0 ||
+         device.stats.hybrid_host_block_restores != 0) {
+         std::cerr << "restore-exact: the Device-resident engine restored from Host\n";
+@@ -643,7 +656,8 @@ int main() {
+     }
+     const char* selected            = std::getenv("NINFER_HYBRID_REAL_SCENARIO");
+     const std::string_view scenario = selected != nullptr && *selected != '\0' ? selected : "all";
+-    constexpr std::array<std::string_view, 11> kScenarios{"all",
++    constexpr std::array<std::string_view, 12> kScenarios{"all",
++                                                          "restore-admission",
+                                                           "restore-exact",
+                                                           "restore-exact-mtp",
+                                                           "restore-exact-dflash2",
+@@ -661,6 +675,10 @@ int main() {
+     int failures = 0;
+     try {
+         const bool all = scenario == "all";
++        if (scenario == "restore-admission") {
++            failures += exercise_restore_exact(artifact, ninfer::SpeculativeBackend::None, false);
++            failures += exercise_restore_exact(artifact, ninfer::SpeculativeBackend::Mtp, false);
++        }
+         if (all || scenario == "restore-exact") {
+             failures += exercise_restore_exact(artifact, ninfer::SpeculativeBackend::None);
+         }
 diff --git a/tests/models/qwen3_5/test_engine_stages_real.cpp b/tests/models/qwen3_5/test_engine_stages_real.cpp
 index d439f60af8281a67ae30852cb78915e417f8b242..f73303ed76881c1fb6a5682967f507636bf29452 100644
 --- a/tests/models/qwen3_5/test_engine_stages_real.cpp
