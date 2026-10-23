@@ -177,7 +177,8 @@ class Inspection:
             from model_health_ninfer.formats import GGUF_FORMATS_BY_TYPE
             blocks = {k: (v.block_elements, v.block_bytes) for k, v in GGUF_FORMATS_BY_TYPE.items()}
             blocks.update({0:(1,4), 1:(1,2), 3:(32,20), 7:(32,24), 9:(32,40), 15:(256,292),
-                           24:(1,1), 25:(1,2), 26:(1,4), 27:(1,8), 28:(1,8), 30:(1,2)})
+                           24:(1,1), 25:(1,2), 26:(1,4), 27:(1,8), 28:(1,8), 30:(1,2),
+                           142:(128,34), 143:(128,28)})
             names, spans, unknown = set(), [], set()
             alignment = metadata.get('general.alignment', 32)
             if type(alignment) is not int or not 1 <= alignment <= 1048576 or alignment & (alignment - 1):

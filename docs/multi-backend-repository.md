@@ -128,17 +128,22 @@ The resulting workers are `build-backends/llamacpp/bin/llama-kvmem-server.exe` a
 
 ## Development and release
 
-Backend changes are recorded in `backends/patches/<backend>-kvmem.patch` in the same
-commit as matching core/adapter changes. Export a binary/full-index Git diff against
-the backend's `HEAD`, including any newly added files, then update `patch_sha256`
-and `patched_tree` in `backends/versions.json`. Keep patch output byte-for-byte
-(avoid PowerShell text redirection changing its encoding). The tree hash is the
-result of staging those backend source changes and running `git write-tree`; no
-backend commit is needed. Validate with `prepare-backends.py --check` and a fresh
-checkout before publishing.
+Backend changes are an ordered `patches` list in `backends/versions.json`. Each
+entry records its `id`, repository-relative `path`, SHA-256, preceding `requires`,
+and exact `after_tree`. The backend's `patched_tree` is the final entry's tree.
+The existing `<backend>-kvmem.patch` stays first. Bonsai format support and its
+optional performance changes are separate layers; see [Bonsai integration](bonsai-integration.md).
+
+Export each binary/full-index Git diff against the preceding prepared tree (the
+first patch uses `base_commit`), including newly added files. Keep patch bytes
+unchanged by text redirection. Use an isolated Git index to compute tree hashes;
+no backend commit or change to the developer's index is necessary. Preparation
+preflights the entire series before editing sources and can resume an exact known
+intermediate tree. Unknown source edits are preserved and rejected, never reset.
+Validate `prepare-backends.py --check` and replay from the pinned base before publishing.
 
 For upstream updates, deliberately update the submodule gitlink and `base_commit`,
-rebase the integration patch onto that revision, update hashes and run affected
+rebase the required patch series onto that revision, update hashes and run affected
 checks. Do not follow an unpinned branch. Root `patches/` remains historical material;
 the active patches live under `backends/patches/`.
 

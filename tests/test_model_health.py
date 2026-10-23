@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import model_health as health
 
 
-def gguf(path, *, meta=None, tensor='weight', kind=0, offset=0, payload=b'\0'*4):
+def gguf(path, *, meta=None, tensor='weight', kind=0, offset=0, payload=b'\0'*4, columns=1):
     def string(s):
         raw = s.encode('utf-8'); return struct.pack('<Q', len(raw)) + raw
     metadata = {'general.architecture':'qwen35', **(meta or {})}
@@ -21,7 +21,7 @@ def gguf(path, *, meta=None, tensor='weight', kind=0, offset=0, payload=b'\0'*4)
     for key, value in metadata.items():
         raw += string(key)
         raw += struct.pack('<I', 8) + string(value) if isinstance(value, str) else struct.pack('<IQ', 10, value)
-    raw += string(tensor) + struct.pack('<IQIQ', 1, 1, kind, offset)
+    raw += string(tensor) + struct.pack('<IQIQ', 1, columns, kind, offset)
     raw += b'\0' * (-len(raw) % 32) + payload
     path.write_bytes(raw)
 
@@ -78,6 +78,37 @@ class HealthTests(unittest.TestCase):
         self.assertFalse(self.inspect(path)['can_start'])
         path=self.root/'wrong.ninfer'; gguf(path)
         self.assertFalse(self.inspect(path, 'ninfer')['can_start'])
+
+    def test_bonsai_gguf_block_extents(self):
+        path = self.root/'bonsai.gguf'
+        for kind, size in [(142,34),(143,28)]:
+            gguf(path, kind=kind, columns=128, payload=b'\0'*size)
+            report = self.inspect(path)
+            self.assertTrue(report['can_start'])
+            self.assertNotIn('gguf_types', [c['code'] for c in report['checks']])
+            gguf(path, kind=kind, columns=128, payload=b'\0'*(size-1))
+            self.assertFalse(self.inspect(path)['can_start'])
+
+    def test_bonsai_native_plane_extents(self):
+        path = self.root/'bonsai.ninfer'
+        # One row: compact base at 0, optional high plane at 256,
+        # FP16 scale at 512 (PTQ1) or 256 (T5); the final two bytes need no tail padding.
+        for format_name, size in [('ptq1_g128_fp16',514),('t5_g128_fp16',258)]:
+            directory = dict(components={'text':{'config':{'model_type':'qwen3_5_text'},'resources':{}}},
+                objects=[dict(id='weight',kind='tensor',shape=[1,128],format=format_name,
+                              layout='row_split_k128_v1',offset=0,bytes=size)],
+                bindings={'text.weight':{'object':'weight'}},uses=[],files=[dict(path=None,payload_bytes=1024)])
+            def write():
+                encoded=json.dumps(directory).encode()
+                prefix=struct.pack('<8sQ16s',b'NINFER\0\3',len(encoded),b'a'*16)+encoded
+                path.write_bytes(prefix+b'\0'*(-len(prefix)%4096)+b'\0'*1024)
+            write()
+            report=self.inspect(path,'ninfer')
+            self.assertTrue(report['can_start'],report)
+            self.assertNotIn('ninfer_encoding',[c['code'] for c in report['checks']])
+            directory['objects'][0]['bytes']=size-1
+            write()
+            self.assertFalse(self.inspect(path,'ninfer')['can_start'])
 
     def test_missing_empty_and_truncated_files_block(self):
         path=self.root/'missing.gguf'
