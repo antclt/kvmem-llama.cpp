@@ -31,6 +31,13 @@ comparison at equal Main KV capacity (native context = KVMem B+G). It does not q
 35B MoE, Flash-Next or Gemma 4 for KVMem. Current evidence is recorded in the same
 migration record; the earlier release results apply to their dated baseline.
 
+The 2026-10-23 upstream/KV refresh pins `db8c114802a070a7903f84d01142fda0b00fa7df`.
+It includes the INT8/rk8v4 and NVFP4 page-feedback specializations while preserving
+master's independent Query controls and native tool constraints. The separate
+`13thblade/ninfer-all-nvfp4` kernel/route/codec import is deferred and is not included.
+The [migration record](ninfer-all-migration-validation.md) separates historical runtime
+evidence from the static-only checks of this split and its integration with current master.
+
 ## Checkout and preparation
 
 ```sh

@@ -7,6 +7,7 @@
 - Query 默认使用逐 token/head 的 Mean-K page softmax 与一次图传播。原生命令行和 Windows 启动脚本可切换 `--kvmem-query-scorer meanq-cosine|page-softmax`、GQA mean/max、LRFU 和 graph alpha；组合限制与默认值见 [评分参数](graph-recall.md#startup-scoring-options)。UI 继续使用默认 C，旧草稿/模板的历史设置不自动导出。
 - PrefillPressure 和 DecodePressure 仅在 accepted 驻留集合中按累计注意力重选；R 是可重复使用的追加空间。两个后端都允许输出超过 R，仍受 context、请求输出预算和结束条件限制。
 - UI 内置配置保留 0.18 资源参数并标为“0.18 资源配置 + C”。发布的 0.18 二进制和下文带日期的历史验证不因此改变。
+- 2026-10-22 更新到 ninfer-all `db8c114802a0` 后，未启用 KVMem 的原生默认缓存为 hybrid；显式 catalog 专用选项会选择原有 checkpoint catalog。启用 KVMem 时仍由 KVMem 管理历史，不启用原生 hybrid 缓存。
 
 下文保留原有命名收敛、原生参数映射与历史验收依据；其 LRFU/max 控件和 llama R 上限描述属于本次修订前的行为。
 
@@ -400,7 +401,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 |---|---|
 | `--no-prefix-reuse` | 关闭兼容前缀复用，默认允许；KVMem 下也控制请求历史复用 |
 | `--derive-session-keys` | 为没有 session key 的请求推导身份，默认关；KVMem 可使用该身份 |
-| `--use-original-prefix-caching` | 显式选择默认 checkpoint catalog；KVMem 下拒绝显式选择 |
+| `--use-original-prefix-caching` | 显式选择 checkpoint catalog；KVMem 下拒绝显式选择 |
 | `--use-alt-prefix-caching` | 选择 hybrid 原生前缀缓存；KVMem 下拒绝 |
 | `--device-state-slots` | checkpoint 的额外设备槽位，默认并发数；catalog 专用 |
 | `--host-state-slots` | Host checkpoint 槽位，默认 8；catalog 专用 |
