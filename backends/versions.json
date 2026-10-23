@@ -13,11 +13,11 @@
   "ninfer": {
     "path": "backends/ninfer",
     "upstream": "https://github.com/iamwavecut/ninfer-all.git",
-    "base_commit": "08fd7019925f43b4b42539400afd461b70f7144a",
+    "base_commit": "db8c114802a070a7903f84d01142fda0b00fa7df",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "KVMem integration is maintained in the versioned patch; the submodule remains pinned to base_commit",
     "patch": "backends/patches/ninfer-kvmem.patch",
-    "patch_sha256": "2768421eadcc11e5a419a9883822f9ce081609ba0d7ea241eb0c1609f738afd1",
-    "patched_tree": "082f4c4d7ab63ce2c51c7827c14a09cf15cada68"
+    "patch_sha256": "bd2cd52553369c580111d92a980ddf2453ab5f5a7ae9d04eb66fda6a3ae89871",
+    "patched_tree": "cfcab546bc5e4b6d5dafef60a3d4a4cdf0e37a03"
   }
 }

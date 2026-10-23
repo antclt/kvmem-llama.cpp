@@ -1,8 +1,9 @@
 # KVMem 两后端实现差异
 
-更新日期：2026 年 10 月 17 日（KVMem CLI v1 与 NInfer 上游刷新）。本次工作分支 `feat/ninfer-all-27b-refresh` 基于 master `27a221e`，包含已合入的活跃 KV 分层和 LCP。两个后端的完整集成改动在 `backends/patches/`，准备后的精确树哈希在 `backends/versions.json`。
+更新日期：2026 年 10 月 22 日（NInfer 上游刷新）。工作分支 `update/ninfer-upstream-kv-20261023` 基于 master `19f4ee6`，保留已合入的图召回 C、统一 Query/Pressure、活跃 KV 分层和 LCP。两个后端的完整集成改动在 `backends/patches/`，准备后的精确树哈希在 `backends/versions.json`。
 
-本轮工作分支的 ninfer 上游为 `iamwavecut/ninfer-all`，固定在 `08fd7019925f`，已完成 Qwen3.8-27B Dense 的本地定向验证。KVMem 保留既有 Qwen Dense 边界；`qwen4_exp`、Gemma 4、host/disk routed expert、suspend、graft 和 router 尚未适配，组合会被拒绝。本轮不承诺 35B MoE 的 KVMem 支持。Q2_0/Q4_0/Q5_0 是权重量化格式，不能据此推断新的模型架构已经支持 KVMem。实际验证范围见 [迁移记录](ninfer-all-migration-validation.md)。
+本轮工作分支的 ninfer 上游为 `iamwavecut/ninfer-all`，固定在 `db8c114802a0`。本次验收聚焦 Qwen3.8-27B Dense 的同激活 KV 对照与核心协议、原生状态检查。KVMem 保留既有 Qwen Dense 边界；`qwen4_exp`、Gemma 4、host/disk routed expert、suspend、graft 和 router 尚未适配，组合会被拒绝。本轮不承诺 35B MoE 的 KVMem 支持。Q2_0/Q4_0/Q5_0 是权重量化格式，不能据此推断新的模型架构已经支持 KVMem。实际验证范围见 [迁移记录](ninfer-all-migration-validation.md)。
+
 
 llama.cpp 与 ninfer 共用 KVMem 策略和内存契约，并共用 KVMem 公共参数解析；各自保留原生推理、页池、请求处理和原生参数解析。切换后端时，需要同时核对参数名称、默认值、计量范围和执行行为。下表比较的是本项目的 `llama-kvmem-server` 与 ninfer KVMem worker，不是上游两个引擎的全部能力。
 
