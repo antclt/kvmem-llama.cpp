@@ -1082,3 +1082,37 @@ html[lang="en"] #app .s-metric .s-number[data-value="reuse"] { font-size:clamp(1
 @media(max-width:430px) {
   #app[data-density="compact"] .s-context-dial { grid-template-columns:1fr; }
 }
+
+/* Monitor hierarchy: readings first, contextual explanations on demand. */
+#app [data-view=monitor] .s-state-row,#app [data-view=monitor] .s-label,
+#app [data-view=monitor] .s-sub,#app [data-view=monitor] .s-note-text,
+#app [data-view=monitor] .s-cache .s-bar-row,#app [data-view=monitor] .s-text-button,
+#app [data-view=monitor] summary,#app [data-view=monitor] .s-footer { font-size:14px; }
+#app [data-view=monitor] .s-sub { line-height:1.6; }
+#app [data-view=monitor] .s-metric { position:relative; gap:14px; padding:20px; }
+#app [data-view=monitor] .s-metric > .s-label { padding-right:22px; }
+#app [data-view=monitor] .s-speed-pair { padding-right:18px; }
+#app .s-title-with-help { display:flex; align-items:center; gap:10px; }
+#app .s-metric-help { display:inline-grid; place-items:center; width:24px; height:24px; flex:none; border:1px solid var(--s-line); border-radius:50%; background:transparent; color:var(--s-muted); font:500 14px/1 var(--s-font); cursor:pointer; }
+#app .s-metric > .s-metric-help { position:absolute; right:12px; top:14px; }
+#app .s-metric-help:hover,#app .s-metric-help:focus-visible { color:var(--s-ink); border-color:var(--s-accent); background:var(--s-soft); }
+#app .s-monitor-note { box-sizing:border-box; width:min(420px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); overflow:auto; padding:22px; border:1px solid var(--s-line); border-radius:16px; background:var(--s-surface); color:var(--s-ink); box-shadow:0 18px 60px #0006; font:14px/1.7 var(--s-font); }
+#app .s-monitor-note::backdrop { background:#0003; }
+#app .s-monitor-note h2 { margin:0; font-size:16px; }
+#app .s-monitor-note p { margin:14px 0 0; }
+#app .s-note-close { border:0; border-radius:8px; width:32px; height:32px; color:var(--s-muted); background:var(--s-soft); font:22px/1 var(--s-font); cursor:pointer; }
+#app .s-runtime-details { border-top:1px solid var(--s-line); padding-top:12px; }
+#app .s-runtime-facts { display:grid; gap:10px; padding:14px 16px; margin-top:12px; border-radius:8px; background:var(--s-soft); font-size:14px; line-height:1.6; overflow-wrap:anywhere; }
+#app .s-runtime-facts > :empty { display:none; }
+#app .s-overview-chips { display:flex; flex-wrap:wrap; gap:8px; }
+#app .s-overview-chips > span { background:var(--s-soft); border-radius:6px; padding:6px 10px; font-size:14px; }
+#app .s-overview-row { align-items:center; }
+#app [data-view=monitor] .s-device-note:not([hidden]) { padding:12px 14px; border-radius:8px; background:var(--s-warn-tint); color:var(--s-warn-text); font-size:14px; line-height:1.6; }
+#app [data-view=monitor] .s-gpu-secondary dt,#app [data-view=monitor] .s-gpu-secondary small,
+#app [data-view=monitor] .s-dial-caption,#app [data-view=monitor] [data-gpu=id] { font-size:14px; }
+#app[data-density=compact] [data-view=monitor] .s-metric { padding:16px; gap:10px; }
+@media(max-width:520px) {
+  #app [data-view=monitor] .s-metrics { grid-template-columns:1fr; }
+  #app [data-view=monitor] .s-context-dial { grid-template-columns:96px minmax(0,1fr); }
+  #app [data-view=monitor] .s-metric .s-number { font-size:30px; }
+}

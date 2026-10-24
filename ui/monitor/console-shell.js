@@ -43,7 +43,7 @@
     if(event.data?.type==='kvmem-navigate'&&['config','monitor','chat'].includes(event.data.page))open(event.data.page);
     if(event.data?.type==='kvmem-chat-ready')sync();
   });
-  const current=()=>location.pathname.startsWith('/chat')?'chat':['config','about'].includes(location.hash.slice(1))?location.hash.slice(1):'monitor';
+  const current=()=>location.pathname.startsWith('/chat')?'chat':['config','about','logs'].includes(location.hash.slice(1))?location.hash.slice(1):'monitor';
   window.addEventListener('popstate',()=>open(current(),true));
   // Launcher initialization may already have selected config before this
   // deferred script loads. Preserve that selection on an unqualified URL.

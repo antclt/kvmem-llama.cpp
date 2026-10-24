@@ -41,7 +41,7 @@ foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'format
     $files += 'scripts/model_health_ninfer/' + $name
 }
 foreach ($name in 'index.html', 'monitor.css', 'monitor.js', 'i18n.js', 'launcher.css', 'launcher.js',
-                  'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html') {
+                  'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html', 'logs.js', 'logs.css') {
     $files += 'ui/monitor/' + $name
 }
 # Validate all inputs and reserved destinations before adding anything to a worker package.

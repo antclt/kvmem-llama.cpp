@@ -53,6 +53,7 @@ jobs:
       - name: Test local console and monitor packaging
         run: |
           python3 tests/test_local_console.py
+          python3 tests/test_console_logs.py
           python3 tests/test_model_health.py
           python3 tests/test_prepare_backends.py
           python3 tests/test_console_chat.py
@@ -100,6 +101,7 @@ jobs:
       - name: Test local console and monitor packaging
         run: |
           python tests/test_local_console.py
+          python tests/test_console_logs.py
           python tests/test_model_health.py
           python tests/test_prepare_backends.py
           python tests/test_console_chat.py

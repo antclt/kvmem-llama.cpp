@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from console_chat import ChatBridge, MAX_BODY
 from model_health import request_parameters, unchecked
@@ -275,6 +275,10 @@ class Controller:
         self.exit_code = None
         self.draft_path = self.state_dir / 'launch-draft.json'
         self.log_path = self.state_dir / 'service.log'
+        # This describes the file, not the editing draft or the live process.
+        # Keep it after stop so the final output keeps its original identity.
+        self.log_session = secrets.token_hex(12)
+        self.log_metadata = {}
         manifest_path = ROOT / 'console-build.json'
         if manifest_path.is_file():
             manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
@@ -801,6 +805,10 @@ class Controller:
             plan_summary = {'resolved_scoring': result.get('resolved_scoring'), 'worker': result.get('worker')}
             self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
             self.log = self.log_path.open('wb')
+            self.log_session = secrets.token_hex(12)
+            self.log_metadata = {'backend': clean['parameters']['Backend'],
+                                 'model': Path(clean['parameters'].get('Model', '')).name,
+                                 'started_at': int(time.time() * 1000)}
             self.job = WindowsJob()
             try:
                 # The gate waits for argv before creating any descendants. Assigning
@@ -837,6 +845,54 @@ class Controller:
         with self.log_path.open('rb') as stream:
             stream.seek(0, 2); stream.seek(max(0, stream.tell() - 32768))
             return self.redact(stream.read().decode('utf-8', errors='replace'))
+
+    def log_snapshot(self, revision=''):
+        """Bounded read of the common stdout/stderr file; no inference/health calls.
+
+        Return complete terminal lines while the process is writing. In addition
+        to keeping UTF-8 intact this prevents exposing a partially written key
+        before the normal redactor can match it. A stopped process's last line
+        is useful even without a newline. No client-supplied path is accepted.
+        """
+        limit = 256 * 1024
+        with self.lock:
+            code = self.process.poll() if self.process else self.exit_code
+            running = self.process is not None and code is None
+            result = {'protocol': 1, 'session': self.log_session, **self.log_metadata,
+                      'running': running, 'exit_code': code, 'limit_bytes': limit,
+                      'available': False, 'bytes': 0, 'updated_at': None,
+                      'truncated': False, 'pending': False, 'text': ''}
+            try:
+                stream = self.log_path.open('rb')
+            except FileNotFoundError:
+                result['revision'] = self.log_session + ':missing'
+                return result
+            with stream:
+                stat = os.fstat(stream.fileno())
+                size = stat.st_size
+                stamp = f'{self.log_session}:{stat.st_ino}:{size}:{stat.st_mtime_ns}:{running}:{len(self.redactions)}'
+                result.update(available=True, bytes=size, updated_at=stat.st_mtime_ns // 1_000_000,
+                              revision=stamp, truncated=size > limit)
+                # Metadata is returned even when the text revision is unchanged.
+                if running and size:
+                    stream.seek(size - 1)
+                    result['pending'] = stream.read(1) not in (b'\r', b'\n')
+                if revision == stamp:
+                    result['text'] = None
+                    return result
+                start = max(0, size - limit)
+                stream.seek(start)
+                data = stream.read(size - start)
+            if start:
+                # Discard the first partial line (including partial UTF-8/ANSI).
+                boundary = re.search(b'[\r\n]', data)
+                data = data[boundary.end():] if boundary else b''
+            if running and data and data[-1:] not in (b'\r', b'\n'):
+                end = max(data.rfind(b'\n'), data.rfind(b'\r')) + 1
+                data = data[:end]
+                result['pending'] = True
+            result['text'] = self.redact(data.decode('utf-8', errors='replace'))
+            return result
 
     def monitor_authorization(self):
         with self.lock:
@@ -934,6 +990,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, self.control.status())
             elif path == '/api/launcher/log':
                 self.reply(200, {'text': self.control.log_tail()})
+            elif path == '/api/launcher/logs':
+                revision = parse_qs(urlsplit(self.path).query).get('revision', [''])[0]
+                self.reply(200, self.control.log_snapshot(revision))
             elif path in ('/api/monitor/snapshot', '/props', '/slots', '/stats'):
                 state = self.control.status()
                 if not state['url']:
@@ -968,7 +1027,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def asset(self, name):
         allowed = {'index.html', 'monitor.css', 'monitor.js', 'i18n.js', 'launcher.css', 'launcher.js',
-                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html'}
+                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html', 'logs.js', 'logs.css'}
         if name not in allowed:
             self.reply(404, {'error': 'Not found'}); return
         file = ROOT / 'ui/monitor' / name

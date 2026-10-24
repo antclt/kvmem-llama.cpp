@@ -304,8 +304,10 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.unroute('**/api/launcher/inspect-model',lifecycleInspection);
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  await page.locator('[data-template-tab=builtin]').click();
- assert.deepEqual(await page.locator('.s-nav [data-page]').evaluateAll(items=>items.map(el=>el.dataset.page)),['config','chat','monitor','about']);
+ assert.deepEqual(await page.locator('.s-nav [data-page]').evaluateAll(items=>items.map(el=>el.dataset.page)),['config','chat','monitor','logs','about']);
  const beforeDensity={model:await page.locator('[data-param=Model]').inputValue(),context:await page.locator('[data-param=Context]').inputValue()};
+ // Do not compare different asynchronous inspection cards as a density change.
+ await page.waitForFunction(()=>document.querySelector('[data-model-health]')?.dataset.state!=='checking');
  await page.setViewportSize({width:1366,height:768});
  const comfortableHeight=(await page.locator('.l-essential').boundingBox()).height;
  await page.locator('[data-density-select]').selectOption('compact');
@@ -332,6 +334,8 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.setViewportSize({width:1920,height:1080});
  if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'launch-desktop.png'),fullPage:true});}
  await require('./test-launcher-settings.cjs')({browser,base,info});
+ await require('./test-running-config.cjs')({browser,base,info});
+ await require('./test-elastic-experts.cjs')({browser,base,info});
  await require('./test-query-scoring.cjs')({browser,base,info});
  if(process.env.TEST_MODEL&&process.env.TEST_WORKER&&process.env.TEST_GPU){
   const config={schema_version:1,parameters:{Backend:'llamacpp',Model:process.env.TEST_MODEL,Worker:'',Gpu:process.env.TEST_GPU,Context:4096,Budget:2048,Reserve:512,HostMiB:256,Prefill:128,MaxTokens:128,Port:port+1,ListenHost:'127.0.0.1',SinkTokens:512,RecentTokens:64,QueryScorer:'meanq-cosine',ScoreAggregation:'mean',GraphAlpha:.2,Lrfu:false,QueryMaxTokens:128,QueryReplayMaxTokens:512,WorkerArgs:['--n-gpu-layers','99']}};

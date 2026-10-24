@@ -159,6 +159,8 @@ def main():
     if args.lrfu or (args.query_scorer=="meanq-cosine" and not args.no_lrfu):
         worker_args += ["--kvmem-lrfu", "--kvmem-lrfu-lambda", str(args.lrfu_lambda),
                         "--kvmem-lrfu-top-frac", str(args.lrfu_top_frac)]
+    else:
+        worker_args += ["--no-kvmem-lrfu"]
     if args.history_reuse:
         worker_args += ["--kvmem-history-reuse"]
     if args.retained_sessions != 1:

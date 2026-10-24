@@ -8,8 +8,13 @@ Chat tab after starting a model. Switching tabs preserves an active response.
 The chat reads settings from the running service, displays reported values, and
 stores explicit overrides per conversation and model. Thinking, its token budget,
 reasoning effort and history preservation follow each backend's supported controls.
-Unreported defaults are labeled as unreported. Editing launch configuration does
-not change a running service's chat settings.
+Unreported defaults are labeled as unreported. While the service is starting or
+running, launch settings show its `active_config` and are read-only, including
+model/GPU selection, native arguments and template actions. Tabs and help remain
+available. A successful stop or process exit unlocks the last run's parameters
+for editing and restarting; a failed stop keeps them locked. A pending start or
+unconfirmed service state also keeps editing locked. Browser drafts cannot replace
+the running configuration, and API keys are never returned by the status endpoint.
 
 Completed messages show the native average decode rate, output count and stop
 reason. A one-token reply or an absent/nonpositive native rate has no displayed
@@ -28,6 +33,55 @@ All views share the console theme, density and language. The mobile history and
 settings drawers support Escape, keyboard focus containment and focus return.
 Recent-model selectors show filenames with a distinguishing parent suffix when
 necessary; the full path remains in the value and tooltip.
+
+The monitor keeps readings and exceptional states visible. Metric definitions are
+available from the adjacent information buttons in readable popovers; runtime
+settings and cache details expand on demand. Device-assignment warnings remain
+visible when assignments are unknown or no GPU is used.
+
+Context and default output limits share the resource row. Recall policy has a
+dedicated tab for scoring, graph propagation, LRFU and retention budgets; scoring,
+graph propagation and LRFU remain independently selectable. PolyStrata alone has
+an **Elastic experts** tab with off, workspace reuse and VRAM borrowing modes.
+These controls round-trip through the existing native JSON arguments without
+discarding unrelated flags. Switching engines preserves their individual settings.
+The monitor displays configured MTP draft limits and policy, with request-level
+draft counts only when the backend reports them.
+
+## Backend logs
+
+The **Backend logs** tab (`/monitor/#logs`) reads the controller's shared stdout /
+stderr capture for llama.cpp, NInfer and PolyStrata. It supports text search,
+in-place highlighting / plain text, line wrapping, pause, automatic following and export.
+Scrolling up disables following; **Jump to latest** restores it. The view shares
+the monitor language, theme and density. Log contents are always text, never HTML.
+Original prefixes, indentation and blank lines stay in one text stream. Explicit level
+labels, timestamps, module tags and performance metrics receive subtle highlighting;
+no timestamp or severity is invented. ANSI control sequences and carriage-return
+progress are normalized for display.
+
+`GET /api/launcher/logs` returns at most 256 KiB of complete recent output, plus
+process/file identity and a revision. A matching `?revision=` returns `text: null`.
+The page displays at most 2,000 lines; export saves the current cached
+original snapshot (including known-key redactions), not the entire file. It polls
+once per second only while visible and unpaused, with no overlapping requests and
+bounded retry backoff. It does not query the inference worker. A stopped process's
+last unterminated line is retained; a live incomplete line waits for a delimiter.
+Stopping retains the captured output and its backend identity. Starting a new
+worker resets the viewer to the new file, matching the existing file lifecycle.
+After restarting the controller, an old file is labeled as a previous run if its
+engine identity is unavailable.
+
+For an already-running older controller, the view falls back to the existing
+`/api/launcher/log` endpoint and explicitly shows its **32 KiB** limit. This allows
+static UI updates without stopping that controller's owned inference process.
+The modern endpoint is used on the next console restart. A native worker serving
+only the monitor page has no access to the controller's process output; the log
+view explains that the local console is required.
+
+Model-free validation: `python tests/test_console_logs.py`,
+`node ui/test-log-parser.cjs`, and `node ui/test-logs.cjs` (Playwright; accepts
+`PLAYWRIGHT_MODULE`, `PLAYWRIGHT_BROWSERS_PATH`, `CHROMIUM`, `SCREENSHOT_DIR`).
 
 ## Building and packaging
 

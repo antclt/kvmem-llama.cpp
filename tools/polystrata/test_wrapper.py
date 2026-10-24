@@ -51,6 +51,8 @@ class WrapperTest(unittest.TestCase):
                         self.assertEqual(argv[argv.index('--kvmem-query-scorer')+1], scorer)
                         self.assertEqual(float(argv[argv.index('--kvmem-graph-alpha')+1]), float(alpha))
                         self.assertEqual('--kvmem-lrfu' in argv, history == '--lrfu')
+                        self.assertEqual('--no-kvmem-lrfu' in argv, history == '--no-lrfu',
+                                         'Explicit off must override the native cosine default')
                         self.assertEqual(argv[argv.index('--kvmem-query-replay-max-tokens')+1], '256')
             cfg = json.loads(valid.stdout)
             self.assertEqual(cfg["args"][1], str(root/"model with spaces.gguf"))
