@@ -176,7 +176,9 @@ def main():
         "tokenizer": str(args.tokenizer), "model_name": args.model_alias,
         "backend": "cuda", "gpu": indices[0],
         "env": {"CUDA_DEVICE_ORDER": "PCI_BUS_ID", "KVMEM_POLY_STORAGE_METRICS": "1",
-                "KVMEM_POLY_SESSION_METRICS": "1"},
+                "KVMEM_POLY_SESSION_METRICS": "1",
+                "STRATA_FATTN": os.environ.get("STRATA_FATTN", "1"),
+                "STRATA_FDEC": os.environ.get("STRATA_FDEC", "1")},
         "kvmem_monitor_gpu_uuid": gpu_uuids[0],
         "warm_start": False, "kvmem_default_max_tokens": args.max_tokens,
     }
