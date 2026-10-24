@@ -17,6 +17,19 @@ spec.loader.exec_module(console)
 
 
 class ConsoleTests(unittest.TestCase):
+    def test_elastic_experts_native_switch_is_opt_in_and_backend_scoped(self):
+        def validate(args, backend='polystrata'):
+            return console.normalize({'schema_version':1,'parameters':{'Backend':backend,'WorkerArgs':args}},
+                                     ['polystrata','ninfer','llamacpp'])
+        for args in ([], ['--elastic-experts'], ['--threads','8','--elastic-experts'],
+                     ['--elastic-experts','--threads','8']):
+            self.assertEqual(validate(args)['parameters']['WorkerArgs'],args)
+        for args in (['--elastic-experts','--elastic-experts'], ['--elastic-experts','1'],
+                     ['--threads'], ['--threads','--elastic-experts'], ['--unknown']):
+            with self.assertRaises(ValueError): validate(args)
+        for backend in ('ninfer','llamacpp'):
+            with self.assertRaises(ValueError): validate(['--elastic-experts'],backend)
+
     def test_reply_handles_abandoned_browser_during_headers_and_body(self):
         for stage in ('end_headers', 'body'):
             with self.subTest(stage=stage):

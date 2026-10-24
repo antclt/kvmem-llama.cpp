@@ -270,7 +270,7 @@ jobs:
           ccache --zero-stats
           /usr/bin/time -v cmake --build build-polystrata --parallel 8 --target \
             strata-poly poly_kvmem_kernel_test poly_kvmem_mtp_test \
-            poly_kvmem_history_test poly_kvmem_sessions_test \
+            poly_kvmem_history_test poly_kvmem_sessions_test poly_elastic_test \
             2>&1 | tee polystrata-build.log
       - name: Run model-free host policy tests
         # Do not run kernel/MTP tests on a runner without an NVIDIA GPU/model.

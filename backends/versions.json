@@ -111,7 +111,7 @@
     "base_commit": "974552f562aecb3e86cdd2679e76e4515b52b9d2",
     "license_file": "backends/polystrata/LICENSE",
     "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base",
-    "patched_tree": "abd050da76aea2c55c7ad71396186cc2b4db73d6",
+    "patched_tree": "e6dac36d8058d8ac0a05d6f79d26d1a6a1227c00",
     "source_tag": "v0.1.45-poly.2",
     "patches": [
       {
@@ -129,6 +129,15 @@
           "kvmem"
         ],
         "after_tree": "abd050da76aea2c55c7ad71396186cc2b4db73d6"
+      },
+      {
+        "id": "elastic-workspace",
+        "path": "backends/patches/polystrata-elastic-workspace.patch",
+        "sha256": "26715ec3789edd9e39774f32ac82ee4e7b6c4b41539a1776079bf58a8dc73570",
+        "requires": [
+          "attention-feedback-performance"
+        ],
+        "after_tree": "e6dac36d8058d8ac0a05d6f79d26d1a6a1227c00"
       }
     ]
   }
