@@ -69,6 +69,26 @@ Prior integration validation also covered C2/C4/C8, SSD, acceptance faults and C
 vision. Those full matrices were not all rerun for mainline adaptation. No performance
 comparison was run as part of this merge validation.
 
+## Native CI coverage
+
+The `polystrata-cuda-build-linux` job prepares and verifies the pinned patch
+series, then builds `strata-poly` and all four `poly_kvmem_*_test` targets against
+the same checkout's `kvmem/` core. It uses CUDA 13.2 with an explicit Blackwell
+architecture, and the GGML commit pinned by PolyStrata. It does not reuse a
+previously installed worker. Compiler caching speeds up repeated builds; build
+and test diagnostics are saved as a CI artifact.
+
+The hosted runner has no GPU or model. It executes only the history and session
+policy tests; the kernel and MTP targets are compiled and linked, not executed.
+GPU kernel correctness, F16/Q8 MTP boundaries, chunked archive integrity and
+two-session model isolation still require local GPU qualification. A successful
+CI build is not evidence of inference correctness or performance on its own.
+
+Native code, patches, version pins and CUDA recipe changes trigger this job.
+Documentation-only changes may skip it. Its result is included in the existing
+`host-and-server-units-linux` aggregate gate, so a failed or unexpectedly skipped
+PolyStrata build cannot be reported as a successful native check.
+
 ## Known limits
 
 A prior two-stage, 7131-token code-document probe answered both questions correctly
