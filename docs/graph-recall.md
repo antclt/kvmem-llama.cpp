@@ -242,7 +242,7 @@ release, not these variants.
 
 Compared against PR171 (`0512b6d`, its pinned NInfer integration patch), using
 Windows, MSVC 19.44, CUDA 13.2, Release sm120a and RTX 5060 Ti
-(`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`). The 27B GSQ-RCO IQ3 model used
+(device UUID retained in local evidence). The 27B GSQ-RCO IQ3 model used
 NVFP4 KV, context 204800, B=36864, R=16384, chunk 2048, Query limit 512,
 one lane and no speculation. Scorer settings were identical within each pair.
 
