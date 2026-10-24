@@ -22,13 +22,20 @@ class ConsoleTests(unittest.TestCase):
             return console.normalize({'schema_version':1,'parameters':{'Backend':backend,'WorkerArgs':args}},
                                      ['polystrata','ninfer','llamacpp'])
         for args in ([], ['--elastic-experts'], ['--threads','8','--elastic-experts'],
-                     ['--elastic-experts','--threads','8']):
+                     ['--elastic-experts','--threads','8'], ['--elastic-experts-headroom'],
+                     ['--elastic-experts','--elastic-experts-headroom'],
+                     ['--elastic-experts-headroom','--elastic-headroom-mib','512','--elastic-physical-reserve-mib','256']):
             self.assertEqual(validate(args)['parameters']['WorkerArgs'],args)
         for args in (['--elastic-experts','--elastic-experts'], ['--elastic-experts','1'],
+                     ['--elastic-experts-headroom','--elastic-experts-headroom'],
+                     ['--elastic-headroom-mib','1025'], ['--elastic-physical-reserve-mib','255'],
+                     ['--elastic-headroom-mib','-1'], ['--elastic-physical-reserve-mib','4097'],
+                     ['--elastic-headroom-mib','512','--elastic-headroom-mib','256'],
                      ['--threads'], ['--threads','--elastic-experts'], ['--unknown']):
             with self.assertRaises(ValueError): validate(args)
         for backend in ('ninfer','llamacpp'):
             with self.assertRaises(ValueError): validate(['--elastic-experts'],backend)
+            with self.assertRaises(ValueError): validate(['--elastic-headroom-mib','512'],backend)
 
     def test_reply_handles_abandoned_browser_during_headers_and_body(self):
         for stage in ('end_headers', 'body'):

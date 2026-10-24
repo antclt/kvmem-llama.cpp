@@ -47,8 +47,8 @@ BOOLEANS = {'AdaptiveMtp', 'FastPrefill', 'Vision', 'NoLrfu', 'Lrfu', 'PreserveT
 DECIMALS = {'LrfuLambda', 'LrfuTopFraction', 'GraphAlpha'}
 # Deliberately limited native escape hatch. Common options must not be duplicated.
 NATIVE = {'llamacpp': {'--threads', '--threads-batch', '--n-gpu-layers'},
-          'ninfer': {'--threads'}, 'polystrata': {'--threads'}}
-NATIVE_SWITCHES = {'polystrata': {'--elastic-experts'}}
+          'ninfer': {'--threads'}, 'polystrata': {'--threads', '--elastic-headroom-mib', '--elastic-physical-reserve-mib'}}
+NATIVE_SWITCHES = {'polystrata': {'--elastic-experts', '--elastic-experts-headroom'}}
 
 
 def without_secrets(data):
@@ -189,6 +189,10 @@ def normalize(data, backends):
         if (flag not in NATIVE[p['Backend']] or index == len(args)
                 or not re.fullmatch(r'\d{1,6}', args[index])):
             raise ValueError(f'Unsupported or incomplete native option: {flag}')
+        if flag == '--elastic-headroom-mib' and not 0 <= int(args[index]) <= 1024:
+            raise ValueError('Elastic headroom must be 0..1024 MiB')
+        if flag == '--elastic-physical-reserve-mib' and not 256 <= int(args[index]) <= 4096:
+            raise ValueError('Elastic physical reserve must be 256..4096 MiB')
         index += 1
     return {'schema_version': 1, 'parameters': p}
 
