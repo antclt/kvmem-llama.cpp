@@ -345,10 +345,10 @@ index 0000000..8647e7d
 +namespace strata::poly { inline VramBudget windows_vram(int){return {};} }
 +#endif
 diff --git a/tools/poly_elastic_test.cpp b/tools/poly_elastic_test.cpp
-index d1a2128..983729b 100644
+index d1a2128..d8fe450 100644
 --- a/tools/poly_elastic_test.cpp
 +++ b/tools/poly_elastic_test.cpp
-@@ -27,6 +27,42 @@ struct KvmemTestAccess {
+@@ -27,6 +27,62 @@ struct KvmemTestAccess {
      }
  };
  struct ElasticTestAccess {
@@ -380,8 +380,28 @@ index d1a2128..983729b 100644
 +            for(int i=0;i<512;++i)e.elastic_tick();
 +            if(fault==3){e.shrink_cache(256ULL<<20);e.held_is_budget();}
 +            const size_t before=e.arena_.mapped;
++            const auto prior_backoffs=e.elastic_oom_backoffs_;
++            const auto prior_limit=e.elastic_headroom_limit_mib_;
 +            e.elastic_budget_fault_=fault;e.elastic_ticks_=256;e.elastic_tick();
 +            if(fault==4)check(e.arena_.mapped<before,"physical pressure did not reclaim experts");
++            else if(fault==3) {
++                check(e.elastic_oom_backoffs_==prior_backoffs+1,"allocation fault did not record one backoff");
++                check(e.arena_.mapped<before,"allocation failure did not reclaim experts");
++                if(e.elastic_headroom_blocked_)
++                    check(e.vram_free_mib()>=256,"disabled borrowing failed to restore conservative budget");
++                else {
++                    check(e.elastic_headroom_limit_mib_>=0 && e.elastic_headroom_limit_mib_<prior_limit,
++                          "allocation failure did not lower the borrowing ceiling");
++                    const auto learned=e.elastic_headroom_limit_mib_;
++                    e.elastic_budget_fault_=0;
++                    for(int i=0;i<512;++i)e.elastic_tick();
++                    check(e.elastic_oom_backoffs_==prior_backoffs+1 && e.elastic_headroom_limit_mib_==learned,
++                          "injected failed allocation ceiling was retried");
++                    check(e.arena_.mapped<before,"decode regrew the failed allocation extent");
++                }
++                std::cout<<"PASS allocation_fault_backoff blocked="<<e.elastic_headroom_blocked_
++                         <<" learned_mib="<<e.elastic_headroom_limit_mib_<<'\n';
++            }
 +            else check(e.elastic_headroom_blocked_ && e.vram_free_mib()>=256,"fault failed to restore conservative budget");
 +            intact();
 +        }
@@ -391,7 +411,7 @@ index d1a2128..983729b 100644
      static void reclaim_test(Engine& e) {
          std::vector<int32_t> prompt(128,1000);
          for(int i=0;i<36;++i)e.eval(prompt.data(),128,false);
-@@ -53,6 +89,22 @@ struct ElasticTestAccess {
+@@ -53,6 +109,22 @@ struct ElasticTestAccess {
          freeze(e,false);verify(e);
          std::cout<<"PASS first_request_KV_reclaim resident_KV statistics recurrent_state session_restore logits\n";
      }
@@ -414,7 +434,7 @@ index d1a2128..983729b 100644
      static void workspace(Engine& e, bool full) { e.elastic_workspace(full); }
      static void freeze(Engine& e, bool frozen) { e.freeze_experts_ = frozen; }
      static void enabled(Engine& e, bool on) { e.elastic_enabled_ = on; }
-@@ -91,11 +143,18 @@ int main(int argc, char** argv) {
+@@ -91,11 +163,18 @@ int main(int argc, char** argv) {
          o.memory.sink=64;o.memory.recent=64;o.memory.verify=true;
          o.kv_format=KvFmt::kQ8_0;
          o.graphs=!(argc>2 && std::string(argv[2])=="--no-graphs");
