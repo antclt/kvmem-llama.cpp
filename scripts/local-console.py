@@ -48,6 +48,7 @@ DECIMALS = {'LrfuLambda', 'LrfuTopFraction', 'GraphAlpha'}
 # Deliberately limited native escape hatch. Common options must not be duplicated.
 NATIVE = {'llamacpp': {'--threads', '--threads-batch', '--n-gpu-layers'},
           'ninfer': {'--threads'}, 'polystrata': {'--threads'}}
+NATIVE_SWITCHES = {'polystrata': {'--elastic-experts'}}
 
 
 def without_secrets(data):
@@ -175,13 +176,20 @@ def normalize(data, backends):
     args = p.get('WorkerArgs', [])
     if not isinstance(args, list) or len(args) > 20 or any(not isinstance(x, str) for x in args):
         raise ValueError('Native arguments must be an array of strings')
-    if len(args) % 2:
-        raise ValueError('Native arguments must be option/value pairs')
     seen = set()
-    for flag, value in zip(args[::2], args[1::2]):
-        if flag not in NATIVE[p['Backend']] or flag in seen or not re.fullmatch(r'\d{1,6}', value):
+    index = 0
+    while index < len(args):
+        flag = args[index]
+        if flag in seen:
             raise ValueError(f'Unsupported or duplicate native option: {flag}')
         seen.add(flag)
+        index += 1
+        if flag in NATIVE_SWITCHES.get(p['Backend'], set()):
+            continue
+        if (flag not in NATIVE[p['Backend']] or index == len(args)
+                or not re.fullmatch(r'\d{1,6}', args[index])):
+            raise ValueError(f'Unsupported or incomplete native option: {flag}')
+        index += 1
     return {'schema_version': 1, 'parameters': p}
 
 
@@ -915,7 +923,7 @@ class Handler(BaseHTTPRequestHandler):
                                 'backend_root': str(self.control.backend_root), 'gpus': self.server.gpus,
                                 'draft': self.control.draft(), 'status': self.control.status(),
                                 'workers': self.control.worker_defaults(),
-                                'native_options': {k: sorted(v) for k, v in NATIVE.items()}})
+                                'native_options': {k: sorted(v | NATIVE_SWITCHES.get(k, set())) for k, v in NATIVE.items()}})
             elif path == '/api/launcher/model-directories':
                 self.reply(200, self.control.model_directories())
             elif path == '/api/launcher/status':
