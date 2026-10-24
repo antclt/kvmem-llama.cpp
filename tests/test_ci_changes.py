@@ -37,7 +37,10 @@ class DocumentationChangesTest(unittest.TestCase):
         self.assertTrue(changes.requires_ci(paths))
         self.assertFalse(changes.requires_cuda(paths, 'a', 'b'))
         for path in ('src/adapter/llama-memory-kvmem.cpp', 'backends/ninfer', 'CMakeLists.txt',
-                     'scripts/windows/build-backends.ps1', 'backends/patches/ninfer-kvmem.patch'):
+                     'scripts/windows/build-backends.ps1', 'backends/patches/ninfer-kvmem.patch',
+                     'backends/polystrata', 'backends/versions.json',
+                     'backends/patches/polystrata-attention-feedback-performance.patch',
+                     'kvmem/src/host/memory_contract.cpp'):
             with self.subTest(path=path):
                 self.assertTrue(changes.requires_cuda(paths + [path], 'a', 'b'))
 
@@ -45,14 +48,50 @@ class DocumentationChangesTest(unittest.TestCase):
         original = ('name: Test\non: pull_request\njobs:\n  cuda-build-linux:\n'
                     "    needs: changes\n    if: needs.changes.outputs.run_ci == 'true'\n"
                     '    runs-on: ubuntu-latest\n    steps:\n      - run: cmake --build build\n'
+                    '  polystrata-cuda-build-linux:\n'
+                    "    needs: changes\n    if: needs.changes.outputs.run_ci == 'true'\n"
+                    '    runs-on: ubuntu-latest\n    steps:\n      - run: cmake --build build-polystrata\n'
                     '  other:\n    runs-on: ubuntu-latest\n')
+        self.assertIsNotNone(changes.cuda_build_definition(original))
         eligibility = original.replace('outputs.run_ci', 'outputs.run_cuda')
         self.assertEqual(changes.cuda_build_definition(original), changes.cuda_build_definition(eligibility))
         recipe = original.replace('cmake --build build', 'cmake --build another-build')
         self.assertNotEqual(changes.cuda_build_definition(original), changes.cuda_build_definition(recipe))
+        poly_recipe = original.replace('--build build-polystrata', '--build different-polystrata')
+        self.assertNotEqual(changes.cuda_build_definition(original), changes.cuda_build_definition(poly_recipe))
+        removed = original.replace('  polystrata-cuda-build-linux:', '  removed-build:')
+        self.assertIsNone(changes.cuda_build_definition(removed))
         global_env = original.replace('jobs:', 'env:\n  CXXFLAGS: new-flags\njobs:')
         self.assertNotEqual(changes.cuda_build_definition(original), changes.cuda_build_definition(global_env))
         self.assertIsNone(changes.cuda_build_definition('jobs:\n  host-linux:\n'))
+
+    def test_workflow_only_polystrata_recipe_change_runs_cuda(self):
+        # Exercise git comparison too: workflow-only changes must not bypass
+        # the new job just because the llama.cpp recipe is unchanged.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workflow = root / changes.WORKFLOW
+            workflow.parent.mkdir(parents=True)
+            original = (Path(__file__).resolve().parents[1] / changes.WORKFLOW).read_text(encoding='utf-8')
+
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=root, stderr=subprocess.PIPE).decode().strip()
+
+            def commit(text):
+                workflow.write_text(text, encoding='utf-8')
+                git('add', '.')
+                git('-c', 'user.name=CI test', '-c', 'user.email=ci-test@example.invalid',
+                    'commit', '-qm', 'workflow')
+                return git('rev-parse', 'HEAD')
+
+            git('init', '-q')
+            before = commit(original)
+            modified = original.replace('--build build-polystrata', '--build changed-polystrata')
+            self.assertNotEqual(original, modified)
+            after = commit(modified)
+            self.assertTrue(changes.requires_cuda([changes.WORKFLOW], before, after, root))
+            renamed = commit(modified.replace('name: Server and UI compatibility', 'name: Renamed CI'))
+            self.assertTrue(changes.requires_cuda([changes.WORKFLOW], after, renamed, root))
 
     def test_real_git_diff_renames_and_diverged_pull_requests(self):
         with tempfile.TemporaryDirectory() as temp:
