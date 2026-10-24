@@ -90,6 +90,8 @@ if(Setting 'DryRun' $false) {
             throw "[KVMEM_CONFIG] $reason"
         }
         $resolved=$checkedOutput | ConvertFrom-Json
+        $safeEnv.STRATA_FATTN=$resolved.env.STRATA_FATTN
+        $safeEnv.STRATA_FDEC=$resolved.env.STRATA_FDEC
     } finally { $check.Dispose() }
     @{effective_settings=@{model_alias=$resolved.model_name;max_tokens=$resolved.kvmem_default_max_tokens;preserve_thinking=$resolved.preserve_thinking;vram_reserve_mib=$resolved.kvmem_vram_reserve_mib};backend='polystrata';native_argv=@($resolved.exe)+@($resolved.args);argv=@($python)+$arguments;environment=$safeEnv;capabilities=@{architecture='qwen35moe';gpu_count=1;batch_mtp=$false;solo_mtp=($count -gt 0);concurrency=(Setting 'Concurrency' 1);kv_type=$kv;storage_quota='process'}} | ConvertTo-Json -Depth 8
     return

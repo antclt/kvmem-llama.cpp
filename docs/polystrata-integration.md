@@ -17,6 +17,38 @@ The frontend forwards native scoring confirmation records to its supervising con
 This change includes the existing launcher and monitor integration. The later unified
 chat and console shell work is separate.
 
+## Attention acceleration
+
+The Python launcher, also used by the Windows console, enables upstream
+`STRATA_FATTN=1` and `STRATA_FDEC=1` by default. These select flash attention
+for prefill and tensor-core attention for decode when the worker supports them.
+The native worker checks hardware and scratch-space compatibility and retains
+its ordinary attention path when an accelerated kernel cannot run.
+Explicit environment values are preserved; set either variable to `0` before
+starting the console or Python launcher to disable that path for comparison.
+The native startup log confirms whether each accelerated kernel was selected.
+These switches do not change the KV budget, generation reserve, KV type or MTP.
+
+The KVMem attention-feedback path splits sampled QK work by page and shares key
+loads across grouped query heads. It still normalizes over the complete causal
+window and publishes only accepted samples. Its temporary reductions reuse the
+existing attention score workspace, so they do not reserve additional expert VRAM.
+Unsupported shapes or insufficient scratch retain the original capture kernel.
+For Qwen35 GQA8, warps reduce pages independently. Sampled and unsampled decode
+use separate CUDA-graph variants so unsampled steps omit feedback kernels and
+redundant coordinate updates; sampling and accepted-token boundaries are unchanged.
+
+Host transfer buffers now grow on demand. History checkpoints archive dirty KV
+in slices of at most 4096 rows; only a view exchange requires a full-view buffer.
+The restore buffer is allocated only when KV is moved back to the GPU. Bounded Query staging
+is likewise allocated only for a Query that needs capture. This reduces pinned
+RAM pressure without changing the KV budget, history quota, sampling or replay
+policy. The declared Host MiB remains a KV payload quota, not a total RAM limit.
+See the [RTX 5050 performance report](polystrata-performance-20261024.md) for
+paired timings, correctness checks, remaining gaps and runtime provenance.
+The [32K follow-up](polystrata-32k-performance-20261024.md) records the next
+feedback-kernel and graph optimization, all paired reruns and their variability.
+
 ## Validation on 2026-10-23
 
 - Reconstructed the native patch against the pinned base and verified the resulting tree.

@@ -25,11 +25,22 @@ class WrapperTest(unittest.TestCase):
                        "--tokenizer",str(tokenizer),"--gpu","GPU-12345678", "--context","16384","--budget","4096","--reserve","8192"]
             env = dict(os.environ)
             env.pop("STRATA_API_KEY", None)
+            env.pop("STRATA_FATTN", None)
+            env.pop("STRATA_FDEC", None)
             def run(extra):
                 return subprocess.run(command+extra, capture_output=True, text=True, env=env,
                                       creationflags=0x08000000 if os.name == "nt" else 0)
             valid = run(["--", "--stage-mib", "512"])
             self.assertEqual(valid.returncode, 0, valid.stderr)
+            self.assertEqual(json.loads(valid.stdout)['env']['STRATA_FATTN'], '1')
+            self.assertEqual(json.loads(valid.stdout)['env']['STRATA_FDEC'], '1')
+            env.update(STRATA_FATTN='0', STRATA_FDEC='0')
+            disabled = run([])
+            self.assertEqual(disabled.returncode, 0, disabled.stderr)
+            self.assertEqual(json.loads(disabled.stdout)['env']['STRATA_FATTN'], '0')
+            self.assertEqual(json.loads(disabled.stdout)['env']['STRATA_FDEC'], '0')
+            env.pop('STRATA_FATTN')
+            env.pop('STRATA_FDEC')
             for scorer in ('page-softmax', 'meanq-cosine'):
                 for alpha in ('0', '0.2'):
                     for history in ('--lrfu', '--no-lrfu'):
