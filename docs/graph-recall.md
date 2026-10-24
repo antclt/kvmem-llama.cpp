@@ -135,6 +135,22 @@ retains its explicit exemption from that full-history reset.
   scratch in its startup memory plan. The Query scorer borrows that workspace;
   it does not allocate device buffers during a request. llama.cpp reuses a
   device-owned sampler/scorer workspace, with a generic GGML fallback.
+- NInfer page-softmax captures the original normalized BF16 Q rows, packed from
+  the intersection of the current chunk and the admitted Query span. Per-layer
+  capture capacity is `min(prefill_chunk, max_context, query_max_tokens)`;
+  the pinned host mirror uses the same BF16 layout. Expansion to FP32 on the
+  host preserves represented values before the existing FP16 scoring boundary.
+  This changes storage, not the configured Query range or per-token scoring.
+  Mean-Q cosine instead retains one FP32 sum per layer/head/channel, with
+  chronological additions across chunks and accepted-state reseeding before
+  execution; it allocates neither token rows nor page-softmax scratch.
+  Native post-RoPE attention-feedback capture remains separate.
+- For 16 full-attention layers, 24 Q heads and head dimension 256, the default
+  512-token Query limit requires 48 MiB of device Q capture at chunk 256 and
+  96 MiB at chunks 512 or larger. The previous FP32 chunk-sized capture used
+  96, 192 and 768 MiB at chunks 256, 512 and 2048 respectively. Mean-Q uses
+  0.375 MiB for its device sum. These are Q-buffer sizes, not total process
+  VRAM; native attention, KV, graph and execution workspaces have separate costs.
 - Query logits are tiled over at most 64 rows and at most 64 MiB of scratch.
   The llama attention sampler bounds its tile estimate at 32 MiB. Sampling
   reads native K, so its cost still grows with visible tokens and sample count.
@@ -221,6 +237,140 @@ the editable draft. Published performance tables describe their original
 release, not these variants.
 
 ## Focused qualification
+
+### NInfer Query storage, 2026-10-24
+
+Compared against PR171 (`0512b6d`, its pinned NInfer integration patch), using
+Windows, MSVC 19.44, CUDA 13.2, Release sm120a and RTX 5060 Ti
+(`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`). The 27B GSQ-RCO IQ3 model used
+NVFP4 KV, context 204800, B=36864, R=16384, chunk 2048, Query limit 512,
+one lane and no speculation. Scorer settings were identical within each pair.
+
+| Scorer | Native runtime reservation, before / after | Saving | Driver startup VRAM, before / after |
+| --- | --- | --- | --- |
+| page-softmax | 2430.61 / 1758.61 MiB | 672 MiB | 13756 / 13084 MiB |
+| Mean-Q cosine | 2430.61 / 1637.21 MiB | 793.40 MiB | 13756 / 12964 MiB |
+
+After an eight-token-limit request, driver usage was 2 MiB higher in all four
+runs, retaining the same before/after deltas. These are same-configuration
+startup/short-request resource measurements, not long-request peak memory,
+throughput or answer-quality benchmarks. The default scorer remains page-softmax.
+
+The production `ninfer_token_sums` test passed 636 cases, including exact BF16
+copy, FP64 sum references, chronological FP32 additions, subnormal values,
+compact/partial/empty ranges, output guards, Graph replay, interleaved seeds and
+discarded accumulation. The four-layer MTP fixture passed 270 HTTP assertions
+per version across both scorers at chunk/Query-limit pairs 128/512 and 2048/64.
+All 20 compared native Query page selections and the saved responses matched.
+The HTTP cases cover document-first requests, fresh Query rows, native prefix
+reuse, tools, session changes, edits, cancellation and resident-only Pressure.
+
+The first large-reserve test did not trigger Pressure: its original tool text
+fit inside R=2048. Both versions were rerun with `--tool-repeats 320` (the normal
+R=1024 workload keeps 160); the original failure remains in the local evidence.
+Windows checkout CRLF normalization, a standalone-test architecture definition
+and preserved copy timestamps were corrected before final qualification. The
+baseline tree and final versioned patch both passed `prepare-backends.py --check`.
+
+### Native Query lifecycle regression
+
+`tests/ninfer-query-lifecycle-regression.py` exercises the real HTTP service with
+chunk 2048, Query limit 512, two lanes and MTP. Build the test service with
+`-DBUILD_TESTING=ON -DNINFER_KVMEM_QUERY_TEST_HOOKS=ON`, then run:
+
+```text
+python tests/ninfer-query-lifecycle-regression.py --argv-json <server-command.json> --output <new-evidence-directory> --gpu <GPU-UUID>
+```
+
+Run once for each scorer. The argv JSON supplies the executable and existing
+four-layer model fixture; the script records all effective options, requests,
+responses, native traces, comparisons and failures. Each reference document is
+sent in an ordinary first request, followed by a separate question. The test
+aligns the question using the native tokenizer so its 512-row Query crosses a
+2048-token execution boundary.
+
+KVMem currently rejects `--concurrent-prefill`. Two simultaneous Query captures
+are therefore outside the supported service contract; the test verifies that
+rejection instead of bypassing it. The supported concurrency case proves
+`A partial Query -> B accepted decode -> A complete Query` from native lane
+events, and compares Query row counts, accepted-feature fingerprints, both
+pre-replay and post-replay score fingerprints, and selected pages against
+independent serial requests. These are lifecycle checks, not a replacement for
+the Op's independent FP64/exact-copy numerical references.
+
+The test-only rendezvous pauses after a normal prefill step has accepted a
+strict Query prefix. The client disconnects there, before any Query score or
+generated response, then releases the worker to its ordinary cancellation
+boundary. Native prefill-cancellation metrics and traces must confirm that the
+remaining Query rows were never committed/scored. Both retrying the original
+request and editing its question must restore a native prefix and match their
+independent controls. A peer request must remain correct through cancellation.
+
+Each scenario starts a fresh service: a previously completed identical question
+can legitimately skip Query capture. The peer uses a different document so it
+cannot lease the control's same cached endpoint and force an incomparable cold
+recomputation. No timing-based assumption is accepted as proof of interleaving;
+the native event order must demonstrate it.
+
+The build option is OFF by default and changes only three translation units.
+It adds fingerprints and the bounded filesystem rendezvous selected by
+`NINFER_QUERY_TEST_GATE`, with no request protocol fields. Production builds
+contain neither that rendezvous nor its per-step test traces. Test-gated runs
+do not establish latency or throughput.
+
+On 2026-10-24, the four-layer MTP2 fixture on the RTX 5060 Ti passed all 69
+lifecycle assertions for each scorer. Both cancellation cases stopped at
+265/512 accepted Query rows, emitted no completed Query score or response, and
+recovered to the control's 512-row features and selected pages. All six
+feature/score/page comparisons per scorer matched. The uninstrumented service
+also passed 68 ordinary Query/Pressure assertions per scorer at 2048/512.
+Test hooks were disabled again for the default executable after qualification;
+the instrumented executable was retained separately.
+
+Fixture development exposed two incomparable setups: completed identical
+questions can skip capture, and concurrent use of the same cached document can
+force cold recomputation in one lane. Fresh processes and distinct peer
+documents resolved those setups; the earlier failures are retained locally.
+The HTTP readiness wait and Windows reader-close ordering were also corrected
+before final qualification. These tests also exposed an inherited request-summary
+bug: `computed_prefill_tokens` was derived from the entire prompt minus reported
+reuse, while cancellation lost the admitted reuse summary and partial prefill
+duration. The initial lifecycle conclusions used native accepted rows and absence
+of scoring, independently of that incorrect summary.
+
+The user authorized correcting cancellation accounting in the same round. Engine
+results now carry accepted logical prefill progress and the admitted reuse choice;
+request logs, console totals and terminal timing rates consume that count. Partial
+prefill stage time is snapshotted before cancellation retires the request. Logical
+input usage still reports the full prompt; computed work excludes internal replay.
+The lifecycle test cross-checks the request count against the native restored and
+accepted frontiers and the Engine cancellation counter. It also cancels a third
+HTTP request while both lanes are occupied and requires zero computed/reused
+tokens for that queued request. Host tests cover the corresponding JSON, console
+and protocol timing renderers, including normal completed requests.
+
+The accounting follow-up passed 99 native lifecycle assertions and all six
+feature/score/page comparisons per scorer, plus 68 ordinary Query/Pressure checks
+per scorer with test hooks disabled (334 native assertions total). The same
+four-layer MTP2 fixture and RTX 5060 Ti were used. All four partial cancellations
+reported 4,224 reused and 1,920 computed tokens at accepted frontier 6,144 of
+6,400, retaining nonzero partial prefill duration. Both queued cancellations
+reported zero computed/reused tokens. Four host test groups for request logs,
+console totals, Chat timings and text completion passed.
+
+Two fixture issues were corrected before the final runs: the deferred gauge is
+not refreshed while the worker is paused, so queue synchronization uses the
+post-submit request-start event; and ordinary Pressure checks use the prior
+320-repeat tool workload to exceed the 2,048-token reserve. The initial failed
+runs remain in local evidence. All 205 affected C++ module/test units were
+rebuilt and linked using CMake-generated commands, reusing the unchanged,
+previously qualified CUDA archives after a costly Ninja cache rebuild was
+stopped. Qwen4Exp and Gemma4 result producers were compiled for the new count;
+real-model execution in this round covers the Qwen3.5 fixture only. These runs
+make no performance or long-context quality claim.
+
+### Earlier graph and policy qualification
+
 
 Baseline: KVMem master `61569ff4bddcad60e8fad838e02f77a6190126d1` with its
 pinned backend patches. Candidate and baseline use the same device/settings.
