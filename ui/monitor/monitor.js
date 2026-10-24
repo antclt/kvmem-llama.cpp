@@ -39,6 +39,18 @@
     disconnected: "已断开",
     error: "失败",
   }, { get: (map, name) => t(map[name] || "处理中") });
+  function requestStatus(row) {
+    if (row.finish_reason === "length") return t(row.finish_phase === "thinking" ? "思考阶段达到输出上限" : "达到输出上限");
+    if (["cancel", "cancelled"].includes(row.finish_reason)) return t("已停止");
+    if (row.finish_reason === "disconnect") return t("连接中断");
+    if (row.finish_reason === "error" || row.status === "error") return t("生成失败");
+    if (row.finish_reason === "stop") return t("正常结束");
+    if (row.finish_reason === "tool_calls") return t("工具调用");
+    if (row.phase === "thinking") return t("思考中");
+    if (row.phase === "answering") return t("输出正文");
+    return statuses[row.status];
+  }
+  function meanSpeed(row) { return row?.decode_tps_mean ?? row?.decode_tps; }
   let theme = storage(localStorage, "kvmem-monitor-theme") || "dark";
   let key = storage(sessionStorage, "kvmem-monitor-key") || "";
   let selected = "",
@@ -103,6 +115,7 @@
     window.dispatchEvent(new CustomEvent("kvmem-page-change", {detail: name}));
   }
   $$("[data-page]").forEach((el) => (el.onclick = () => page(el.dataset.page)));
+  window.addEventListener("kvmem-navigate", event => page(event.detail));
   function bar(name, value) {
     $(`[data-bar="${name}"]`).style.width =
       `${number(value) ? Math.max(0, Math.min(100, value)) : 0}%`;
@@ -192,13 +205,13 @@
       const badge = document.createElement("span");
       badge.className = "s-badge";
       badge.dataset.kind = row.status;
-      badge.textContent = statuses[row.status] || t("处理中");
+      badge.textContent = requestStatus(row);
       td.append(badge);
       tr.append(td);
       const values = [
         fmt(row.prompt_tokens),
         fmt(row.generated_tokens),
-        fmt(row.decode_tps, 1),
+        fmt(meanSpeed(row), 1),
         `${fmt(row.elapsed_ms / 1000, 1)}s`,
       ];
       for (const value of values) {
@@ -225,9 +238,10 @@
     $("[data-detail]").hidden = !row;
     if (!row) return;
     $("[data-detail-title]").textContent =
-      t("请求 #{0} · {1}", row.id, statuses[row.status] || t("处理中"));
+      t("请求 #{0} · {1}", row.id, requestStatus(row));
     $("[data-detail-body]").textContent =
-      t("入口：{0}\n输入 {1} tokens · 复用 {2} · 输出 {3}\n预填充 {4} tok/s · 输入复用率 {5}%\n输出上限 {6} · 耗时 {7} 秒", row.endpoint, fmt(row.prompt_tokens), fmt(row.cached_tokens), fmt(row.generated_tokens), fmt(row.prefill_tps, 1), fmt(ratio(row.cached_tokens, row.prompt_tokens), 1), fmt(row.limit), fmt(row.elapsed_ms / 1000, 2));
+      t("入口：{0}\n输入 {1} tokens · 复用 {2} · 输出 {3}\n预填充 {4} tok/s · 输入复用率 {5}%\n输出上限 {6} · 耗时 {7} 秒", row.endpoint, fmt(row.prompt_tokens), fmt(row.cached_tokens), fmt(row.generated_tokens), fmt(row.prefill_tps, 1), fmt(ratio(row.cached_tokens, row.prompt_tokens), 1), fmt(row.limit), fmt(row.elapsed_ms / 1000, 2)) + "\n" +
+      t("预填充 {0}s · 首 token {1}s",fmt(number(row.prefill_ms)?row.prefill_ms/1000:null,2),fmt(number(row.ttft_ms)?row.ttft_ms/1000:null,2));
   }
   function gauge(element, percent, label) {
     let arc = element.querySelector("[data-dial-arc]");
@@ -353,6 +367,7 @@
       ? list.reduce((n, x) => n + x[field], 0)
       : null;
   function cacheData() {
+    if (state.backend === "polystrata") return state.kvmem || {};
     if (state.backend === "ninfer")
       return stats?.kvmem || props.kvmem?.usage || {};
     const storage = slots.map((s) => s.kvmem?.storage).filter(Boolean),
@@ -402,7 +417,7 @@
     const model = props.model_name || props.model_alias || t("本地模型");
     text(
       "model",
-      `${model} · ${state.backend === "ninfer" ? "NInfer" : "llama.cpp"}`,
+      `${model} · ${{ninfer: "NInfer", polystrata: "PolyStrata", llamacpp: "llama.cpp"}[state.backend] || state.backend}`,
     );
     const activeStates = new Set(state.active.map((r) => r.status));
     const serviceStatus = !state.active.length ? "idle" :
@@ -412,7 +427,7 @@
     serviceBadge.textContent = statuses[serviceStatus] + (state.active.length > 1 ? t(" · {0} 个请求", state.active.length) : "");
     const liveRequest = state.active.some((x) => x.id === r?.id);
     const requestScope = !r ? t("暂无请求") : liveRequest ? t("当前请求") : followLatest ? t("上次请求") : t("历史请求");
-    text("request-scope", r ? `${requestScope} #${r.id} · ${statuses[r.status] || t("处理中")}` : requestScope);
+    text("request-scope", r ? `${requestScope} #${r.id} · ${requestStatus(r)}` : requestScope);
     $$("[data-request-scope]").forEach((e) => e.textContent = requestScope);
     text(
       "output",
@@ -428,8 +443,20 @@
         String(Math.min(100, ratio(r.generated_tokens, r.limit))),
       );
     else meter.removeAttribute("aria-valuenow");
-    text("decode", fmt(r?.decode_tps, 1));
+    text("decode", state.backend === "polystrata" ? fmt(r?.decode_tps, 1) : t("未提供"));
+    text("decode-label", t("实时速度"));
+    $("[data-live-speed]").hidden = !liveRequest;
+    text("decode-mean", fmt(meanSpeed(r), 1));
     text("prefill", fmt(r?.prefill_tps, 0));
+    const fresh = r?.prompt_new_tokens ?? (number(r?.prompt_tokens)&&number(r?.cached_tokens)?Math.max(0,r.prompt_tokens-r.cached_tokens):null);
+    text("prefill-tokens", t("新算 {0} · 复用 {1} tokens", fmt(fresh), fmt(r?.cached_tokens)));
+    text("prefill-times", t("预填充 {0}s · 首 token {1}s", fmt(number(r?.prefill_ms)?r.prefill_ms/1000:null,2), fmt(number(r?.ttft_ms)?r.ttft_ms/1000:null,2)));
+    const pending=number(state.queued_count)?fmt(state.queued_count):"—";
+    text("queue", t("活动 {0} · 排队 {1}",fmt(state.active.length),pending));
+    const mtp = props.kvmem?.mtp;
+    text("mtp", mtp===undefined?t("MTP 状态未提供"):!mtp?t("MTP 未配置"):number(r?.drafts_offered)?t("MTP 已配置 · 本轮提议 {0} / 接受 {1}",fmt(r.drafts_offered),fmt(r.drafts_accepted)):t("MTP 已配置 · 本轮使用待确认"));
+    text("vram-reserve", t("显存预留 {0} MiB",fmt(props.kvmem?.vram_reserve_mib)));
+    text("effective-config", props.effective_settings ? t("服务默认：输出 {0} · 思考 {1} · 思考预算 {2}",fmt(props.effective_settings.effective.max_tokens),props.effective_settings.effective.reasoning_effort,fmt(props.effective_settings.effective.reasoning_budget_tokens)) : "");
     const hardware = state.hardware || {},
       gpus = hardware.gpus || [];
     const hardwareFresh =
@@ -437,6 +464,9 @@
       state.sampled_at_ms - hardware.sampled_at_ms < 5000;
     renderGpus(gpus, hardwareFresh, append);
     text("cpu", fmt(hardwareFresh ? hardware.cpu_percent : null));
+    const available=hardware.ram_available_bytes ?? (number(hardware.ram_total_bytes)&&number(hardware.ram_used_bytes)?hardware.ram_total_bytes-hardware.ram_used_bytes:null);
+    text("ram-available",fmt(hardwareFresh&&number(available)?available/GiB:null,2));
+    text("system-disk",fmt(hardwareFresh&&number(hardware.system_disk_read_bytes_per_second)?hardware.system_disk_read_bytes_per_second/MiB:null,1));
     const context = props.default_generation_settings?.n_ctx;
     const used =
       number(r?.prompt_tokens) && number(r?.generated_tokens)
@@ -456,6 +486,8 @@
       hardware.ram_total_bytes,
     );
     const cache = cacheData();
+    text("history-label", t(state.backend === "polystrata" ? "停放会话恢复 / 淘汰" : "历史命中 / 淘汰"));
+    text("cache-age", state.backend === "polystrata" ? number(cache.sampled_at_ms)?t("请求结束时更新 · 读取于 {0}",new Date(cache.sampled_at_ms).toLocaleTimeString(i18n.language)):t("等待首个请求完成后的缓存统计") : "");
     capacity("host", cache.host_payload_bytes, cache.host_payload_budget_bytes);
     capacity("ssd", cache.disk_payload_bytes, cache.disk_payload_budget_bytes);
     text(
@@ -482,9 +514,10 @@
       previousDisk = number(cache.disk_read_bytes)
         ? { time: state.sampled_at_ms, bytes: cache.disk_read_bytes }
         : null;
-    if (append) text("disk", fmt(disk, 1));
+    text("cache-disk-label", t(state.backend === "polystrata" ? "缓存累计读取 · MiB" : "缓存读取 · MiB/s"));
+    if (append) text("disk", fmt(state.backend === "polystrata" ? number(cache.disk_read_bytes)?cache.disk_read_bytes/MiB:null : disk, 1));
     const values = {
-      speed: liveRequest ? r?.decode_tps : null,
+      speed: liveRequest && state.backend === "polystrata" ? r?.decode_tps : null,
     };
     for (const [name, value] of Object.entries(values))
       chart(name, value, append);

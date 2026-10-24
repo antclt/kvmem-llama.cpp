@@ -2,11 +2,15 @@
 "use strict";
 (() => {
   const en = {
+    "外观设置": "Appearance", "配置": "Config",
+    "聊天":"Chat",
+"未提供":"Unavailable","正常结束":"Finished normally","达到输出上限":"Output limit reached","思考阶段达到输出上限":"Output limit reached during reasoning","已停止":"Stopped","连接中断":"Connection interrupted","生成失败":"Generation failed","工具调用":"Tool call","思考中":"Thinking","输出正文":"Writing answer","新算 {0} · 复用 {1} tokens":"New {0} \u00b7 Reused {1} tokens","预填充 {0}s · 首 token {1}s":"Prefill {0}s \u00b7 First token {1}s","首 token 从进入执行开始计时，不含排队":"First token time excludes queueing","活动 {0} · 排队 {1}":"Active {0} \u00b7 Queued {1}","MTP 状态未提供":"MTP state unavailable","MTP 未配置":"MTP not configured","MTP 已配置 · 本轮提议 {0} / 接受 {1}":"MTP configured \u00b7 Proposed {0} / accepted {1}","MTP 已配置 · 本轮使用待确认":"MTP configured \u00b7 Usage pending","显存预留 {0} MiB":"VRAM reserve {0} MiB","服务默认：输出 {0} · 思考 {1} · 思考预算 {2}":"Service defaults: output {0} \u00b7 reasoning {1} \u00b7 reasoning budget {2}","可用 RAM":"Available RAM","系统磁盘读取":"System disk reads","系统磁盘包含模型读取、换页和其他进程。":"System disk includes model reads, paging and other processes.","空闲保留会话":"Idle retained sessions","停放会话恢复 / 淘汰":"Parked restores / evictions","请求结束时更新 · 读取于 {0}":"Updated at request completion \u00b7 Read at {0}","等待首个请求完成后的缓存统计":"Waiting for completed-request cache counters","缓存累计读取 · MiB":"Total cache reads \u00b7 MiB","缓存读取 · MiB/s":"Cache reads \u00b7 MiB/s",
+
     "KVMem · 运行监控": "KVMem · Runtime Monitor",
     "主导航": "Main navigation", "聊天 ↗": "Chat ↗", "监控": "Monitor", "关于": "About",
     "语言": "Language", "正在连接": "Connecting", "颜色主题": "Theme",
     "布局密度": "Layout density", "布局：舒适": "Layout: Comfortable", "布局：紧凑": "Layout: Compact",
-    "极客黑": "Geek Dark", "架构蓝": "Blueprint", "跟随系统": "System",
+    "极夜": "Geek Dark", "蓝图": "Blueprint", "跟随系统": "System",
     "重新连接": "Reconnect", "连接": "Connect", "输入 API Key": "Enter API key",
     "此服务需要 API Key。密钥只保存在当前标签页，不会写入 URL。": "This service requires an API key. It stays in this tab and is never added to the URL.",
     "模型状态": "Model status", "等待服务数据": "Waiting for service data",
@@ -14,6 +18,9 @@
     "查看请求": "Request", "暂无请求": "No requests", "等待请求": "Waiting for a request",
     "输出 token 预算使用，非完成百分比": "Output token budget used, not completion progress",
     "所选请求统计": "Selected request metrics", "生成速度": "Decode speed",
+    "实时速度": "Live speed", "本轮平均": "Request mean",
+    "平均生成 tok/s": "Mean decode tok/s",
+    "平均速度不含预填充，包含思考 token": "Mean excludes prefill and includes reasoning tokens",
     "生成速度，尚无采样": "Decode speed, no samples yet", "预填充速度": "Prefill speed",
     "处理新输入的速度": "New input processing rate", "逻辑上下文": "Logical context",
     "未采集": "Unavailable", "所选请求 · 非 GPU 驻留 KV": "Selected request · not GPU-resident KV",

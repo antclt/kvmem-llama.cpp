@@ -25,6 +25,9 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from console_chat import ChatBridge, MAX_BODY
+from model_health import request_parameters, unchecked
 
 ROOT = Path(__file__).resolve().parents[1]
 SPECULATIVE_PROFILES = json.loads((ROOT / 'scripts/speculative-capabilities.json').read_text(encoding='utf-8-sig'))
@@ -32,19 +35,19 @@ DEFAULTS = dict(Backend='ninfer', Model='', Worker='', Gpu='', Context=262144,
                 Budget=32768, Reserve=1024, HostMiB=16384, Prefill=128,
                 MaxTokens=1024, Port=18200, ListenHost='127.0.0.1',
                 SinkTokens=12288, RecentTokens=1024)
-STRINGS = {'Backend', 'Model', 'Worker', 'Gpu', 'ListenHost', 'KvType', 'KvTypeK', 'KvTypeV', 'DiskPath',
+STRINGS = {'Tokenizer','PolystrataSource','Python','VisionWorker','Mmproj','QueryScorer','Backend', 'Model', 'Worker', 'Gpu', 'ListenHost', 'KvType', 'KvTypeK', 'KvTypeV', 'DiskPath',
            'VisionResidency',
            'DeviceProfile', 'ScoreAggregation', 'QueryScorer', 'ApiKey', 'ModelAlias', 'LogLevel',
            'ChatTemplateFile', 'ThinkingMode', 'ReasoningEffort', 'SpeculativeMode', 'DraftPolicy', 'DraftModel'}
-INTEGERS = {'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
+INTEGERS = {'VramReserveMiB', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
             'MtpDrafts', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions',
             'VisionTokens', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'DiskMiB', 'DraftTokens',
-            'QueryMaxTokens', 'QueryReplayMaxTokens'}
+            'QueryMaxTokens', 'QueryReplayMaxTokens', 'ReplayMaxTokens'}
 BOOLEANS = {'AdaptiveMtp', 'FastPrefill', 'Vision', 'NoLrfu', 'Lrfu', 'PreserveThinking'}
 DECIMALS = {'LrfuLambda', 'LrfuTopFraction', 'GraphAlpha'}
 # Deliberately limited native escape hatch. Common options must not be duplicated.
 NATIVE = {'llamacpp': {'--threads', '--threads-batch', '--n-gpu-layers'},
-          'ninfer': {'--threads'}}
+          'ninfer': {'--threads'}, 'polystrata': {'--threads'}}
 
 
 def without_secrets(data):
@@ -114,8 +117,8 @@ def normalize(data, backends):
         raise ValueError('NInfer supports default/off at startup; thinking-on is selected by requests')
     if p.get('ReasoningEffort') not in (None, 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'):
         raise ValueError('Unsupported ReasoningEffort')
-    if p['Backend'] != 'ninfer' and {'ReasoningEffort', 'PreserveThinking'} & p.keys():
-        raise ValueError('ReasoningEffort and PreserveThinking configure NInfer only')
+    if p['Backend'] not in {'ninfer','polystrata'} and {'ReasoningEffort', 'PreserveThinking'} & p.keys():
+        raise ValueError('ReasoningEffort and PreserveThinking configure NInfer or PolyStrata only')
     if p.get('ThinkingMode') == 'off' and p.get('ReasoningEffort'):
         raise ValueError('ReasoningEffort conflicts with ThinkingMode off')
     if p['Backend'] != 'llamacpp' and {'KvTypeK', 'KvTypeV'} & p.keys():
@@ -158,6 +161,11 @@ def normalize(data, backends):
                 raise ValueError('DFlash2 requires DraftModel with a compatible GGUF')
             if draft and (Path(draft).suffix.lower() != '.gguf' or not Path(draft).is_file()):
                 raise ValueError('DraftModel must be an existing GGUF file')
+    if p['Backend']=='polystrata':
+        if p.get('KvType','f16') not in {'f16','q8_0'}: raise ValueError('PolyStrata KV format must be f16 or q8_0')
+        if ',' in p.get('Gpu',''): raise ValueError('PolyStrata currently supports one GPU')
+        if p.get('ReasoningEffort') not in (None,'none','low','medium','high'): raise ValueError('PolyStrata reasoning effort must be none, low, medium or high')
+        if p.get('ThinkingMode')=='on' and p.get('ReasoningEffort')=='none': raise ValueError('ThinkingMode conflicts with ReasoningEffort none')
     gpu = p.get('Gpu', '')
     if gpu and not all(re.fullmatch(r'GPU-[0-9a-fA-F-]{8,64}', x) for x in gpu.split(',')):
         raise ValueError('Select GPUs by UUID, separated by commas')
@@ -229,6 +237,10 @@ class Controller:
         if not match:
             raise ValueError('Cannot detect supported backends from start-backend.ps1')
         self.backends = [name for name in re.findall(r"'([^']+)'", match[1]) if name in NATIVE]
+        build_info=self.backend_root/'BUILD-INFO.json'
+        if build_info.is_file():
+            package=json.loads(build_info.read_text(encoding='utf-8-sig'))
+            if package.get('backend')=='polystrata': self.backends=[name for name in self.backends if name=='polystrata']
         self.launcher_query_contract = all(name in source for name in ('QueryScorer', 'GraphAlpha', 'QueryMaxTokens', 'QueryReplayMaxTokens'))
         profile_file = self.backend_root / 'scripts/speculative-capabilities.json'
         self.speculative_profiles = json.loads(profile_file.read_text(encoding='utf-8-sig')) if profile_file.is_file() else {}
@@ -236,6 +248,7 @@ class Controller:
             raise ValueError('This console requires a NInfer or llama.cpp launcher')
         self.port, self.token = port, secrets.token_urlsafe(32)
         self.lock = threading.RLock()
+        self.inspection_slots = threading.BoundedSemaphore(2)
         self.picker_lock = threading.Lock()
         self.process = self.job = self.log = None
         self.active = None
@@ -244,6 +257,8 @@ class Controller:
         self.observed_scoring = {}
         self.observed_offset = 0
         self.observed_pending = ''
+        self.instance = secrets.token_hex(12)
+        self.chat = ChatBridge(self)
         self.redactions = set()
         self.exit_code = None
         self.draft_path = self.state_dir / 'launch-draft.json'
@@ -331,7 +346,7 @@ class Controller:
                        for p in paths.values())):
             raise ValueError('Invalid worker-paths.json: map backend names to absolute executable paths')
         names = {'ninfer': ('ninfer-kvmem-server.exe', 'ninfer-serve.exe'),
-                 'llamacpp': ('llama-kvmem-server.exe',)}
+                 'llamacpp': ('llama-kvmem-server.exe',), 'polystrata':('strata-poly.exe',)}
         result = {}
         for backend in self.backends:
             if backend in paths:
@@ -352,7 +367,9 @@ class Controller:
     def draft(self):
         if self.draft_path.exists():
             return without_secrets(json.loads(self.draft_path.read_text(encoding='utf-8')))
-        return {'schema_version': 1, 'parameters': dict(DEFAULTS)}
+        backend = DEFAULTS['Backend'] if DEFAULTS['Backend'] in self.backends else self.backends[0]
+        return {'schema_version': 1, 'parameters': {**DEFAULTS, 'Backend': backend,
+                'Prefill': 512 if backend == 'polystrata' else DEFAULTS['Prefill']}}
 
     def save(self, data):
         clean = without_secrets(normalize(data, self.backends))
@@ -400,7 +417,9 @@ class Controller:
                                  cwd=self.backend_root,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
             if run.returncode:
-                raise ValueError(self.redact(run.stderr.strip()[-6000:] or run.stdout.strip()[-6000:]))
+                message = run.stderr.strip()[-6000:] or run.stdout.strip()[-6000:]
+                concise = re.search(r'\[KVMEM_CONFIG\]\s*([^\r\n]+)', message)
+                raise ValueError(self.redact(concise.group(1).strip() if concise else message))
             # PowerShell warnings may precede the JSON result.
             start = run.stdout.find('{')
             result = json.loads(run.stdout[start:])
@@ -408,10 +427,14 @@ class Controller:
             if not isinstance(argv, list) or not argv or any(not isinstance(x, str) or '\x00' in x for x in argv):
                 raise ValueError('Launcher returned invalid argv')
             if api_key:
-                argv.extend(['--api-key', api_key if reveal_secrets else '<redacted>'])
+                if params['Backend']=='polystrata':
+                    result.setdefault('environment',{})['STRATA_API_KEY']=api_key if reveal_secrets else '<redacted>'
+                else:
+                    argv.extend(['--api-key', api_key if reveal_secrets else '<redacted>'])
             result['warnings'] = self.redact(run.stdout[:start].strip())
-            result['worker'] = self.worker_capabilities(argv[0], params['Backend'])
-            result['resolved_scoring'] = self.scoring_from_argv(argv)
+            native_argv = result.get('native_argv', argv)
+            result['worker'] = self.worker_capabilities(native_argv[0], params['Backend'])
+            result['resolved_scoring'] = self.scoring_from_argv(native_argv)
             return result
         finally:
             Path(name).unlink(missing_ok=True)
@@ -677,7 +700,7 @@ class Controller:
                 self.exit_code = self.process.returncode
                 self._release()
             result = {'state': 'starting' if running else ('exited' if self.exit_code is not None else 'stopped'),
-                      'pid': self.process.pid if running else None, 'exit_code': self.exit_code,
+                      'pid': self.process.pid if running else None, 'exit_code': self.exit_code, 'instance':self.instance,
                       'active_config': without_secrets(self.active) if self.active else None,
                       'api_key_configured': bool(self.active and self.active['parameters'].get('ApiKey')), 'url': None}
             result['planned_scoring'] = copy.deepcopy(self.active_plan.get('resolved_scoring')) if self.active_plan else None
@@ -712,12 +735,46 @@ class Controller:
             self.log.close(); self.log = None
         self.process = None
 
+    def inspect_model(self, data, *, for_launch=False):
+        parameters = request_parameters(data)
+        if parameters['Backend'] not in self.backends:
+            raise ValueError('Backend is not installed')
+        if not parameters.get('Worker'):
+            parameters['Worker'] = self.worker_defaults().get(parameters['Backend'], {}).get('path', '')
+        acquired = self.inspection_slots.acquire(timeout=11) if for_launch else self.inspection_slots.acquire(blocking=False)
+        if not acquired:
+            if for_launch:
+                raise ValueError('模型体检正在忙，请稍后重试启动 / Model inspection busy; retry launch shortly')
+            return unchecked('Inspection is busy; retry shortly')
+        try:
+            run = subprocess.run([sys.executable, str(ROOT / 'scripts/model_health.py')],
+                                 input=json.dumps({'schema_version': 1, 'parameters': parameters}),
+                                 capture_output=True, text=True, encoding='utf-8',
+                                 cwd=self.backend_root, timeout=10,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            if run.returncode != 0 or len(run.stdout) > 262144:
+                return unchecked('Inspector did not return a bounded report')
+            report = json.loads(run.stdout)
+            if not isinstance(report, dict) or report.get('schema_version') != 1 or type(report.get('can_start')) is not bool:
+                return unchecked('Unsupported inspector response')
+            return report
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return unchecked('Inspector unavailable or timed out; retry or attempt launch')
+        finally:
+            self.inspection_slots.release()
+
     def start(self, data):
+        clean = normalize(data, self.backends)
+        # Never trust a cached browser report. Inspect this exact launch request.
+        health = self.inspect_model(clean, for_launch=True)
+        if not health['can_start']:
+            errors = [c['zh'] + ' / ' + c['en'] + ': ' + c.get('detail', '')
+                      for c in health['checks'] if c['status'] == 'error']
+            raise ValueError('Model inspection blocked launch: ' + '; '.join(errors))
         with self.lock:
             if self.process and self.process.poll() is None:
                 raise ValueError('A managed service is already running; stop it before starting another')
             self._release()
-            clean = normalize(data, self.backends)
             result = self.plan(clean, reveal_secrets=True)
             port = clean['parameters'].get('Port', 18200)
             with socket.socket() as probe:
@@ -746,9 +803,11 @@ class Controller:
             except Exception:
                 self._release(); raise
             self.active, self.active_plan, self.exit_code = clean, plan_summary, None
+            self.instance = secrets.token_hex(12)
             return self.status()
 
     def stop(self):
+        self.chat.cancel_all()
         with self.lock:
             process = self.process
             if self.job:
@@ -757,6 +816,7 @@ class Controller:
                 process.wait(timeout=10)
             self._release(); self.exit_code = None; self.active = None; self.active_plan = None
             self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
+            self.instance = secrets.token_hex(12)
             return self.status()
 
     def log_tail(self):
@@ -806,17 +866,18 @@ class Handler(BaseHTTPRequestHandler):
     def reply(self, code, body, content_type='application/json; charset=utf-8'):
         if not isinstance(body, bytes):
             body = json.dumps(body, ensure_ascii=False).encode('utf-8')
-        self.send_response(code)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "frame-ancestors 'none'")
-        self.end_headers()
         try:
+            self.send_response(code)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Content-Security-Policy', "frame-ancestors 'self'")
+            self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except ConnectionError:
+            # Navigation/refresh can abort either headers or body on Windows.
+            self.close_connection = True
 
     def trusted(self, mutate=False):
         host = self.headers.get('Host', '')
@@ -835,10 +896,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            if path == '/api/launcher/info':
+            if path == '/api/chat/context':
+                self.reply(200, self.control.chat.context())
+            elif path.startswith('/api/chat/requests/'):
+                record = self.control.chat.record(path.rsplit('/',1)[1])
+                self.reply(200 if record else 404, record or {'error':'Unknown request'})
+            elif path.startswith('/chat/view/'):
+                self.chat_asset(path[len('/chat/view/'):])
+            elif path == '/api/launcher/info':
                 self.reply(200, {'token': self.control.token, 'backends': self.control.backends,
                                 'console_protocol': 1, 'console_root': str(ROOT.resolve()),
                                 'model_library_version': 1,
+                                'model_inspection_version': 1,
                                 'kv_cache_version': 1,
                                 'query_scoring_version': 2,
                                 'speculative_capabilities': self.control.speculative_profiles,
@@ -876,7 +945,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Location', '/monitor/')
                 self.send_header('Content-Length', '0')
                 self.end_headers()
-            elif path == '/monitor/':
+            elif path in ('/monitor/', '/chat/'):
                 self.asset('index.html')
             elif path.startswith('/monitor/') and '/' not in path[len('/monitor/'):]:
                 self.asset(path[len('/monitor/'):])
@@ -887,11 +956,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def asset(self, name):
         allowed = {'index.html', 'monitor.css', 'monitor.js', 'i18n.js', 'launcher.css', 'launcher.js',
-                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2'}
+                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html'}
         if name not in allowed:
             self.reply(404, {'error': 'Not found'}); return
         file = ROOT / 'ui/monitor' / name
         self.reply(200, file.read_bytes(), mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
+
+    def chat_asset(self, name):
+        roots = [ROOT/'ui/dist', self.control.backend_root/'workers/share/kvmem/ui', ROOT/'build/share/kvmem/ui']
+        root = next((p for p in roots if (p/'index.html').is_file()), None)
+        if root is None:
+            self.reply(503, {'error':'Unified chat assets missing; rebuild the UI package'}); return
+        root = root.resolve()
+        file = (root/(name or 'index.html')).resolve()
+        if root not in file.parents or not file.is_file() or file.suffix not in {'.html','.js','.css','.svg','.png','.ico','.woff','.woff2','.json'}:
+            self.reply(404, {'error':'Not found'}); return
+        self.reply(200,file.read_bytes(),mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
 
     def do_POST(self):
         if not self.trusted(mutate=True):
@@ -900,14 +980,20 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 raise ValueError('Expected application/json')
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 65536:
+            is_chat = self.path == '/api/chat/completions'
+            if not 0 < size <= (MAX_BODY if is_chat else 65536):
                 raise ValueError('Invalid request size')
             data = json.loads(self.rfile.read(size))
+            if is_chat:
+                self.control.chat.stream(self, data); return
+            if self.path == '/api/chat/cancel':
+                self.reply(200,self.control.chat.cancel(str(data.get('id','')))); return
             actions = {'/api/launcher/save': self.control.save, '/api/launcher/preview': self.control.plan,
                        '/api/launcher/browse-model': self.control.browse_model,
                        '/api/launcher/browse-template': lambda data: self.control.browse_model(data, template=True),
                        '/api/launcher/browse-model-folder': lambda data: self.control.browse_model(data, folder=True),
                        '/api/launcher/scan-models': self.control.scan_models,
+                       '/api/launcher/inspect-model': self.control.inspect_model,
                        '/api/launcher/model-directories': self.control.update_model_directories,
                        '/api/launcher/start': self.control.start, '/api/launcher/stop': lambda _: self.control.stop()}
             action = actions.get(self.path)

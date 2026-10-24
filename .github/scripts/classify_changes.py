@@ -7,6 +7,7 @@ import subprocess
 
 DOC_SUFFIXES = {'.md', '.rst', '.txt', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.pdf'}
 WORKFLOW = '.github/workflows/server-compat.yml'
+CUDA_JOBS = ('cuda-build-linux', 'polystrata-cuda-build-linux')
 NON_CUDA_PATHS = {
     WORKFLOW, '.github/scripts/classify_changes.py', 'tests/test_ci_changes.py',
     'scripts/windows/start-backend.ps1', 'scripts/windows/start-ninfer.ps1',
@@ -37,20 +38,23 @@ def git(*args, cwd=None):
 
 
 def cuda_build_definition(text):
-    """Keep global settings and the CUDA recipe; ignore only job eligibility."""
+    """Keep globals and every native CUDA recipe; ignore only job eligibility."""
     text = text.replace('\r\n', '\n')
     jobs = re.search(r'^jobs:[ \t]*$', text, re.MULTILINE)
     sections = list(re.finditer(r'^  ([a-zA-Z0-9_-]+):[ \t]*$', text, re.MULTILINE))
     if jobs is None:
         return None
+    recipes = {}
     for index, section in enumerate(sections):
-        if section.group(1) == 'cuda-build-linux':
+        if section.group(1) in CUDA_JOBS:
             end = sections[index + 1].start() if index + 1 < len(sections) else len(text)
             body = text[section.start():end]
             body = '\n'.join(line for line in body.splitlines()
                              if not re.match(r'^    (needs|if):', line))
-            return text[:jobs.start()], body
-    return None
+            recipes[section.group(1)] = body
+    if any(name not in recipes for name in CUDA_JOBS):
+        return None
+    return text[:jobs.start()], tuple(recipes[name] for name in CUDA_JOBS)
 
 
 def requires_cuda(paths, before, after, cwd=None):

@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string]$OutputDir,
     [Parameter(Mandatory)][string]$PythonArchive,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$PythonSha256,
-    [string]$SourceDir
+    [string]$SourceDir,
+    [string]$ChatUiDir
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -16,15 +17,31 @@ if (!$SourceDir) { $SourceDir = Join-Path $PSScriptRoot '../..' }
 $source = (Resolve-Path -LiteralPath $SourceDir).Path
 $archive = (Resolve-Path -LiteralPath $PythonArchive).Path
 $output = [IO.Path]::GetFullPath($OutputDir)
+$installedUi = Join-Path $output 'workers/share/kvmem/ui'
+$copyChat = !(Test-Path -LiteralPath (Join-Path $installedUi 'index.html'))
+if (!$copyChat) { $ChatUiDir = $installedUi }
+elseif (!$ChatUiDir) {
+    $ChatUiDir = Join-Path $source 'build/share/kvmem/ui'
+    if (!(Test-Path -LiteralPath (Join-Path $ChatUiDir 'index.html'))) { $ChatUiDir = Join-Path $source 'ui/dist' }
+}
+$chatManifest = Join-Path $ChatUiDir 'ui-build.json'
+if (!(Test-Path -LiteralPath $chatManifest) -or (Get-Content -LiteralPath $chatManifest -Raw | ConvertFrom-Json).console_chat_protocol -ne 1) {
+    throw 'Unified chat assets are required. Build with scripts/build-webui.py and supply -ChatUiDir.'
+}
+if ($copyChat -and (Test-Path -LiteralPath (Join-Path $output 'ui/dist'))) { throw 'Chat destination already exists: ui/dist' }
 if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $PythonSha256) {
     throw 'Python archive SHA-256 does not match the release publisher supplied checksum'
 }
-$files = @('START-HERE-CN.bat', 'START-HERE-EN.bat', 'scripts/local-console.py', 'scripts/windows/start-ui.ps1',
+$files = @('START-HERE-CN.bat', 'START-HERE-EN.bat', 'scripts/local-console.py', 'scripts/console_chat.py', 'scripts/windows/start-ui.ps1',
            'scripts/windows/describe-launch-json.ps1', 'scripts/windows/start-backend.ps1',
-           'scripts/windows/start-ninfer.ps1', 'scripts/windows/start-dflash2.ps1',
+           'scripts/windows/start-ninfer.ps1', 'scripts/windows/start-dflash2.ps1','scripts/windows/start-polystrata.ps1','tools/polystrata/server.py','tools/polystrata/assets.py',
            'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/select-model.ps1', 'scripts/speculative-capabilities.json')
+$files += 'scripts/model_health.py'
+foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'formats.py', 'framing.py', 'file_io.py', 'LICENSE', 'PROVENANCE.json') {
+    $files += 'scripts/model_health_ninfer/' + $name
+}
 foreach ($name in 'index.html', 'monitor.css', 'monitor.js', 'i18n.js', 'launcher.css', 'launcher.js',
-                  'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2') {
+                  'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html') {
     $files += 'ui/monitor/' + $name
 }
 # Validate all inputs and reserved destinations before adding anything to a worker package.
@@ -61,7 +78,7 @@ $runtime = Join-Path $output 'runtime/python'
 $null = New-Item -ItemType Directory -Path (Split-Path $runtime) -Force
 [IO.Compression.ZipFile]::ExtractToDirectory($archive, $runtime)
 $python = Join-Path $runtime 'python.exe'
-$version = @(& $python -I -S -c 'import sys,ctypes,json,http.server,urllib.request,webbrowser; assert sys.version_info >= (3,9); assert sys.maxsize > 2**32; print(sys.version.split()[0])')
+$version = @(& $python -I -S -c 'import sys,ctypes,json,http.server,urllib.request,webbrowser; assert sys.version_info >= (3,10); assert sys.maxsize > 2**32; print(sys.version.split()[0])')
 if ($LASTEXITCODE -ne 0) { throw 'Bundled Python failed its x64 standard-library check' }
 foreach ($relative in $files) {
     $destination = Join-Path $output $relative
@@ -69,6 +86,10 @@ foreach ($relative in $files) {
     if (!(Test-Path -LiteralPath $destination)) { Copy-Item -LiteralPath (Join-Path $source $relative) -Destination $destination }
 }
 $null = New-Item -ItemType Directory -Path (Join-Path $output 'licenses') -Force
+if ($copyChat) {
+    $null = New-Item -ItemType Directory -Path (Join-Path $output 'ui') -Force
+    Copy-Item -LiteralPath $ChatUiDir -Destination (Join-Path $output 'ui/dist') -Recurse
+}
 Copy-Item -LiteralPath (Join-Path $runtime 'LICENSE.txt') -Destination (Join-Path $output 'licenses/Python-LICENSE.txt')
 $readme = @'
 KVMem - start here
@@ -131,6 +152,7 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 $hashes = @{}
 foreach ($relative in $files) { $hashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $output $relative)).Hash.ToLowerInvariant() }
 $manifest = @{ schema_version=1; launch_contract_version=2; python_version=[string]$version[-1];
+    console_chat_protocol=1; chat_manifest_sha256=(Get-FileHash -LiteralPath $chatManifest).Hash.ToLowerInvariant();
     python_archive_sha256=$PythonSha256.ToLowerInvariant(); offline_console=$true;
     models_included=$false; controller_files=$hashes }
 [IO.File]::WriteAllText((Join-Path $output 'console-build.json'), ($manifest | ConvertTo-Json -Depth 5), $utf8)

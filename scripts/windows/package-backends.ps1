@@ -10,19 +10,40 @@ param(
     [string]$ValidationReport,
     [string]$PythonArchive,
     [string]$PythonSha256,
-    [string]$LlamaUiDir
+    [string]$LlamaUiDir,
+    [string]$PolystrataWorker,
+    [string]$PolystrataVisionWorker,
+    [string]$PolystrataPythonRuntime,
+    [string]$PolystrataGgmlSource,
+    [string]$PolystrataValidationReport,
+    [string]$LlamaSource
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-process.ps1')
 $null = Get-Command dumpbin -ErrorAction Stop
 $source = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+if(!$LlamaSource) { $LlamaSource=Join-Path $source 'backends/llamacpp' }
+$LlamaSource=(Resolve-Path -LiteralPath $LlamaSource).Path
+if(!(Test-Path -LiteralPath (Join-Path $LlamaSource 'LICENSE') -PathType Leaf)) {throw 'LlamaSource must identify the source used to build LlamaWorker, including its license'}
 if ([bool]$PythonArchive -ne [bool]$PythonSha256) { throw 'Supply both PythonArchive and PythonSha256 for the offline console' }
-if ($PythonArchive -and !$LlamaUiDir) {
+if (!$PolystrataWorker -and ($PolystrataVisionWorker -or $PolystrataPythonRuntime -or $PolystrataGgmlSource -or $PolystrataValidationReport)) {throw 'PolyStrata component options require PolystrataWorker'}
+if ($PolystrataWorker) {
+    if ($PythonArchive) {throw 'With PolyStrata, use PolystrataPythonRuntime (including frontend dependencies) instead of the standard-library PythonArchive'}
+    if (!$PolystrataPythonRuntime) {throw 'PolystrataWorker requires PolystrataPythonRuntime with frontend dependencies'}
+    foreach($path in @($PolystrataWorker,(Join-Path $PolystrataPythonRuntime 'python.exe'))) {
+        if(!(Test-Path -LiteralPath $path -PathType Leaf)) {throw "Missing PolyStrata worker or portable runtime: $path"}
+    }
+}
+if (($PythonArchive -or $PolystrataWorker) -and !$LlamaUiDir) {
     $LlamaUiDir = Join-Path (Split-Path (Split-Path ([IO.Path]::GetFullPath($LlamaWorker)))) 'share/kvmem/ui'
 }
 if ($LlamaUiDir) {
     if (!(Test-Path -LiteralPath (Join-Path $LlamaUiDir 'index.html') -PathType Leaf)) { throw 'Supply LlamaUiDir with built chat assets for the llama.cpp worker' }
+    if ($PythonArchive -or $PolystrataWorker) {
+        $uiManifest = Join-Path $LlamaUiDir 'ui-build.json'
+        if (!(Test-Path -LiteralPath $uiManifest) -or (Get-Content -LiteralPath $uiManifest -Raw | ConvertFrom-Json).console_chat_protocol -ne 1) { throw 'Rebuild the unified console chat assets with scripts/build-webui.py' }
+    }
     $LlamaUiDir = (Resolve-Path -LiteralPath $LlamaUiDir).Path
 }
 $NinferSource = (Resolve-Path -LiteralPath $NinferSource).Path
@@ -101,9 +122,11 @@ foreach ($entry in @(@('llamacpp', $LlamaWorker, 'llama-kvmem-server.exe'),
     $workerInfo[$backend] = @{ sha256=(Get-FileHash -LiteralPath $executable).Hash.ToLowerInvariant();
         path="workers/$backend/$($entry[2])"; clean_path_help_passed=$true; launch_contract=$contract }
 }
-foreach ($script in 'start-backend.ps1', 'start-ninfer.ps1', 'start-dflash2.ps1', 'native-process.ps1', 'query-scoring.ps1') {
+foreach ($script in 'start-backend.ps1', 'start-ninfer.ps1', 'start-dflash2.ps1','start-polystrata.ps1', 'native-process.ps1', 'query-scoring.ps1') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination (Join-Path $OutputDir 'scripts/windows')
 }
+New-Item -ItemType Directory -Path (Join-Path $OutputDir 'tools/polystrata') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $source 'tools/polystrata/server.py') -Destination (Join-Path $OutputDir 'tools/polystrata/server.py')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../speculative-capabilities.json') -Destination (Join-Path $OutputDir 'scripts/speculative-capabilities.json')
 Copy-Item -LiteralPath (Join-Path $source 'docs') -Destination (Join-Path $OutputDir 'docs') -Recurse
 $packageReadme = @'
@@ -131,11 +154,11 @@ scope. Dependency packaging alone does not qualify every model or configuration.
 '@
 [IO.File]::WriteAllText((Join-Path $OutputDir 'README.md'), $packageReadme, [Text.UTF8Encoding]::new($false))
 Copy-Item -LiteralPath (Join-Path $CudaPath 'EULA.txt') -Destination (Join-Path $OutputDir 'licenses/CUDA-EULA.txt')
-Copy-Item -LiteralPath (Join-Path $source 'backends/llamacpp/LICENSE') -Destination (Join-Path $OutputDir 'licenses/llama-MIT.txt')
+Copy-Item -LiteralPath (Join-Path $LlamaSource 'LICENSE') -Destination (Join-Path $OutputDir 'licenses/llama-MIT.txt')
 Copy-Item -LiteralPath (Join-Path $source 'README.md') -Destination (Join-Path $OutputDir 'licenses/KVMem-README.md')
 Copy-Item -LiteralPath (Join-Path $NinferSource 'LICENSE') -Destination (Join-Path $OutputDir 'licenses/ninfer-LICENSE')
 foreach ($tree in @(@('ninfer-third-party', (Join-Path $NinferSource 'third_party')),
-                   @('llama-vendor', (Join-Path $source 'backends/llamacpp/vendor')))) {
+                   @('llama-vendor', (Join-Path $LlamaSource 'vendor')))) {
     foreach ($file in Get-ChildItem -LiteralPath $tree[1] -Recurse -File) {
         if ($file.Name -notmatch '^(LICENSE|COPYING|NOTICE)') { continue }
         $relative = $file.FullName.Substring($tree[1].Length).TrimStart('\')
@@ -161,8 +184,27 @@ if ($PythonArchive) {
     & (Join-Path $PSScriptRoot 'package-console.ps1') -OutputDir $OutputDir -PythonArchive $PythonArchive -PythonSha256 $PythonSha256
     [IO.File]::AppendAllText((Join-Path $OutputDir 'README.md'), "`n## Desktop console`n`nDouble-click START-HERE-EN.bat for English, or START-HERE-CN.bat for Chinese startup instructions. Python is bundled. See START-HERE.txt for details.`n", [Text.UTF8Encoding]::new($false))
 }
+if ($PolystrataWorker) {
+    & (Join-Path $PSScriptRoot 'package-polystrata.ps1') -ComponentOnly -OutputDir $OutputDir `
+        -Worker $PolystrataWorker -VisionWorker $PolystrataVisionWorker -PythonRuntime $PolystrataPythonRuntime `
+        -CudaPath $CudaPath -GgmlSource $PolystrataGgmlSource -ValidationReport $PolystrataValidationReport
+    $polyExe=Join-Path $OutputDir 'workers/polystrata/strata-poly.exe'
+    $info=New-KVMemProcessInfo $polyExe @('--help')
+    $info.EnvironmentVariables['PATH']="$env:SystemRoot/System32;$env:SystemRoot"
+    $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+    $process=[Diagnostics.Process]::Start($info)
+    $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    [IO.File]::WriteAllText((Join-Path $OutputDir 'provenance/polystrata-help.txt'),$stdout.Result+$stderr.Result)
+    # The pinned native CLI deliberately returns 2 for --help as well as usage errors.
+    $polyHelpExit=$process.ExitCode
+    if($polyHelpExit -notin @(0,2) -or ($stdout.Result+$stderr.Result) -notmatch 'usage: strata-poly --model' -or ($stdout.Result+$stderr.Result) -notmatch '--kvmem-budget') {throw 'PolyStrata failed with a clean runtime PATH'}
+    $process.Dispose()
+    $workerInfo['polystrata']=@{sha256=(Get-FileHash -LiteralPath $polyExe).Hash.ToLowerInvariant();path='workers/polystrata/strata-poly.exe';clean_path_help_passed=$true;help_exit_code=$polyHelpExit;architecture='qwen35moe';batch_mtp=$false}
+    [IO.File]::AppendAllText((Join-Path $OutputDir 'README.md'), "`n## PolyStrata`n`nThis package also contains the single-GPU qwen35moe PolyStrata backend and its portable Python frontend. Start the common console with START-HERE-EN.bat or START-HERE-CN.bat. Select a model GGUF and GPU; an omitted Tokenizer is exported locally from that GGUF on first start. No model download occurs. The model's matching mmproj is required for vision. See provenance/polystrata-validation.json for measured scope and known limitations.`n", [Text.UTF8Encoding]::new($false))
+}
 $manifest = @{ workers=$workerInfo; models_included=$false; kv_cross_backend_transfer=$false;
-    offline_console_included=[bool]$PythonArchive;
+    offline_console_included=([bool]$PythonArchive -or [bool]$PolystrataPythonRuntime);
     backend_sources=(Get-Content -LiteralPath (Join-Path $source 'backends/versions.json') -Raw | ConvertFrom-Json);
     runtime_validation='See attached validation report; packaging certifies dependency loading only' }
 $utf8 = [Text.UTF8Encoding]::new($false)

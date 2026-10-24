@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -17,6 +18,19 @@ POWERSHELL = Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/Window
 
 @unittest.skipUnless(os.name == 'nt', 'Windows entry point')
 class OneClickTests(unittest.TestCase):
+    def setUp(self):
+        self.source_tmp = tempfile.TemporaryDirectory(prefix='kvmem-console-source-')
+        self.addCleanup(self.source_tmp.cleanup)
+        self.source = Path(self.source_tmp.name)
+        for name in ('scripts', 'tools/polystrata', 'ui/monitor'):
+            shutil.copytree(ROOT / name, self.source / name, ignore=shutil.ignore_patterns('__pycache__'))
+        for name in ('START-HERE-CN.bat', 'START-HERE-EN.bat'):
+            shutil.copy2(ROOT / name, self.source / name)
+        self.chat = self.source / 'ui/dist'
+        self.chat.mkdir()
+        (self.chat / 'index.html').write_text('<html>chat packaging fixture</html>', encoding='utf-8')
+        (self.chat / 'ui-build.json').write_text('{"console_chat_protocol":1}', encoding='utf-8')
+
     def run_script(self, script, *args, **kwargs):
         return subprocess.run([str(POWERSHELL), '-NoProfile', '-ExecutionPolicy', 'Bypass',
                                '-File', str(script), *map(str, args)],
@@ -24,9 +38,20 @@ class OneClickTests(unittest.TestCase):
 
     def test_source_check_from_another_working_directory(self):
         with tempfile.TemporaryDirectory() as folder:
-            result = self.run_script(ROOT / 'scripts/windows/start-ui.ps1', '-Check', cwd=folder)
+            result = self.run_script(self.source / 'scripts/windows/start-ui.ps1', '-Check', cwd=folder)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('Python runtime OK:', result.stdout)
+
+    def test_source_check_rejects_missing_or_incompatible_chat(self):
+        manifest = self.chat / 'ui-build.json'
+        manifest.unlink()
+        missing = self.run_script(self.source / 'scripts/windows/start-ui.ps1', '-Check')
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('chat files are missing', missing.stdout)
+        manifest.write_text('{"console_chat_protocol":0}', encoding='utf-8')
+        old = self.run_script(self.source / 'scripts/windows/start-ui.ps1', '-Check')
+        self.assertNotEqual(old.returncode, 0)
+        self.assertIn('does not match', old.stdout)
 
     @unittest.skipUnless(os.environ.get('KVMEM_TEST_PYTHON_ARCHIVE'), 'set KVMEM_TEST_PYTHON_ARCHIVE for portable integration')
     def test_offline_package_without_system_python(self):
@@ -37,14 +62,24 @@ class OneClickTests(unittest.TestCase):
             package = Path(folder) / 'package with spaces'
             builder = ROOT / 'scripts/windows/package-console.ps1'
             result = self.run_script(builder, '-OutputDir', package, '-PythonArchive', archive,
-                                     '-PythonSha256', '0' * 64)
+                                     '-PythonSha256', '0' * 64, '-SourceDir', self.source)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(package.exists(), 'mismatched archive must not modify the output')
             result = self.run_script(builder, '-OutputDir', package, '-PythonArchive', archive,
-                                     '-PythonSha256', digest)
+                                     '-PythonSha256', digest, '-SourceDir', self.source)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             manifest = json.loads((package / 'console-build.json').read_text())
             self.assertTrue(manifest['offline_console'])
+            self.assertEqual(manifest['console_chat_protocol'], 1)
+            self.assertTrue((package / 'ui/dist/index.html').is_file())
+            self.assertTrue((package / 'scripts/console_chat.py').is_file())
+            inspect = subprocess.run([str(package / 'runtime/python/python.exe'), '-I', '-S',
+                                      str(package / 'scripts/model_health.py')],
+                                     input=json.dumps({'schema_version': 1, 'parameters': {
+                                         'Backend': 'ninfer', 'Model': str(package / 'missing.ninfer')}}),
+                                     capture_output=True, text=True, timeout=15)
+            self.assertEqual(inspect.returncode, 0, inspect.stderr)
+            self.assertFalse(json.loads(inspect.stdout)['can_start'])
             self.assertEqual(manifest['python_archive_sha256'], digest)
             for name, expected in manifest['controller_files'].items():
                 self.assertEqual(hashlib.sha256((package / name).read_bytes()).hexdigest(), expected)

@@ -1,9 +1,16 @@
 #Requires -Version 5.1
 [CmdletBinding(PositionalBinding=$false)]
 param(
-    [Parameter(Mandatory)][ValidateSet('llamacpp', 'ninfer')][string]$Backend,
+    [Parameter(Mandatory)][ValidateSet('llamacpp', 'ninfer', 'polystrata')][string]$Backend,
     [string]$Model,
     [string]$Worker,
+    [string]$Tokenizer,
+    [string]$PolystrataSource,
+    [string]$Python,
+    [string]$VisionWorker,
+    [string]$Mmproj,
+    [ValidateRange(256,65536)][int]$VramReserveMiB=256,
+    [ValidateRange(1,65536)][int]$ReplayMaxTokens=2048,
     [string]$Gpu = $env:CUDA_VISIBLE_DEVICES,
     [uint32[]]$StageLayers = @(),
     [ValidateRange(1, 65535)][int]$Port = 18200,
@@ -37,6 +44,7 @@ param(
     [ValidateRange(1, 16)][int]$RetainedSessions = 4,
     [switch]$Vision,
     [ValidateSet('resident', 'cpu')][string]$VisionResidency = 'resident',
+    [ValidateRange(0, 2147483647)][int]$CpuVisionIdleSeconds = 300,
     [ValidateRange(1, 16384)][int]$VisionTokens = 1024,
     [ValidateSet('off', 'auto')][string]$DeviceProfile = 'off',
     [ValidateRange(0, 2147483647)][int]$ThinkingBudget = 0,
@@ -94,7 +102,19 @@ if ($Backend -eq 'ninfer') {
         throw 'KVMem disables legacy --lookup-ngram; use -NgramDrafts and -NgramMinMatch'
     }
 }
+if ($Backend -eq 'polystrata') {
+    $capabilities.supported_combinations=@{
+        text=@{architectures=@('qwen35moe');kv=@('f16','q8_0');max_concurrency=8;max_devices=1}
+        mtp=@{drafts=@(0..3);solo=$true;batch=$false;batch_fallback='ordinary_decode'}
+        storage=@{scope='process';shared_active_idle_quota=$true;ssd_persistence='process'}
+        query=@{scorers=@('page-softmax','meanq-cosine');bounded_replay=$true;tool_continuation='resident_pressure'}
+    }
+}
 if ($Describe) { $capabilities | ConvertTo-Json -Depth 4; return }
+if ($Backend -eq 'polystrata') {
+    & (Join-Path $PSScriptRoot 'start-polystrata.ps1') -Parameters $PSBoundParameters -Root $root -WorkerArgs $WorkerArgs
+    return
+}
 # Canonical settings take precedence over defaults, while conflicting explicit
 # aliases fail before the worker starts. Old saved MTP configurations still work.
 if (!$SpeculativeMode) { $SpeculativeMode = if ($MtpDrafts -gt 0) { 'mtp' } else { 'none' } }
@@ -144,6 +164,7 @@ foreach ($setting in @(
     @('ThinkingMode', '^--(enable-thinking|no-think(ing)?)(=|$)'),
     @('ReasoningEffort', '^--default-reasoning-effort(=|$)'),
     @('PreserveThinking', '^--preserve-thinking(=|$)'),
+    @('CpuVisionIdleSeconds', '^--cpu-vision-idle-seconds(=|$)'),
     @('Concurrency', '^(-np|--parallel|--max-concurrency)(=|$)')
 )) {
     if ($PSBoundParameters.ContainsKey($setting[0]) -and @($WorkerArgs | Where-Object { $_ -match $setting[1] }).Count) {
@@ -241,6 +262,7 @@ if ($Backend -eq 'ninfer') {
     if ($AdaptiveMtp) { $nativeArgs += '--adaptive-mtp' }
     if ($FastPrefill) { $nativeArgs += '--fast-prefill-kernel' }
     if ($Vision) { $nativeArgs += @('--vision', '--vision-residency', $VisionResidency, '--vision-max-merged', "$VisionTokens") }
+    if ($Vision -and $VisionResidency -eq 'cpu') { $nativeArgs += @('--cpu-vision-idle-seconds', "$CpuVisionIdleSeconds") }
     if ($ThinkingBudget -gt 0) { $nativeArgs += @('--default-thinking-budget', "$ThinkingBudget") }
     if ($ReasoningEffort) { $nativeArgs += @('--default-reasoning-effort', $ReasoningEffort) }
     if ($PreserveThinking) { $nativeArgs += '--preserve-thinking' }
@@ -261,7 +283,7 @@ if ($Backend -eq 'ninfer') {
     if (($effectiveK -in $quantized) -ne ($effectiveV -in $quantized)) {
         throw 'llama.cpp cannot mix floating-point and quantized K/V; choose q8_0/q5_0/q4_0 for both, or f16/f32 for both'
     }
-    foreach ($name in @('StageLayers', 'FastPrefill', 'NgramDrafts', 'NgramMinMatch', 'Vision', 'VisionResidency', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'ReasoningEffort', 'PreserveThinking')) {
+    foreach ($name in @('StageLayers', 'FastPrefill', 'NgramDrafts', 'NgramMinMatch', 'Vision', 'VisionResidency', 'CpuVisionIdleSeconds', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'ReasoningEffort', 'PreserveThinking')) {
         if ($PSBoundParameters.ContainsKey($name)) { throw "-$name configures ninfer; use llama native options in -WorkerArgs" }
     }
     if ($SpeculativeMode -ne 'none') {

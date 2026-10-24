@@ -14,7 +14,7 @@ Reopening an existing controller does not print instructions implying the second
 
 An offline console package includes the official Windows x64 embeddable Python runtime in
 `runtime/python`. No Python installation, pip packages, Node.js or build tools are needed.
-A source checkout can use installed 64-bit Python 3.9+ instead. The entry does not download
+A source checkout can use installed 64-bit Python 3.10+ instead. The entry does not download
 or install anything, alter PATH, request administrator access, or load a model automatically.
 Model/worker selection, browser drafts, personal templates and API key behavior follow the
 [console documentation](../ui/README.md#independent-local-console-windows).

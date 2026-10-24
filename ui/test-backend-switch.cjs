@@ -4,9 +4,9 @@ const assert=require('node:assert/strict');
 const path=require('node:path');
 module.exports=async({browser,base,info})=>{
  const context=await browser.newContext({viewport:{width:1366,height:900}});
- const page=await context.newPage(),errors=[],mutations=[],previews=[];
+ const page=await context.newPage(),errors=[],posts=[],previews=[];
  page.on('pageerror',error=>errors.push(error.message));
- page.on('request',request=>{if(request.method()==='POST')mutations.push(new URL(request.url()).pathname);});
+ page.on('request',request=>{if(request.method()==='POST')posts.push(new URL(request.url()).pathname);});
  const gpus=[{uuid:'GPU-switch-first',name:'NVIDIA GeForce Test GPU A'},{uuid:'GPU-switch-second',name:'NVIDIA GeForce Test GPU B'}];
  const initial={Backend:'ninfer',Model:'C:/models/switch.ninfer',Worker:'C:/workers/ninfer.exe',
   Gpu:gpus.map(g=>g.uuid).reverse().join(','),StageLayers:[24,40],Context:8192,Budget:2048,
@@ -30,7 +30,7 @@ module.exports=async({browser,base,info})=>{
  const values=async()=>Object.fromEntries(await Promise.all(sharedKeys.map(async key=>[key,await field(key).inputValue()])));
  const closeCheck=()=>page.locator('[data-dialog=check] [data-dialog-close]').click();
  try{
-  await page.goto(base+'/monitor/');await field('Backend').waitFor();
+  await page.goto(base+'/monitor/#config');await field('Backend').waitFor();
   await page.locator('[data-language-select]').selectOption('zh-CN');
   await field('Context').fill('123456');
   await page.locator('.l-native > summary').click();await page.locator('[data-native]').fill('["--threads",');
@@ -105,7 +105,10 @@ module.exports=async({browser,base,info})=>{
   await page.setViewportSize({width:390,height:900});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'GPU cards fit a narrow screen');
   if(process.env.SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'backend-switch-mobile.png'),fullPage:true});
-  assert.ok(mutations.every(url=>url==='/api/launcher/preview'),'switches never mutate a running service');
+  // Preview and model inspection are read-only POSTs; start/stop and every other
+  // mutation must remain absent while switching backends.
+  assert.ok(posts.every(url=>['/api/launcher/preview','/api/launcher/inspect-model'].includes(url)),
+   'switches never mutate a running service');
   assert.deepEqual(errors,[]);
   console.log('PASS: identical GPU cards, shared settings, explicit capability validation, per-engine assets/raw edits, GPU/layer identity, language/reload and no inference');
  }finally{await context.close();}

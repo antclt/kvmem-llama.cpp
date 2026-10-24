@@ -20,7 +20,7 @@ The speed displayed is generated tokens divided by the server's generation durat
 
 Open `/monitor/` on the same server. The lightweight chat header opens it in a new tab,
 so monitoring does not interrupt a streamed answer. The page follows the Strata layout,
-defaults to 极客黑, and offers 架构蓝 and system themes.
+defaults to 极夜, and offers 蓝图 and system themes.
 
 `scripts/build-webui.py` includes `ui/monitor/` in both lightweight and full builds.
 To update only monitoring assets in an existing built UI (no Node.js needed):
@@ -77,7 +77,7 @@ Service state follows active requests independently of the selected historical r
 prefill, logical context and reused input tokens are request metrics; the output meter shows token
 budget use, not completion. GPU readings describe the whole card. RAM/SSD history capacity remains
 visible, with session counts, history hits/evictions and cache disk reads in expandable details.
-Themes are 极客黑 (default), 架构蓝, and system. Fonts and assets are bundled locally.
+Themes are 极夜 (default), 蓝图, and system. Fonts and assets are bundled locally.
 The header language picker switches between 中文 and English without reloading or
 resetting request selection and chart history. Language preference is stored locally;
 Chinese remains the default. Labels, statuses, errors and accessibility text are

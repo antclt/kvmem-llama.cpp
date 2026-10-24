@@ -1,4 +1,5 @@
-/* Model-free by default; optional real-model lifecycle test on a disposable port. */
+/* Model-free by default; optional real-model lifecycle test on a disposable port.
+ * Configuration tests request #config explicitly; /monitor/ selects the monitor. */
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -22,9 +23,21 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
 (async()=>{
  const info=await until(async()=>{const r=await api('info');return r.code===200&&r.body;});token=info.token;
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+ // Either initialization order must preserve the stopped-service config page.
+ for(const late of ['shell','info']){
+  const context=await browser.newContext(),page=await context.newPage(),errors=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.route(late==='shell'?'**/monitor/console-shell.js':'**/api/launcher/info',async route=>{await delay(200);await route.continue();});
+  await page.goto(base+'/monitor/');await page.locator('[data-param=Backend]').waitFor();
+  assert.equal(new URL(page.url()).hash,'#config','initial selection survives delayed '+late);
+  await page.goto(base+'/monitor/#about');await page.locator('[data-view=about]').waitFor();
+  assert.equal(new URL(page.url()).hash,'#about','explicit navigation wins with delayed '+late);
+  assert.deepEqual(errors,[]);await context.close();
+ }
+ console.log('PASS: launcher/shell initialization order and explicit navigation');
  // English launch overrides an old Chinese choice, then lets the picker persist normally.
  const languageContext=await browser.newContext(),languagePage=await languageContext.newPage();
- await languagePage.goto(base+'/monitor/');await languagePage.locator('[data-param=Backend]').waitFor();
+ await languagePage.goto(base+'/monitor/#config');await languagePage.locator('[data-param=Backend]').waitFor();
  await languagePage.locator('[data-language-select]').selectOption('zh-CN');
  await languagePage.goto(base+'/monitor/?lang=en&keep=1#config');
  await languagePage.locator('[data-param=Backend]').waitFor();
@@ -42,9 +55,9 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await languageContext.close();
  console.log('PASS: English launch, saved-language override, picker/reload retention and URL preservation');
  const page=await browser.newPage({viewport:{width:1920,height:1080}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base+'/monitor/');await page.locator('[data-param=Backend]').waitFor();
- assert.deepEqual(info.backends,['llamacpp','ninfer']);
- assert.deepEqual(await page.locator('[data-param=Backend] option').evaluateAll(items=>items.map(x=>x.value)),['llamacpp','ninfer']);
+ await page.goto(base+'/monitor/#config');await page.locator('[data-param=Backend]').waitFor();
+ assert.deepEqual(info.backends,['llamacpp','ninfer','polystrata']);
+ assert.deepEqual(await page.locator('[data-param=Backend] option').evaluateAll(items=>items.map(x=>x.value)),['llamacpp','ninfer','polystrata']);
  assert.equal(await page.locator('[data-view=config]').isVisible(),true);
  if(info.gpus.length){
   const choices=page.locator('[data-gpu-choice]');
@@ -153,7 +166,8 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  for(const [key,value] of Object.entries(expected))assert.equal(releaseDraft[key],value,'persisted '+key);
  await page.locator('[data-preset-undo]').click();
  assert.equal(await page.locator('[data-param=Model]').inputValue(),'C:/models/my-existing-model.ninfer');
- assert.deepEqual(mutations,[],'select/undo must not mutate the server');
+ assert.ok(mutations.every(url=>new URL(url).pathname==='/api/launcher/inspect-model'),
+  'select/undo may inspect the draft but must not mutate the server');
  assert.equal(await page.locator('[data-preset]').count(),1,'only the 0.18.0 release recipe');
  await page.locator('[data-preset=ninfer-v018]').click();
  await page.getByRole('tab',{name:'服务与并发'}).click();
@@ -244,12 +258,16 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  const lifecycleGpu={uuid:'GPU-browser-lifecycle-fixture',name:'Browser lifecycle fixture'};
  const lifecycleInfo=async route=>route.fulfill({json:{...info,gpus:[lifecycleGpu]}});
  await page.route('**/api/launcher/info',lifecycleInfo);
+ // This section simulates a worker with a fictional model path. Real-file
+ // inspection and launch blocking are covered by test-model-health.cjs.
+ const lifecycleInspection=route=>route.fulfill({json:{schema_version:1,status:'ready',can_start:true,model:{},features:{},checks:[]}});
+ await page.route('**/api/launcher/inspect-model',lifecycleInspection);
  await page.reload();await page.locator('[data-param=Backend]').waitFor();
  await page.locator('[data-param=Backend]').selectOption('llamacpp');
  const navBefore=await page.locator('.s-nav').boundingBox();
- const chat=page.locator('[data-chat-link]');
+ const chat=page.locator('[data-page=chat]');
  assert.equal(await chat.isVisible(),true);
- assert.equal(await chat.getAttribute('aria-disabled'),'true');
+ assert.equal(await chat.isEnabled(),true,'history remains available while inference is stopped');
  assert.equal(await page.locator('.s-header-tools [data-chat-link]').count(),1);
  let lifecycle={state:'stopped',url:null};
  await page.route('**/api/launcher/status',route=>route.fulfill({json:lifecycle}));
@@ -263,17 +281,17 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.equal(await page.locator('[data-launch-track]').getAttribute('aria-valuenow'),null);
  releaseStart();
  await page.waitForFunction(()=>document.querySelector('[data-launch-progress]').dataset.state==='starting');
- assert.equal(await chat.getAttribute('href'),null);
+ assert.equal(await chat.isEnabled(),true);
  assert.equal(await page.locator('[data-launch-track]').getAttribute('aria-valuenow'),null);
  lifecycle={...lifecycle,state:'ready'};
  await page.waitForFunction(()=>document.querySelector('[data-launch-progress]').dataset.state==='ready');
- assert.equal(await chat.getAttribute('href'),'http://127.0.0.1:18200/');
+ assert.equal(await page.locator('[data-chat-link]').getAttribute('href'),'/chat/');
  assert.equal(await page.locator('[data-launch-track]').getAttribute('aria-valuenow'),'100');
  assert.deepEqual(await page.locator('.s-nav').boundingBox(),navBefore,'navigation stays fixed when chat becomes available');
  lifecycle={state:'exited',exit_code:1,url:null};
  await page.waitForFunction(()=>document.querySelector('[data-launch-progress]').dataset.state==='exited');
  assert.equal(await page.locator('[data-launch-track]').isVisible(),false);
- assert.equal(await chat.getAttribute('aria-disabled'),'true');
+ assert.equal(await chat.isEnabled(),true);
  await page.unroute('**/api/launcher/start');
  await page.route('**/api/launcher/start',route=>route.fulfill({status:400,json:{error:'端口已占用'}}));
  await page.locator('[data-action=start]').click();
@@ -283,23 +301,33 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.locator('[data-dialog=error] [data-dialog-close]').click();
  await page.unroute('**/api/launcher/start');await page.unroute('**/api/launcher/status');
  await page.unroute('**/api/launcher/info',lifecycleInfo);
+ await page.unroute('**/api/launcher/inspect-model',lifecycleInspection);
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  await page.locator('[data-template-tab=builtin]').click();
- assert.deepEqual(await page.locator('.s-nav [data-page]').evaluateAll(items=>items.map(el=>el.dataset.page)),['config','monitor','about']);
+ assert.deepEqual(await page.locator('.s-nav [data-page]').evaluateAll(items=>items.map(el=>el.dataset.page)),['config','chat','monitor','about']);
  const beforeDensity={model:await page.locator('[data-param=Model]').inputValue(),context:await page.locator('[data-param=Context]').inputValue()};
  await page.setViewportSize({width:1366,height:768});
  const comfortableHeight=(await page.locator('.l-essential').boundingBox()).height;
  await page.locator('[data-density-select]').selectOption('compact');
  assert.ok((await page.locator('.l-essential').boundingBox()).height<comfortableHeight,'compact settings reduce vertical space');
  for(const width of [1920,1366,768,390]){await page.setViewportSize({width,height:768});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'compact overflow '+width);}
+ assert.ok((await page.locator('.s-header').boundingBox()).height<=80,'mobile header leaves room for content');
+ await page.locator('.s-appearance > summary').click();
  await page.locator('[data-language-select]').selectOption('en');
  assert.equal(await page.locator('[data-density-select] option:checked').textContent(),'Layout: Compact');
+ assert.equal(await page.locator('[data-page=config] .s-nav-short').textContent(),'Config');
+ assert.ok(await page.locator('.s-nav').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'English navigation fits before reload');
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  assert.equal(await page.locator('#app').getAttribute('data-density'),'compact');
  assert.equal(await page.locator('[data-param=Model]').inputValue(),beforeDensity.model);
  assert.equal(await page.locator('[data-param=Context]').inputValue(),beforeDensity.context);
+ await page.locator('.s-appearance > summary').click();
  await page.locator('[data-language-select]').selectOption('zh-CN');
+ assert.equal(await page.locator('[data-page=config] .s-nav-short').textContent(),'配置');
+ assert.ok(await page.locator('.s-nav').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'Chinese navigation fits after a live language switch');
  await page.locator('[data-density-select]').selectOption('comfortable');
+ await page.locator('.s-appearance > summary').press('Escape');
+ assert.equal(await page.locator('[data-language-select]').isVisible(),false,'Escape closes mobile appearance controls');
  for(const width of [1920,1440,1366,768,390]){await page.setViewportSize({width,height:width===1366?768:1080});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'horizontal overflow '+width);if(width===1366){const box=await page.locator('[data-action=template]').boundingBox();assert.ok(box.y+box.height<=768,'template action below laptop viewport: '+JSON.stringify(box));}}
  await page.setViewportSize({width:1920,height:1080});
  if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'launch-desktop.png'),fullPage:true});}

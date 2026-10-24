@@ -53,12 +53,26 @@ jobs:
       - name: Test local console and monitor packaging
         run: |
           python3 tests/test_local_console.py
+          python3 tests/test_model_health.py
+          python3 tests/test_prepare_backends.py
+          python3 tests/test_console_chat.py
           python3 tests/test_one_click.py
           python3 tests/test_webui_builder.py
       - name: Prepare pinned llama.cpp integration
         run: |
           python3 scripts/prepare-backends.py --backend llamacpp
           python3 scripts/prepare-backends.py --backend llamacpp --check
+      - name: Validate PolyStrata integration patch and adapters
+        run: |
+          python3 scripts/prepare-backends.py --backend polystrata
+          python3 scripts/prepare-backends.py --backend polystrata --check
+          python3 -m pip install Jinja2==3.1.6 regex==2026.9.10
+          python3 -m unittest discover -s tools/polystrata -p test_wrapper.py
+          python3 -m unittest discover -s tools/polystrata -p test_assets.py
+          python3 -m unittest discover -s tools/polystrata -p test_monitor.py
+          python3 -m unittest discover -s tools/polystrata -p test_ui_contract.py
+          python3 -m unittest discover -s tools/polystrata -p test_console_routes.py
+          node ui/test-polystrata-contract.cjs
       - name: Configure host and model-free server tests
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -86,6 +100,9 @@ jobs:
       - name: Test local console and monitor packaging
         run: |
           python tests/test_local_console.py
+          python tests/test_model_health.py
+          python tests/test_prepare_backends.py
+          python tests/test_console_chat.py
           python tests/test_windows_worker_args.py
           python tests/test_one_click.py
           python tests/test_webui_builder.py
@@ -181,6 +198,100 @@ jobs:
       - name: Compiler cache statistics
         if: ${{ always() }}
         run: ccache --show-stats
+  polystrata-cuda-build-linux:
+    needs: changes
+    if: needs.changes.outputs.run_cuda == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # PolyStrata recommends CUDA >= 13 for Blackwell; do not inherit the
+    # llama.cpp job's CUDA 12.8 toolchain.
+    container: nvidia/cuda:13.2.0-devel-ubuntu24.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-polystrata
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPILERCHECK: content
+      CUDA_VISIBLE_DEVICES: ''
+    steps:
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates build-essential cmake ninja-build python3 time ccache zstd
+      - uses: actions/checkout@v4
+      - name: Trust the checked-out workspace in the CUDA container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Prepare and verify pinned PolyStrata integration
+        run: |
+          python3 scripts/prepare-backends.py --backend polystrata
+          python3 scripts/prepare-backends.py --backend polystrata --check
+      - name: Identify the compiler toolchain
+        id: toolchain
+        run: |
+          c++ --version > "$RUNNER_TEMP/polystrata-compiler-versions.txt"
+          nvcc --version >> "$RUNNER_TEMP/polystrata-compiler-versions.txt"
+          ccache --version >> "$RUNNER_TEMP/polystrata-compiler-versions.txt"
+          sha256sum "$(command -v c++)" "$(command -v nvcc)" "$(command -v ccache)" >> "$RUNNER_TEMP/polystrata-compiler-versions.txt"
+          printf 'id=%s\n' "$(sha256sum "$RUNNER_TEMP/polystrata-compiler-versions.txt" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Restore compiler cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: polystrata-cuda13.2.0-120a-v1-${{ steps.toolchain.outputs.id }}-${{ hashFiles('.github/workflows/server-compat.yml', 'kvmem/CMakeLists.txt', 'backends/versions.json', 'backends/patches/polystrata*.patch') }}
+          restore-keys: |
+            polystrata-cuda13.2.0-120a-v1-${{ steps.toolchain.outputs.id }}-
+      - name: Prepare the CUDA driver stub for linking
+        run: |
+          mkdir -p "$RUNNER_TEMP/polystrata-driver-stubs"
+          ln -s /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/polystrata-driver-stubs/libcuda.so.1"
+      - name: Configure PolyStrata against this checkout's KVMem core
+        # GGML is fetched at the commit pinned in PolyStrata's CMakeLists.txt.
+        # A fixed architecture avoids probing for a GPU on the hosted runner.
+        run: |
+          set -o pipefail
+          cmake -S backends/polystrata -B build-polystrata -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON \
+            -DSTRATA_BUILD_TESTS=OFF -DSTRATA_PORTABLE=ON \
+            -DSTRATA_KVMEM_SOURCE_DIR="$GITHUB_WORKSPACE/kvmem" \
+            -DCMAKE_CUDA_ARCHITECTURES=120a-real \
+            -DGGML_CCACHE=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,$RUNNER_TEMP/polystrata-driver-stubs" \
+            2>&1 | tee polystrata-configure.log
+      - name: Build and link worker and native regression targets
+        run: |
+          set -o pipefail
+          nproc
+          free -h
+          ccache --zero-stats
+          /usr/bin/time -v cmake --build build-polystrata --parallel 8 --target \
+            strata-poly poly_kvmem_kernel_test poly_kvmem_mtp_test \
+            poly_kvmem_history_test poly_kvmem_sessions_test \
+            2>&1 | tee polystrata-build.log
+      - name: Run model-free host policy tests
+        # Do not run kernel/MTP tests on a runner without an NVIDIA GPU/model.
+        run: >-
+          ctest --test-dir build-polystrata --output-on-failure --no-tests=error
+          -R '^poly_kvmem_(history|sessions)_test$'
+      - name: Compiler cache statistics
+        if: ${{ always() }}
+        run: ccache --show-stats
+      - name: Preserve native build and test diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: polystrata-native-ci-logs
+          retention-days: 7
+          path: |
+            polystrata-configure.log
+            polystrata-build.log
+            build-polystrata/CMakeCache.txt
+            build-polystrata/CMakeFiles/CMakeConfigureLog.yaml
+            build-polystrata/Testing/Temporary/LastTest.log
   ninfer-pinned-sources:
     needs: changes
     if: needs.changes.outputs.run_ci == 'true'
@@ -205,7 +316,7 @@ jobs:
   # Keep required status names; only verified documentation changes may skip builds.
   host-and-server-units-linux:
     if: ${{ always() }}
-    needs: [changes, host-linux, host-windows, cuda-build-linux, ninfer-pinned-sources]
+    needs: [changes, host-linux, host-windows, cuda-build-linux, polystrata-cuda-build-linux, ninfer-pinned-sources]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -217,6 +328,7 @@ jobs:
           LINUX_RESULT: ${{ needs.host-linux.result }}
           WINDOWS_RESULT: ${{ needs.host-windows.result }}
           CUDA_RESULT: ${{ needs.cuda-build-linux.result }}
+          POLYSTRATA_CUDA_RESULT: ${{ needs.polystrata-cuda-build-linux.result }}
           NINFER_RESULT: ${{ needs.ninfer-pinned-sources.result }}
         run: |
           test "$CHANGES_RESULT" = success
@@ -229,9 +341,11 @@ jobs:
           test "$WINDOWS_RESULT" = success
           if [ "$RUN_CUDA" = true ]; then
             test "$CUDA_RESULT" = success
+            test "$POLYSTRATA_CUDA_RESULT" = success
           else
             test "$RUN_CUDA" = false
             test "$CUDA_RESULT" = skipped
+            test "$POLYSTRATA_CUDA_RESULT" = skipped
           fi
           test "$NINFER_RESULT" = success
   ui-linux:
@@ -276,10 +390,12 @@ jobs:
           else
             python3 scripts/build-webui.py
           fi
-      - name: Test built chat against both backend props
+      - name: Test unified chat against all backend settings
         if: needs.changes.outputs.run_ci == 'true' && matrix.mode == 'lightweight'
         working-directory: ui
-        run: node test-chat-props.cjs
+        run: |
+          node test-chat-props.cjs
+          node test-chat-history.cjs
       - name: Documentation-only result
         if: needs.changes.outputs.run_ci == 'false'
         run: echo 'Documentation only; UI tests and builds skipped.'

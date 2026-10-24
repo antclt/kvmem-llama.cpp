@@ -18,7 +18,13 @@ set(KVMEM_CORE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "KVMem s
 
 # Call only after the embedding backend has enabled CUDA. Host-only builds keep
 # the independent reference and never acquire a CUDA runtime dependency.
+# Optional CUDART_TARGET keeps the recall object and its consumers on the same
+# runtime as the embedding backend (NInfer uses the static runtime on Windows).
 function(kvmem_enable_cuda_recall)
+    cmake_parse_arguments(KVMEM_RECALL "" "CUDART_TARGET" "" ${ARGN})
+    if (NOT KVMEM_RECALL_CUDART_TARGET)
+        set(KVMEM_RECALL_CUDART_TARGET CUDA::cudart)
+    endif()
     # The standalone tests and embedding backend can both request this target.
     if (TARGET kvmem-recall-cuda)
         return()
@@ -27,14 +33,21 @@ function(kvmem_enable_cuda_recall)
         message(FATAL_ERROR "Enable CUDA before configuring its recall scorer")
     endif()
     find_package(CUDAToolkit REQUIRED)
+    if (NOT TARGET ${KVMEM_RECALL_CUDART_TARGET})
+        message(FATAL_ERROR "Unknown CUDA runtime target: ${KVMEM_RECALL_CUDART_TARGET}")
+    endif()
+    set(_kvmem_cuda_runtime Shared)
+    if (KVMEM_RECALL_CUDART_TARGET STREQUAL "CUDA::cudart_static")
+        set(_kvmem_cuda_runtime Static)
+    endif()
     # The host target may have been created before CUDA was enabled in its
     # embedding parent. Compile CUDA in a newly created, enabled directory scope.
     add_library(kvmem-recall-cuda OBJECT "${KVMEM_CORE_SOURCE_ROOT}/src/cuda/page_softmax.cu")
     target_include_directories(kvmem-recall-cuda PRIVATE "${KVMEM_CORE_SOURCE_ROOT}/include")
     set_target_properties(kvmem-recall-cuda PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
-        POSITION_INDEPENDENT_CODE ON)
+        POSITION_INDEPENDENT_CODE ON CUDA_RUNTIME_LIBRARY ${_kvmem_cuda_runtime})
     target_sources(kvmem PRIVATE $<TARGET_OBJECTS:kvmem-recall-cuda>)
-    target_link_libraries(kvmem PUBLIC CUDA::cudart)
+    target_link_libraries(kvmem PUBLIC ${KVMEM_RECALL_CUDART_TARGET})
     target_compile_definitions(kvmem PUBLIC KVMEM_PAGE_SOFTMAX_CUDA=1)
     if (MSVC)
         target_compile_options(kvmem-recall-cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)

@@ -5,19 +5,131 @@
     "upstream": "https://github.com/ggml-org/llama.cpp.git",
     "base_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
     "license_file": "backends/llamacpp/LICENSE",
-    "local_changes": "KVMem integration is maintained in the versioned patch; the submodule remains pinned to base_commit",
-    "patch": "backends/patches/llamacpp-kvmem.patch",
-    "patch_sha256": "8f2b3a6da6c86866c2a0f0a17cdb8eb344d7b3e66a197a050b4121ad544a1555",
-    "patched_tree": "82ba95255615c2537ca2caae1364658d6216aa7f"
+    "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
+    "patched_tree": "1593775ad2ac64b4ad6993ce1e04ca025953be0e",
+    "patches": [
+      {
+        "id": "kvmem",
+        "path": "backends/patches/llamacpp-kvmem.patch",
+        "sha256": "8f2b3a6da6c86866c2a0f0a17cdb8eb344d7b3e66a197a050b4121ad544a1555",
+        "requires": [],
+        "after_tree": "82ba95255615c2537ca2caae1364658d6216aa7f"
+      },
+      {
+        "id": "pq2",
+        "path": "backends/patches/llamacpp-pq2.patch",
+        "sha256": "4a02193d548a3f3a6f28780420abd6957fb7561bab72f749a19601e2e8c58396",
+        "requires": [
+          "kvmem"
+        ],
+        "after_tree": "7c84746653b0c3c3e4e70b3c721e5ab1dd9b89c7",
+        "source": "Prism llama.cpp 9a9394a895b96003ca842a6041cb28ac49a108f7: isolated PQ2 format/CPU/CUDA support"
+      },
+      {
+        "id": "ptq1",
+        "path": "backends/patches/llamacpp-ptq1.patch",
+        "sha256": "3b80a63b830201b068934e94ae78f9903fa1b424485831b7987c6f97c16e3b77",
+        "requires": [
+          "pq2"
+        ],
+        "after_tree": "265fd71110156dcb91c065914baf0ec92e140b20",
+        "source": "Prism llama.cpp 9a9394a895b96003ca842a6041cb28ac49a108f7: isolated PTQ1 format/CPU/CUDA support"
+      },
+      {
+        "id": "ptq1-performance",
+        "path": "backends/patches/llamacpp-ptq1-performance.patch",
+        "sha256": "9867f0f9114953eb752212a0c3193ddc86b9b06a95ef9e38171f685a258c6b67",
+        "requires": [
+          "ptq1"
+        ],
+        "after_tree": "1593775ad2ac64b4ad6993ce1e04ca025953be0e",
+        "source": "Prism PR218 PTQ1 planar matvec with the PDL consumer sync fix; scoped to dense CUDA 2D calls, current upstream fusion API retained"
+      }
+    ]
   },
   "ninfer": {
     "path": "backends/ninfer",
     "upstream": "https://github.com/iamwavecut/ninfer-all.git",
     "base_commit": "db8c114802a070a7903f84d01142fda0b00fa7df",
     "license_file": "backends/ninfer/LICENSE",
-    "local_changes": "KVMem integration is maintained in the versioned patch; the submodule remains pinned to base_commit",
-    "patch": "backends/patches/ninfer-kvmem.patch",
-    "patch_sha256": "ee4d3faab724afe614fdd17f8a65236a52fa779d1f6d58e39c151a3e695fa085",
-    "patched_tree": "48be4fe3fb18f569c310b09239e37e922663c2f8"
+    "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
+    "patched_tree": "3bb18fca6acf320b93ee0ab3fed2152a95daa2e9",
+    "patches": [
+      {
+        "id": "kvmem",
+        "path": "backends/patches/ninfer-kvmem.patch",
+        "sha256": "a52f08b10c57c30fc0b29ca0566b8cc2c22f2229dedff57cb900249410056a7b",
+        "requires": [],
+        "after_tree": "16e95f34780a9f7c4404a63d9e0277a2fccfdc43"
+      },
+      {
+        "id": "ptq1",
+        "path": "backends/patches/ninfer-ptq1.patch",
+        "sha256": "c02a1ba47b17230010a4c42f936341fd1977584cd74cf2e4aff04f3a13e91bc9",
+        "requires": [
+          "kvmem"
+        ],
+        "after_tree": "d45854b6cf46d24d1aac17030ccf791773d3d0db",
+        "source": "1314521gjy/ninfer-fusion-kvmem@b6e6c20deb93fe5ed84e5715642dad21c0455ef0; local qualified port a81ebf9031c167a29f418093e8a7253a4811cd01"
+      },
+      {
+        "id": "ptq1-performance",
+        "path": "backends/patches/ninfer-ptq1-performance.patch",
+        "sha256": "960ec0ea605abeb858fa41a56af410cc26bbefb153c6e14205b00c7433ee2842",
+        "requires": [
+          "ptq1"
+        ],
+        "after_tree": "c3baa4e3085337591dd085de78a95ee909355003",
+        "source": "Local PTQ1 routing and calibration over the compact native port, without changing SM120 policy"
+      },
+      {
+        "id": "t5-performance",
+        "path": "backends/patches/ninfer-t5-performance.patch",
+        "sha256": "45f0f1276e54032d4267c1f917e64a752caedd40a0afd726c78b3cf5ef0969a8",
+        "requires": [
+          "ptq1-performance",
+          "kvmem"
+        ],
+        "after_tree": "0eed1e7ab5a4bfa0b0b41ca9ebd2db54b8942d09",
+        "source": "JGamboa/ninfer-4090-windows@e905787f067de89ef6ef28c52d65a2ce91d425ca; RowSplit and existing BF16 producer adaptation"
+      },
+      {
+        "id": "query-memory",
+        "path": "backends/patches/ninfer-query-memory.patch",
+        "sha256": "7825269a6544ea8f11f1217103c71328d99b6468624d44ffdebf5407e111b4f9",
+        "requires": [
+          "t5-performance"
+        ],
+        "after_tree": "3bb18fca6acf320b93ee0ab3fed2152a95daa2e9",
+        "source": "Bounded BF16 Query capture, accepted Mean-Q sums, native Query lifecycle regressions and actual cancellation accounting"
+      }
+    ]
+  },
+  "polystrata": {
+    "path": "backends/polystrata",
+    "upstream": "https://github.com/VecSzn/PolyStrata.git",
+    "base_commit": "974552f562aecb3e86cdd2679e76e4515b52b9d2",
+    "license_file": "backends/polystrata/LICENSE",
+    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base",
+    "patched_tree": "abd050da76aea2c55c7ad71396186cc2b4db73d6",
+    "source_tag": "v0.1.45-poly.2",
+    "patches": [
+      {
+        "id": "kvmem",
+        "path": "backends/patches/polystrata-kvmem.patch",
+        "sha256": "73be894e2d3e239b31f68d220370f199a41fc5c9813737d37c56cafb2083f807",
+        "requires": [],
+        "after_tree": "a653d25267c3a206c68091d4d6476dc4e57ef4bd"
+      },
+      {
+        "id": "attention-feedback-performance",
+        "path": "backends/patches/polystrata-attention-feedback-performance.patch",
+        "sha256": "28a7743a2b355872d03e52124c23a8b1203b97e34944f2677a49ecf0c67f7dfc",
+        "requires": [
+          "kvmem"
+        ],
+        "after_tree": "abd050da76aea2c55c7ad71396186cc2b4db73d6"
+      }
+    ]
   }
 }
