@@ -50,7 +50,7 @@ const server = http.createServer((req, res) => {
         ? {
             model_name: fixture.model || '<img src=x onerror="window.injected=1">',
             default_generation_settings: { n_ctx: 1024 },
-            kvmem: {},
+            kvmem: fixture.kvmem || {},
             execution: fixture.unknown ? {} : {mode:fixture.dual ? "layer" : "single", monitor_devices: fixture.cpu ? [] : devices},
           }
         : req.url === "/slots"
@@ -138,6 +138,24 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     );
     assert.equal(await page.locator("#app").getAttribute("data-theme"), "dark");
     assert.equal(await page.locator('[data-gpu="power"]').textContent(), "—");
+    // Definitions are available on demand at readable size, with keyboard dismissal.
+    await page.locator('[popovertarget="monitor-note-decode"]').first().click();
+    assert.equal(await page.locator('#monitor-note-decode').isVisible(), true);
+    assert.equal(await page.locator('#monitor-note-decode p').evaluate(el=>getComputedStyle(el).fontSize), '14px');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#monitor-note-decode').isVisible(), false);
+    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 设置未提供');
+    fixtureScenario = {kvmem:{mtp:true,mtp_drafts:2}};
+    await page.waitForFunction(()=>document.querySelector('[data-value="mtp"]').textContent.includes('草稿上限 2'));
+    const runtime = parameters => page.evaluate(parameters=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',
+      {detail:{state:'ready',instance:'mtp-fixture',active_config:{parameters}}})), parameters);
+    await runtime({Backend:'llamacpp',SpeculativeMode:'mtp',DraftTokens:3,DraftPolicy:'adaptive'});
+    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 已开启 · 草稿上限 3 token · 自适应');
+    await runtime({Backend:'llamacpp',SpeculativeMode:'none'});
+    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 未开启');
+    await runtime({Backend:'polystrata',SpeculativeMode:'mtp',DraftTokens:1});
+    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 已开启 · 草稿上限 2 token');
+    await runtime({});fixtureScenario = {};
     assert.equal(await page.locator("[data-gpus] article").count(), 1);
     assert.equal(await page.locator("[data-service-state]").textContent(), "生成中");
     fixtureScenario = {dual: true, idle: true, missing: true};

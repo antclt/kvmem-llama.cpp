@@ -320,6 +320,7 @@
     text("execution", !known ? t("推理设备待确认") : !bound.length ? t("CPU 推理") : bound.length === 1 ? t("单卡推理") : t("{0} 卡协同 · {1}", bound.length, modeLabel));
     text("gpu-count", known ? t("{0} 张设备参与当前服务", bound.length) : t("设备绑定信息未提供"));
     $("[data-device-note]").textContent = !known ? t("当前服务尚未提供设备绑定信息；不根据负载猜测推理显卡。") : !bound.length ? t("当前模型未使用显卡。") : t("只显示当前服务绑定的显卡 · 整卡读数包含其他进程");
+    $("[data-device-note]").hidden = known && bound.length > 0;
     const grid = $("[data-gpus]");
     grid.dataset.count = String(bound.length);
     const signature = JSON.stringify([i18n.language, bound]);
@@ -342,7 +343,7 @@
         load: fmt(g.utilization_percent),
         vram: fmt(number(g.used_bytes) ? g.used_bytes / GiB : null, 1),
         total: number(g.total_bytes) ? t("共 {0} GiB", fmt(g.total_bytes / GiB, 1)) : t("容量未采集"),
-        capacity: number(ratio(g.used_bytes, g.total_bytes)) ? t("已用 {0}% · 含其他进程", fmt(ratio(g.used_bytes, g.total_bytes))) : t("比例未采集"),
+        capacity: number(ratio(g.used_bytes, g.total_bytes)) ? t("已用 {0}%", fmt(ratio(g.used_bytes, g.total_bytes))) : t("比例未采集"),
         temp: fmt(g.temperature_c), power: fmt(g.power_w, 1),
         pcie: number(g.pcie_generation) ? `Gen${g.pcie_generation} ×${fmt(g.pcie_width)}` : "—",
         rx: fmt(number(g.pcie_rx_bytes_per_second) ? g.pcie_rx_bytes_per_second / MiB : null, 1),
@@ -390,6 +391,23 @@
     ])
       data[name] = sum(storage, name);
     return data;
+  }
+  function renderMtp(request) {
+    const active = ['starting', 'ready'].includes(consoleRuntime?.state) ? consoleRuntime.active_config?.parameters : null;
+    const config = active?.Backend === state?.backend ? active : null;
+    const enabled = config?.SpeculativeMode !== undefined ? config.SpeculativeMode === 'mtp'
+      : config?.MtpEnabled === false ? false : props?.kvmem?.mtp;
+    if (enabled === undefined) {text('mtp', t('MTP 设置未提供')); return;}
+    if (!enabled) {text('mtp', t('MTP 未开启')); return;}
+    const parts = [t('MTP 已开启')];
+    const drafts = config?.DraftTokens ?? config?.MtpDrafts ?? props?.kvmem?.mtp_drafts;
+    const policy = config?.DraftPolicy ?? (typeof config?.AdaptiveMtp === 'boolean' ? (config.AdaptiveMtp ? 'adaptive' : 'fixed') : null);
+    if (number(drafts)) parts.push(t('草稿上限 {0} token', fmt(drafts)));
+    if (policy === 'adaptive') parts.push(t('自适应'));
+    else if (policy === 'fixed') parts.push(t('固定长度'));
+    if (number(request?.drafts_offered) && number(request?.drafts_accepted))
+      parts.push(t('所选请求：提议 {0} / 接受 {1}', fmt(request.drafts_offered), fmt(request.drafts_accepted)));
+    text('mtp', parts.join(' · '));
   }
   function render(append) {
     if (!state || !props) return;
@@ -453,8 +471,7 @@
     text("prefill-times", t("预填充 {0}s · 首 token {1}s", fmt(number(r?.prefill_ms)?r.prefill_ms/1000:null,2), fmt(number(r?.ttft_ms)?r.ttft_ms/1000:null,2)));
     const pending=number(state.queued_count)?fmt(state.queued_count):"—";
     text("queue", t("活动 {0} · 排队 {1}",fmt(state.active.length),pending));
-    const mtp = props.kvmem?.mtp;
-    text("mtp", mtp===undefined?t("MTP 状态未提供"):!mtp?t("MTP 未配置"):number(r?.drafts_offered)?t("MTP 已配置 · 本轮提议 {0} / 接受 {1}",fmt(r.drafts_offered),fmt(r.drafts_accepted)):t("MTP 已配置 · 本轮使用待确认"));
+    renderMtp(r);
     text("vram-reserve", t("显存预留 {0} MiB",fmt(props.kvmem?.vram_reserve_mib)));
     text("effective-config", props.effective_settings ? t("服务默认：输出 {0} · 思考 {1} · 思考预算 {2}",fmt(props.effective_settings.effective.max_tokens),props.effective_settings.effective.reasoning_effort,fmt(props.effective_settings.effective.reasoning_budget_tokens)) : "");
     const hardware = state.hardware || {},
@@ -578,6 +595,7 @@
   window.addEventListener("kvmem-runtime-status", (event) => {
     const old = consoleRuntime?.state;
     consoleRuntime = event.detail;
+    if (state && props) renderMtp(currentRequest());
     const observed = consoleRuntime.effective_scoring, panel = $("[data-effective-scoring]");
     if (panel) {
       const tr = (zh,en) => i18n.language === 'en' ? en : zh;
@@ -638,7 +656,7 @@
       failures++;
       authNeeded = error.status === 401 || error.status === 403;
       $("[data-auth]").hidden = !authNeeded;
-      if (authNeeded && !document.querySelector('[data-view="config"]:not([hidden])')) page("monitor");
+      if (authNeeded && !document.querySelector('[data-view="config"]:not([hidden]), [data-view="logs"]:not([hidden])')) page("monitor");
       lastError = error;
       renderConnection();
       $$(".s-state,.s-metrics,.s-gpus,.s-bottom,.s-cache")

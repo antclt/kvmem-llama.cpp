@@ -12,7 +12,7 @@ module.exports=async({browser,base,info})=>{
  await page.route('**/api/launcher/status',r=>r.fulfill({json:runtime}));
  await page.route('**/api/launcher/preview',r=>{previews.push(r.request().postDataJSON().parameters);return r.fulfill({json:{argv:['fixture-worker'],environment:{}}});});
  const field=k=>page.locator(`[data-param=${k}]`);
- const openAdvanced=async()=>{await page.locator('#launch-tab-0').click();await page.locator('#launch-panel-0 .l-advanced').evaluate(el=>el.open=true);};
+ const openAdvanced=async()=>{await page.getByRole('tab',{name:/召回策略|Recall policy/}).click();};
  const preview=async()=>{const n=previews.length;await page.locator('[data-action=preview]').click();await page.waitForFunction(()=>document.querySelector('[data-check-summary]')?.textContent.includes('检查通过'));assert.equal(previews.length,n+1);await page.locator('[data-dialog=check] [data-dialog-close]').click();return previews.at(-1);};
  try{
   await page.goto(base+'/monitor/#config');await field('Backend').waitFor();
@@ -29,10 +29,12 @@ module.exports=async({browser,base,info})=>{
   await page.reload();await field('Backend').waitFor();await openAdvanced();assert.equal(await field('Lrfu').isChecked(),false);assert.equal(await field('LrfuLambda').inputValue(),'0.3');
   // Deliver the observed report through the controller boundary so polling and
   // asynchronous inspection both see the same runtime state.
-  runtime={state:'ready',effective_scoring:{scorer:'page-softmax',agg:'max',graph_alpha:.7,lrfu:true,query_max_tokens:64,query_replay_max_tokens:256},scoring_confirmed:true};
+  runtime={state:'ready',active_config:{schema_version:1,parameters:sent},effective_scoring:{scorer:'page-softmax',agg:'max',graph_alpha:.7,lrfu:true,query_max_tokens:64,query_replay_max_tokens:256},scoring_confirmed:true};
   await page.waitForFunction(()=>document.querySelector('[data-effective-scoring]')?.textContent.includes('0.7'));
   assert.match(await page.locator('[data-effective-scoring]').textContent(),/page-softmax.*max.*0.7.*64.*256/);
-  await field('GraphAlpha').fill('.9');assert.match(await page.locator('[data-effective-scoring]').textContent(),/0.7/,'editing does not rewrite the observed report');
+  await openAdvanced();assert.equal(await field('GraphAlpha').isDisabled(),true);
+  assert.equal(await field('GraphAlpha').inputValue(),'0.2','locked launch settings retain the submitted value');
+  assert.match(await page.locator('[data-effective-scoring]').textContent(),/0.7/,'the observed report remains distinct from launch settings');
   if(process.env.SCREENSHOT_DIR)await page.screenshot({path:process.env.SCREENSHOT_DIR+'/query-scoring.png',fullPage:true});
   assert.deepEqual(errors,[]);
  }finally{await context.close();}

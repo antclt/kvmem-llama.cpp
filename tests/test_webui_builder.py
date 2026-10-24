@@ -25,7 +25,7 @@ class BuilderTest(unittest.TestCase):
             builder.copy_monitor(output)
             self.assertEqual((output / 'index.html').read_text(), 'existing chat')
             for name in ('index.html', 'monitor.js', 'monitor.css', 'launcher.js', 'launcher.css', 'i18n.js', 'Strata-LICENSE.txt',
-                         'Outfit-OFL.txt', 'outfit-latin-wght.woff2'):
+                         'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'logs.js', 'logs.css'):
                 self.assertTrue((output / 'monitor' / name).is_file())
             self.assertTrue((output / 'monitor-build.json').is_file())
 
