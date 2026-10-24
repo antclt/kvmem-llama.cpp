@@ -53,7 +53,7 @@
     "base_commit": "db8c114802a070a7903f84d01142fda0b00fa7df",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "0eed1e7ab5a4bfa0b0b41ca9ebd2db54b8942d09",
+    "patched_tree": "3bb18fca6acf320b93ee0ab3fed2152a95daa2e9",
     "patches": [
       {
         "id": "kvmem",
@@ -92,6 +92,16 @@
         ],
         "after_tree": "0eed1e7ab5a4bfa0b0b41ca9ebd2db54b8942d09",
         "source": "JGamboa/ninfer-4090-windows@e905787f067de89ef6ef28c52d65a2ce91d425ca; RowSplit and existing BF16 producer adaptation"
+      },
+      {
+        "id": "query-memory",
+        "path": "backends/patches/ninfer-query-memory.patch",
+        "sha256": "7825269a6544ea8f11f1217103c71328d99b6468624d44ffdebf5407e111b4f9",
+        "requires": [
+          "t5-performance"
+        ],
+        "after_tree": "3bb18fca6acf320b93ee0ab3fed2152a95daa2e9",
+        "source": "Bounded BF16 Query capture, accepted Mean-Q sums, native Query lifecycle regressions and actual cancellation accounting"
       }
     ]
   },

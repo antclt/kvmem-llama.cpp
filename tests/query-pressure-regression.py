@@ -22,6 +22,8 @@ def main():
     p.add_argument('--argv-json', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--gpu', required=True)
+    p.add_argument('--tool-repeats', type=int, default=160,
+                   help='observation repetitions; increase to exceed a larger append reserve')
     p.add_argument('--reject-replay', action='store_true')
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
@@ -30,6 +32,7 @@ def main():
         command = command['argv']
     command = list(command)
     scorer = command[command.index('--kvmem-query-scorer') + 1] if '--kvmem-query-scorer' in command else 'page-softmax'
+    query_limit = int(command[command.index('--kvmem-query-max-tokens') + 1]) if '--kvmem-query-max-tokens' in command else 512
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
@@ -76,7 +79,14 @@ def main():
         report['requests'].append({'phase':name,'elapsed_seconds':elapsed,'usage':response.get('usage')})
         check(name+' succeeds', bool(response.get('choices')) and response['usage']['completion_tokens']>0)
         for start,end in set(re.findall(r'query_begin=(\d+) query_end=(\d+)',trace)):
-            check(name+' Q bounded',int(end)-int(start)<=512)
+            check(name+' Q bounded',int(end)-int(start)<=query_limit)
+        if a.backend == 'ninfer':
+            captured = [int(n) for n in re.findall(r'KVMEM_QUERY scorer=\S+[^\n]* rows=(\d+)',trace)]
+            spans = [(int(x),int(y)) for x,y in re.findall(
+                r'KVMEM_PREFILL_PLAN[^\n]* query_begin=(\d+) query_end=(\d+)[^\n]* capture_query=1',trace)]
+            if captured:
+                check(name+' scores every planned Query row', bool(spans) and
+                      all(n in {y-x for x,y in spans} for n in captured))
         for rows in re.findall(r'replayed_rows=(\d+)|replay_rows=(\d+)',trace):
             check(name+' replay bounded',int(next(x for x in rows if x)) <= (8 if a.reject_replay else 2048))
         return response,trace
@@ -99,6 +109,9 @@ def main():
             document += '\nReply briefly to acknowledge the reference text.'
             messages = [{'role':'user','content':document}]
             response,trace = ask('document',messages,8,reset=True)
+            if a.backend == 'ninfer' and not a.reject_replay:
+                check('long document exercises full Query limit',
+                      re.search(r'KVMEM_QUERY scorer=\S+[^\n]* rows='+str(query_limit)+r'\b',trace) is not None)
             if a.reject_replay:
                 check('over-limit never replays','KVMEM_QUERY_REPLAY from=' not in trace and
                       'path=query_replay ' not in trace)
@@ -117,7 +130,7 @@ def main():
             tool_base = messages + [{'role':'assistant','content':'','tool_calls':[
                 {'id':'read1','type':'function','function':{'name':'read_reference','arguments':'{}'}}]}]
             tools = tool_base+[{'role':'tool','tool_call_id':'read1','content':
-                'Observation: the valley river is blue.\n'*160}]
+                'Observation: the valley river is blue.\n'*a.tool_repeats}]
             for name,current in [('tool',tools)]:
                 _,trace=ask(name,current,16)
                 check(name+' no cold Query selection', 'KVMEM_QUERY scorer=' not in trace and
@@ -162,7 +175,7 @@ def main():
                 else 'q_rows=0' in trace)
             follow=fits+[{'role':'assistant','content':'','tool_calls':[
                 {'id':'read_after_fit','type':'function','function':{'name':'read_reference','arguments':'{}'}}]},
-                {'role':'tool','tool_call_id':'read_after_fit','content':'Observation: the valley river is blue.\n'*160}]
+                {'role':'tool','tool_call_id':'read_after_fit','content':'Observation: the valley river is blue.\n'*a.tool_repeats}]
             response,trace=ask('tool-after-resident',follow,16,session='policy-fits')
             check('tool works without cached Q','KVMEM_PRESSURE ' in trace and 'KVMEM_QUERY scorer=' not in trace)
             follow+=[response['choices'][0]['message'],{'role':'user','content':'What color is the river in the latest observation?'}]
