@@ -12,8 +12,11 @@
 #include "kvmem-execution-scope.h"
 #include "kvmem/request_control.hpp"
 #include "kvmem/prefix_checkpoint.hpp"
+#include "kvmem/checkpoint_policy.hpp"
+#include "kvmem/checkpoint_image.hpp"
 #include "chat.h"
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -21,8 +24,17 @@
 #include <vector>
 
 struct MultimodalCheckpointAccounting {
+    size_t limit = [] { const auto p=kvmem::CheckpointPolicy::environment(); return p.enabled ? p.host_bytes : SIZE_MAX; }();
     std::atomic<size_t> live_bytes {0};
     std::atomic<size_t> peak_bytes {0};
+    bool reserve(size_t bytes, size_t limit) {
+        size_t live = live_bytes.load();
+        do { if (live > limit || bytes > limit-live) return false; }
+        while (!live_bytes.compare_exchange_weak(live,live+bytes));
+        size_t peak=peak_bytes.load();
+        while(peak<live+bytes && !peak_bytes.compare_exchange_weak(peak,live+bytes)) {}
+        return true;
+    }
     void add(size_t bytes) {
         const size_t live = live_bytes.fetch_add(bytes) + bytes;
         size_t peak = peak_bytes.load();
@@ -37,12 +49,15 @@ struct MultimodalCheckpointData {
     MultimodalCheckpointData() = default;
     MultimodalCheckpointData(const MultimodalCheckpointData &) = delete;
     MultimodalCheckpointData & operator=(const MultimodalCheckpointData &) = delete;
-    ~MultimodalCheckpointData() { if (accounting) accounting->live_bytes -= bytes(); }
+    ~MultimodalCheckpointData() { if (accounting) accounting->live_bytes -= resident_bytes(); }
     std::vector<uint8_t> recurrent;
     std::vector<uint8_t> draft_carry;
+    kvmem::SpillExtent cold;
+    size_t cold_recurrent = 0, cold_carry = 0;
     llama_kvmem_tail_mean_state tail_mean;
     std::shared_ptr<MultimodalCheckpointAccounting> accounting;
-    size_t bytes() const { return recurrent.size() + draft_carry.size() + tail_mean.values.size()*sizeof(float) + tail_mean.history.scores->size()*sizeof(double) + tail_mean.graph.bytes() + tail_mean.feedback.bytes(); }
+    size_t resident_bytes() const { return recurrent.size() + draft_carry.size() + tail_mean.values.size()*sizeof(float) + tail_mean.history.scores->size()*sizeof(double) + tail_mean.graph.bytes() + tail_mean.feedback.bytes(); }
+    size_t bytes() const { return resident_bytes() + (cold ? cold_recurrent + cold_carry : 0); }
 };
 
 struct MultimodalCheckpoint {
@@ -82,6 +97,7 @@ struct kvmem_conversation {
     std::shared_ptr<kvmem_prompt> history_input_prompt;
     std::vector<kvmem::LrfuPoint> history_points;
     kvmem::CheckpointCatalog<MultimodalCheckpoint> mm_checkpoints;
+    kvmem::CheckpointArchive<MultimodalCheckpoint> mm_archive;
     int mm_live_row = 0;
     std::shared_ptr<const MultimodalCheckpointData> mm_live_checkpoint;
     std::shared_ptr<const MultimodalQuery> mm_query;
@@ -163,12 +179,25 @@ struct LlamaEngineState {
     kvmem::LrfuState rollback_history;
     uint32_t history_input_end = 0;
     kvmem::CheckpointCatalog<MultimodalCheckpoint> mm_checkpoints;
+    kvmem::CheckpointArchive<MultimodalCheckpoint> mm_archive;
+    kvmem::CheckpointCapturePlan mm_capture_plan;
+    uint64_t mm_root_boundary = 0, mm_tail_boundary = 0;
+    struct CheckpointWrite {
+        std::shared_ptr<const MultimodalCheckpointData> source;
+        kvmem::SpillExtent destination;
+        kvmem::StorageTicket ticket;
+    };
+    std::unique_ptr<CheckpointWrite> mm_checkpoint_write;
+    std::unique_ptr<kvmem::StorageIoQueue> mm_checkpoint_io;
     std::shared_ptr<MultimodalCheckpoint> mm_rollback;
     std::shared_ptr<kvmem_prompt> mm_rollback_prompt;
     int mm_live_row = 0;
     std::shared_ptr<const MultimodalCheckpointData> mm_live_checkpoint;
     kvmem_prefill_perf mm_perf;
     std::shared_ptr<MultimodalCheckpointAccounting> mm_checkpoint_accounting = std::make_shared<MultimodalCheckpointAccounting>();
+    // The server owns parked conversations; required admission may ask it to
+    // release an idle owner. The engine never mutates another lane's state.
+    std::function<void(const std::shared_ptr<MultimodalCheckpointAccounting>&,size_t)> mm_checkpoint_reclaim;
     std::shared_ptr<const MultimodalQuery> mm_query;
     std::shared_ptr<const MultimodalQuery> mm_pending_query;
     bool mm_committed = true;
