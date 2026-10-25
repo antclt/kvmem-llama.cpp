@@ -1,7 +1,7 @@
 # PolyStrata integration
 
-The opt-in `polystrata` backend pins upstream `v0.1.45-poly.2` at
-`974552f562aecb3e86cdd2679e76e4515b52b9d2`. It supports qwen35moe GGUF models
+The opt-in `polystrata` backend pins upstream `v0.1.45-poly.4` at
+`145493e66580c80bba09b0130f667a2b1789da69`. It supports qwen35moe GGUF models
 on one CUDA GPU, with F16 or Q8_0 KV. The source submodule stays at the upstream
 commit; `backends/versions.json` identifies the integration patch and resulting tree.
 
@@ -16,6 +16,41 @@ Python frontend; configured replay limits reach the worker without an alias mism
 The frontend forwards native scoring confirmation records to its supervising console.
 This change includes the existing launcher and monitor integration. The later unified
 chat and console shell work is separate.
+
+The poly.4 update retains the seven ordered KVMem patches, including elastic
+workspace/KV/expert management, managed MTP and 32/64-token blocks. It includes
+upstream's Windows expert-file read-ahead, tiled router product and MMQ half-sum
+overflow protection. The new half-sum scratch buffer keeps its full lifetime
+while the larger local elastic workspaces shrink and grow. Native test targets
+link the new Flint source required by the upstream engine factory; KVMem model
+support remains limited to qwen35moe.
+
+`STRATA_GDN_MMA=1` is upstream's optional CUDA GDN prefill path and stays off by
+default. Its snapshot and graph-recording fallbacks are retained. It requires
+separate state/replay validation before claiming a speed or quality benefit.
+The web chat's send and regenerate paths share the same explicit request
+overrides, client-owned reasoning, native timing and incomplete-stream detection.
+The pin excludes commits after the poly.4 release.
+
+### Poly.4 update validation (2026-10-25)
+
+On Windows x64 with CUDA 13.2, architecture 120a and eight parallel build jobs,
+the worker and native regression targets build successfully. The server suite
+completes 981 tests with 15 skips; the nine adapter tests, ten patch-preparation
+tests, browser contracts and shared streaming fixtures pass.
+
+On an RTX 5050 Laptop with Cyber-Tiel-Coder-35B-A3B-MTP UD-Q4_K_XL, the native
+checks cover 32/64-token blocks, F16/Q8, graphs on/off, SSD acceptance faults,
+accepted KV/recurrent/Mean-K state, bounded replay, elastic workspace lifetimes
+and managed MTP. The opt-in GDN checks include an independent double-precision
+reference and snapshot/rollback checks; GDN remains off by default.
+
+Separate document/question HTTP turns pass with both block sizes. The document
+is identical in both runs; each question reuses 12,684 prefix tokens and reports
+the native Query span `[12689, 12705)`. These are correlated functional probes,
+not an independent performance comparison. Two concurrent sequences also pass,
+with two native slots active together. No poly.2/poly.4 speed comparison or
+Linux/HIP/SYCL build is claimed by this Windows CUDA validation.
 
 ## Configurable KV management blocks
 

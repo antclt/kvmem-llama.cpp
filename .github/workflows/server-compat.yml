@@ -74,6 +74,7 @@ jobs:
           python3 -m unittest discover -s tools/polystrata -p test_ui_contract.py
           python3 -m unittest discover -s tools/polystrata -p test_console_routes.py
           node ui/test-polystrata-contract.cjs
+          node ui/test-polystrata-stream.cjs
       - name: Configure host and model-free server tests
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
