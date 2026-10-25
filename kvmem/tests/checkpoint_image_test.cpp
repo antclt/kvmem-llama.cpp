@@ -1,6 +1,7 @@
 #include "kvmem/checkpoint_image.hpp"
 #include "kvmem/snapshot_buffer.hpp"
 #include <array>
+#include <cstring>
 #include <future>
 #include <iostream>
 #include <filesystem>
