@@ -86,7 +86,7 @@ index 33327bc8ca848f6fb85539f1cc6f7999c267df50..fcc8360b6ddcfaef7fb7827e911851d8
          // Qwen3.6/3.8 groupwise-int fused projections, and the switch of each onto the unified
          // templates.
 diff --git a/src/models/qwen3_5/execution/parameters.cpp b/src/models/qwen3_5/execution/parameters.cpp
-index fe4ec3acebedacb8a1ec89e19fa09eff3ab9db9a..0eb4a5a21df4585392b5fec16e1dcd2d4fd68ea7 100644
+index 22daef1c25ad17232ac1c4fa0bc0a56e2b0ab6fd..95efa85d8cd3f9b53b1ee4a0917a59f2cd3927dc 100644
 --- a/src/models/qwen3_5/execution/parameters.cpp
 +++ b/src/models/qwen3_5/execution/parameters.cpp
 @@ -31,6 +31,12 @@ public:
@@ -122,7 +122,7 @@ index fe4ec3acebedacb8a1ec89e19fa09eff3ab9db9a..0eb4a5a21df4585392b5fec16e1dcd2d
          if (!model_.options().prefill_a8) { return; }
          auto* pair = std::get_if<ops::PairedProjectionWeights>(&projection);
 diff --git a/src/ops/linear/linear.cpp b/src/ops/linear/linear.cpp
-index 505f6ea6d43c335a38189661a2668e26f7cba8f7..1b024d87a1322c063426594caefb754ae69eba9c 100644
+index 5f62cbb58ec237d2b27657c4a9c6b893296f24b9..5b2ade3fea9e10dea6da157ab4033b45e9066294 100644
 --- a/src/ops/linear/linear.cpp
 +++ b/src/ops/linear/linear.cpp
 @@ -5,6 +5,7 @@
@@ -133,7 +133,7 @@ index 505f6ea6d43c335a38189661a2668e26f7cba8f7..1b024d87a1322c063426594caefb754a
  #include "ops/linear/q4/q4_dispatch.h"
  #include "ops/linear/q5/q5_dispatch.h"
  #include "ops/linear/q6/q6_dispatch.h"
-@@ -128,7 +129,7 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
+@@ -130,7 +131,7 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
              detail::t2_a8_linear(x, w, out, *workspace, stream);
              return;
          }
@@ -142,7 +142,7 @@ index 505f6ea6d43c335a38189661a2668e26f7cba8f7..1b024d87a1322c063426594caefb754a
          return;
      case QType::T2_G128_FP16:
          if (workspace != nullptr && detail::t2_a8_admits(policy) &&
-@@ -176,8 +177,8 @@ std::size_t linear_route_workspace_bytes(QType qtype, std::int32_t output_rows,
+@@ -178,8 +179,8 @@ std::size_t linear_route_workspace_bytes(QType qtype, std::int32_t output_rows,
          (void)detail::select_q8_launch(output_rows, input_rows, max_tokens, policy);
          return 0;
      case QType::PTQ1_G128_FP16:
