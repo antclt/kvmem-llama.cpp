@@ -56,6 +56,12 @@
     contextBusy = false,
     historyInitialized = false;
   const t = (s: string) => (language === "en" ? english[s] || s : s);
+  function mtpStats(message: Row) {
+    const spec = message.speculative;
+    const offered = spec?.mtp_drafted_tokens ?? (spec?.backend === "draft-mtp" ? spec.drafted_tokens : null);
+    const accepted = spec?.mtp_accepted_tokens ?? (spec?.backend === "draft-mtp" ? spec.accepted_tokens : null);
+    return Number.isFinite(offered) && Number.isFinite(accepted) ? {offered,accepted} : null;
+  }
   const scope = () => ctx?.backend + ":" + ctx?.model;
   const draftKey = () => "kvmem-console-draft:" + (active?.id || "new");
   function get(key: string, fallback: any) {
@@ -359,8 +365,8 @@
       if (ctx.backend === "polystrata")
         n.reasoning_effort = v
           ? ctx.effective.reasoning_effort === "none"
-            ? "high"
-            : ctx.effective.reasoning_effort || "high"
+            ? "xhigh"
+            : ctx.effective.reasoning_effort || "xhigh"
           : "none";
       else if (!v) delete n.reasoning_effort;
       overrides = n;
@@ -618,6 +624,7 @@
           if (choice?.finish_reason) reply.finishReason = choice.finish_reason;
           if (data.timings) reply.timings = data.timings;
           if (data.usage) reply.usage = data.usage;
+          if (data.kvmem?.speculative) reply.speculative = data.kvmem.speculative;
           draw();
         },
         requestId,
@@ -786,13 +793,23 @@
           null,
       ),
     );
+    let mounted = true;
+    let pollingRequest = "";
     const interval = setInterval(() => {
       now = Date.now();
       if (!busy) void refreshContext();
-      else if (requestId)
-        void requestRecord(requestId).then((r) => {
-          if (r) live = { ...live, ...r };
+      else if (requestId && pollingRequest !== requestId) {
+        const polledId = requestId;
+        pollingRequest = polledId;
+        void requestRecord(polledId).then((r) => {
+          if (mounted && busy && requestId === polledId && r?.id === polledId)
+            live = { ...live, ...r };
+        }).catch(() => {
+          // Metrics are optional; a failed poll must not interrupt the stream.
+        }).finally(() => {
+          if (pollingRequest === polledId) pollingRequest = "";
         });
+      }
     }, 1000);
     const leave = () => {
       set(draftKey(), input);
@@ -803,6 +820,7 @@
     };
     window.addEventListener("pagehide", leave);
     return () => {
+      mounted = false;
       leave();
       clearInterval(interval);
       clearInterval(saveTimer);
@@ -1021,7 +1039,7 @@
                     src={item.base64Url}
                     alt={item.name || t("图片")}
                   />{/if}{/each}
-              {#if m.role === "assistant" && m.uiStatus !== "pending"}<footer
+              {#if m.role === "assistant" && m.uiStatus !== "pending"}{@const mtp = mtpStats(m)}<footer
                   class="message-footer"
                 >
                   <div class="message-meta">
@@ -1033,6 +1051,7 @@
                       >{/if}{#if m.timings?.predicted_n ?? m.usage?.completion_tokens}<span
                         >{m.timings?.predicted_n ?? m.usage?.completion_tokens} token</span
                       >{/if}
+                    {#if mtp}<span>{t("MTP 接受 / 提议")} {mtp.accepted} / {mtp.offered}</span>{/if}
                   </div>
                   <div class="message-actions">
                     <button onclick={() => copy(m.content)} title={t("复制")}
@@ -1055,7 +1074,14 @@
                           {t("预填充")}：{m.timings.prompt_ms != null
                             ? (m.timings.prompt_ms / 1000).toFixed(2) + "s"
                             : "—"}
+                        </div>
+                        {#if Number.isFinite(m.timings.predicted_ms)}<div>
+                          {t("解码耗时")}：{(m.timings.predicted_ms / 1000).toFixed(2)}s
                         </div>{/if}
+                        {#if Number.isFinite(m.timings.draft_n) && Number.isFinite(m.timings.draft_n_accepted)}<div>
+                          {t("推测解码提议 / 接受")}：{m.timings.draft_n} / {m.timings.draft_n_accepted}
+                        </div>{/if}
+                      {/if}
                       <div>
                         {t("首个输出等待（含排队）")}：{m.firstTokenMs != null
                           ? (m.firstTokenMs / 1000).toFixed(2) + "s"
@@ -1093,7 +1119,9 @@
                 ? "思考中"
                 : live?.state === "answering"
                   ? "输出正文"
-                  : "等待首个输出",
+                  : live?.metrics?.status === "queued" ? "排队中"
+                    : live?.metrics?.status === "reading" ? "预填充中"
+                    : live?.metrics?.status === "generating" ? "生成中" : "等待首个输出",
             )} · {(
               Math.max(0, now - (live?.started_at_ms || now)) / 1000
             ).toFixed(0)}s{#if live?.metrics?.decode_tps}<span
@@ -1278,8 +1306,8 @@
               min={f.min}
               max={ctx?.limit}
               step="1"
-              value={value(f.key) ?? ""}
-              placeholder={t("未报告")}
+              value={f.key === "max_tokens" && value(f.key) != null && value(f.key) <= 0 ? "" : (value(f.key) ?? "")}
+              placeholder={t(f.key === "max_tokens" && value(f.key) != null && value(f.key) <= 0 ? "不限制（跟随服务）" : "未报告")}
               onchange={(e) => editNumber(f.key, e.currentTarget)}
             /></label
           >{/each}<small

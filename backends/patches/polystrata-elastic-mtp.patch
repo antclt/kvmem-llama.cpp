@@ -1,8 +1,8 @@
 diff --git a/docs/BACKENDS.md b/docs/BACKENDS.md
-index 2189073..93de1f2 100644
+index fa5c1962d1c8eb59d77b35cf65581c0aa01a8858..ee4de240781d077a58f1c9366185f2288e323693 100644
 --- a/docs/BACKENDS.md
 +++ b/docs/BACKENDS.md
-@@ -128,12 +128,24 @@ KV, recurrent state, persistent KVMem statistics and attention score scratch sta
+@@ -134,12 +134,24 @@ KV, recurrent state, persistent KVMem statistics and attention score scratch sta
  evaluation or pipelined prompt read, it reclaims expert pages and restores the full workspace before launching
  dependent kernels. Cache growth is limited to 64 MiB per 16 decode calls and retains the configured VRAM reserve.
  
@@ -29,10 +29,10 @@ index 2189073..93de1f2 100644
  across map cycles, full versus narrow workspace logits with fixed expert placement, partial-admission rollback,
  real cache growth/reclaim, Pressure and bounded Query/replay. These are functional tests, not recall-quality tests.
 diff --git a/src/poly/engine.cpp b/src/poly/engine.cpp
-index 9ec3a7b..83836b1 100644
+index 6787ad20fe3292f7d3482cd8f029801df7caa70f..2b7e9e5ac405689b8c3dad0c3c8636f05a7826b9 100644
 --- a/src/poly/engine.cpp
 +++ b/src/poly/engine.cpp
-@@ -2098,7 +2098,7 @@ void Engine::shared_scratch() {
+@@ -2165,7 +2165,7 @@ void Engine::shared_scratch() {
      const size_t ff = n * std::max({n_ff_, n_ff_shexp_, 2 * n_ff_exp_});
      // the draft block works in it too (draft_input()); read() keeps two calls' rows in it
      r_ = elastic_fbuf(std::max(streams(), draft_ ? 3 : 1) * (size_t) (read_rows_ > rows_ ? 2 : 1) * rows_ * n_embd_,
@@ -41,7 +41,7 @@ index 9ec3a7b..83836b1 100644
      cur_ = elastic_fbuf(e, size_t(kStageRows) * n_embd_);
      xn_ = elastic_fbuf(e, size_t(kStageRows) * n_embd_);
      ao_ = elastic_fbuf(e, size_t(kStageRows) * n_embd_);
-@@ -2120,15 +2120,19 @@ void Engine::shared_scratch() {
+@@ -2188,15 +2188,19 @@ void Engine::shared_scratch() {
  
  // The sequence's state, the caches and every buffer, once the weights are known.
  void Engine::alloc() {
@@ -65,7 +65,7 @@ index 9ec3a7b..83836b1 100644
      // --dump-layers prints one token's stages
      rows_ = opt_.dump ? 1 : std::min(opt_.prompt_batch, opt_.max_context);
      const size_t most = std::min<size_t>(kReadBytes / ((size_t) streams() * n_embd_ * sizeof(float)), opt_.max_context);
-@@ -3020,9 +3024,14 @@ void Engine::run(const int32_t* tokens, int n) {
+@@ -3101,9 +3105,14 @@ void Engine::run(const int32_t* tokens, int n) {
      if (n < 1 || n > rows_) throw std::logic_error("eval takes 1 to max_rows() tokens");
      if (pos_ + n > opt_.max_context)
          throw std::runtime_error("the context is full (" + std::to_string(opt_.max_context) + " tokens)");
@@ -82,7 +82,7 @@ index 9ec3a7b..83836b1 100644
      if (std::getenv("STRATA_ELASTIC_TRACE") && n == 1 && pos_ % 128 == 0) elastic_report(elastic_enabled_ ? "sample" : "static");
  #ifdef STRATA_KVMEM
      if(memory_ && !memory_drafting_) memory_capture_call(pos_,n);
-@@ -3923,6 +3932,7 @@ void Engine::keep(int n) {
+@@ -4004,6 +4013,7 @@ void Engine::keep(int n) {
      if (memory_) {
          commit_memory_window(n);
          memory_window_ = false;
@@ -90,7 +90,7 @@ index 9ec3a7b..83836b1 100644
      }
      } catch (...) {
          if (memory_) { memory_window_ = false; memory_->invalidate(); }
-@@ -4017,7 +4027,9 @@ int32_t Engine::draft(int32_t token, int i, float* prob) {
+@@ -4098,7 +4108,9 @@ int32_t Engine::draft(int32_t token, int i, float* prob) {
      }
      try {
  #endif
@@ -102,7 +102,7 @@ index 9ec3a7b..83836b1 100644
      draft_step(token, i);
      // The guess and its probability are found on the card.  On the host a vocabulary's softmax takes up to 2 ms
 diff --git a/tools/poly_kvmem_mtp_test.cpp b/tools/poly_kvmem_mtp_test.cpp
-index f40de48..edac996 100644
+index f40de48127e253dbee753b666759466331d47767..edac99674ae1e9f5f62ca98e46c9ed71f55b0115 100644
 --- a/tools/poly_kvmem_mtp_test.cpp
 +++ b/tools/poly_kvmem_mtp_test.cpp
 @@ -11,6 +11,21 @@

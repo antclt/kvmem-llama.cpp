@@ -96,5 +96,29 @@ int main() {
         assert(!access::entry(catalog, 2).busy);
         assert(access::entry(catalog, 2).committed.match.rows == 0);
     }
-    std::cout << "PASS lane conversation eviction, ownership and failed handover\n";
+    for(int protection=0;protection<3;++protection) {
+        ServerState a, b;
+        const auto account=a.mm_checkpoint_accounting;
+        {
+            kvmem_lane_conversations catalog({&a,&b},8,0);
+            auto op=access::handover(catalog);
+            auto data=std::make_shared<MultimodalCheckpointData>();
+            data->recurrent.resize(128);
+            const auto charged=data->resident_bytes();
+            account->limit=charged;
+            data->accounting=account;account->add(charged);
+            auto& outgoing=access::entry(catalog,0);
+            outgoing.payload.mm_live_checkpoint=std::move(data);
+            outgoing.busy=protection==0;outgoing.switching=protection==1;outgoing.refs=protection==2;
+            a.mm_checkpoint_reclaim(account,64);
+            assert(access::exists(catalog,0) && account->live_bytes==charged);
+            outgoing.busy=outgoing.switching=false;outgoing.refs=0;
+            a.mm_checkpoint_reclaim(account,64);
+            assert(!access::exists(catalog,0) && account->live_bytes==0);
+            catalog.finish(op,a); // evicting the old owner cannot invalidate handover completion
+            assert(!access::entry(catalog,2).busy);
+        }
+        assert(!a.mm_checkpoint_reclaim && !b.mm_checkpoint_reclaim);
+    }
+    std::cout << "PASS lane conversation eviction, ownership, checkpoint admission and failed handover\n";
 }

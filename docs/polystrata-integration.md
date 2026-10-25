@@ -1,7 +1,7 @@
 # PolyStrata integration
 
-The opt-in `polystrata` backend pins upstream `v0.1.45-poly.2` at
-`974552f562aecb3e86cdd2679e76e4515b52b9d2`. It supports qwen35moe GGUF models
+The opt-in `polystrata` backend pins upstream `v0.1.45-poly.4` at
+`145493e66580c80bba09b0130f667a2b1789da69`. It supports qwen35moe GGUF models
 on one CUDA GPU, with F16 or Q8_0 KV. The source submodule stays at the upstream
 commit; `backends/versions.json` identifies the integration patch and resulting tree.
 
@@ -16,6 +16,99 @@ Python frontend; configured replay limits reach the worker without an alias mism
 The frontend forwards native scoring confirmation records to its supervising console.
 This change includes the existing launcher and monitor integration. The later unified
 chat and console shell work is separate.
+
+The poly.4 update retains the seven ordered KVMem patches, including elastic
+workspace/KV/expert management, managed MTP and 32/64-token blocks. It includes
+upstream's Windows expert-file read-ahead, tiled router product and MMQ half-sum
+overflow protection. The new half-sum scratch buffer keeps its full lifetime
+while the larger local elastic workspaces shrink and grow. Native test targets
+link the new Flint source required by the upstream engine factory; KVMem model
+support remains limited to qwen35moe.
+
+`STRATA_GDN_MMA=1` is upstream's optional CUDA GDN prefill path and stays off by
+default. Its snapshot and graph-recording fallbacks are retained. It requires
+separate state/replay validation before claiming a speed or quality benefit.
+The web chat's send and regenerate paths share the same explicit request
+overrides, client-owned reasoning, native timing and incomplete-stream detection.
+The pin excludes commits after the poly.4 release.
+
+### Poly.4 update validation (2026-10-25)
+
+On Windows x64 with CUDA 13.2, architecture 120a and eight parallel build jobs,
+the worker and native regression targets build successfully. The server suite
+completes 981 tests with 15 skips; the nine adapter tests, ten patch-preparation
+tests, browser contracts and shared streaming fixtures pass.
+
+On an RTX 5050 Laptop with Cyber-Tiel-Coder-35B-A3B-MTP UD-Q4_K_XL, the native
+checks cover 32/64-token blocks, F16/Q8, graphs on/off, SSD acceptance faults,
+accepted KV/recurrent/Mean-K state, bounded replay, elastic workspace lifetimes
+and managed MTP. The opt-in GDN checks include an independent double-precision
+reference and snapshot/rollback checks; GDN remains off by default.
+
+Separate document/question HTTP turns pass with both block sizes. The document
+is identical in both runs; each question reuses 12,684 prefix tokens and reports
+the native Query span `[12689, 12705)`. These are correlated functional probes,
+not an independent performance comparison. Two concurrent sequences also pass,
+with two native slots active together. No poly.2/poly.4 speed comparison or
+Linux/HIP/SYCL build is claimed by this Windows CUDA validation.
+
+## Configurable KV management blocks
+
+PolyStrata accepts `--kvmem-block-tokens 32|64` in the native worker and
+`tools/polystrata/server.py`. The Windows launcher exposes `-BlockTokens 32|64`,
+and the console JSON field is the integer `BlockTokens`. Omission preserves 64.
+The console's PolyStrata resource settings provide the same choice and verify
+the worker capability before launch. Native `KVMEM_BLOCKS` and `/props` report
+the effective value. Changing the value requires a service restart; all native
+slots, MTP state and retained histories in that process share it.
+
+B, R, sink and recent remain token counts. B must be at least 128; B/R/sink/recent
+must align to the selected block size, R/recent must contain at least one block,
+sink + recent must fit B, B + R must fit context, and prefill must not exceed R.
+For example, B=160, R=32, sink=32, recent=32, prefill=32 is valid with 32-token
+blocks. Native Q8 channel groups and the attention sampling cadence stay at 32;
+they are independent of KV management blocks.
+
+Smaller blocks refine recall and eviction boundaries. At fixed token budgets
+they do not halve the native KV payload. Mean-K entries, feedback page columns,
+PageSoftmax workspace and host catalogs grow with the block count; host/SSD
+records become smaller. Checkpoint layout identity includes the block size, so
+incompatible views are rejected. Existing SSD storage remains process-local.
+
+For the 35B Qwen3.5 MoE shape (10 full-attention layers, 2 KV heads, head dimension
+256), 200,000 tokens require 3,125 blocks at 64 or 6,250 at 32. With a resident
+B+R of 34,816 tokens, one active slot and an exactly 200,000-token configured
+context, the extra persistent GPU workspaces are approximately 28.2 MiB without
+MTP, or 29.2 MiB with MTP. If the configured context is 262,144 while the actual
+conversation is 200,000, the estimate becomes approximately 32.9/34.0 MiB.
+If all 200,000 tokens are resident (B+R=200,000), the estimate is approximately
+150.9 MiB without MTP or 157.0 MiB with MTP. Logical context and resident KV
+capacity therefore need to be distinguished when comparing memory use.
+These are allocation estimates for this shape/settings, excluding CPU catalogs;
+expert caching can consume released VRAM and hide the delta in total GPU usage.
+They are not quality or end-to-end throughput guarantees.
+
+The implementation is carried as the ordered `block-tokens` patch after
+`elastic-mtp`. Verification covers both kernel specializations against an
+independent causal softmax reference, partial Mean-K blocks, CUDA Graph reuse,
+accepted MTP prefixes, native KV archives, layout rejection and launch/UI paths.
+The model HTTP probe in `tools/polystrata/block_tokens_api_test.py` sends the
+document first and the question separately, saves requests/responses and per-turn
+timings, and requires real prefix reuse and a bounded native Query replay.
+
+The 2026-10-25 RTX 5050 Laptop allocation audit used Q8 KV, context 262,144,
+B=32,768, R=2,048 and no MTP. Both block sizes reserved 400 MiB of native KV
+and mapped the same 80 MiB initially / 400 MiB at full resident capacity.
+The 32-token configuration left 3,698 MiB for the initial expert cache versus
+3,732 MiB at 64; both held the same 255 MiB free-memory target. This approximately
+34 MiB shift into other allocations agrees with the workspace estimate, and
+demonstrates why total GPU usage alone can hide the block-size overhead.
+
+For strict MTP numerical tests, expert placement and scheduling are held fixed
+for both prefix evaluations; ordinary production routing is unchanged. Automatic
+CPU/GPU scheduling made the original repeated-prefix byte comparison unstable
+at both block sizes. Fixed routing produced identical accepted KV, recurrent
+state and Mean-K, including the additional 31- and 159-token prefix cases.
 
 ## Attention acceleration
 
@@ -48,6 +141,49 @@ See the [RTX 5050 performance report](polystrata-performance-20261024.md) for
 paired timings, correctness checks, remaining gaps and runtime provenance.
 The [32K follow-up](polystrata-32k-performance-20261024.md) records the next
 feedback-kernel and graph optimization, all paired reruns and their variability.
+
+## Block-size validation on 2026-10-25
+
+The final GPU matrix used RTX 5050 Laptop (device UUID retained in local evidence) with
+Cyber-Tiel-Coder-35B-A3B-MTP-UD-Q4_K_XL. CUDA 13.2 / MSVC builds used eight
+parallel compilation jobs. Earlier RTX 5060 Ti diagnostics are kept separately.
+
+- Both block sizes passed independent F16/Q8 causal-softmax references, Mean-K
+  boundary cases and CUDA Graph coordinate replay. The native history/session
+  policy tests also passed.
+- Full 32/64 Q8 MTP accepted-prefix matrices passed with graphs; 32 F16 passed
+  without graphs. Checks include native KV bytes, recurrent state, Mean-K,
+  incompatible checkpoint layout rejection, rejected-token sampling, reset and
+  bounded Query/replay. The 32 Q8 run also passed SSD restore and acceptance-fault
+  invalidation/rebuild.
+- 32-token elastic workspace cycles, rollback/retry, cache growth, Pressure and
+  Query/replay passed. The MTP/elastic combination preserved logits, draft
+  probabilities and accepted state across full/narrow workspace mappings, then
+  completed 48 growth cycles. A 4,161-token archive test verified full native
+  bytes and a dirty partial tail across the 4,096-row staging boundary.
+- The 32-token Q8 HTTP concurrency test reached two simultaneous active slots;
+  distinct conversation labels stayed isolated and both follow-ups reused prefixes
+  (362 and 386 cached tokens).
+- The console, frontend, browser and Windows launcher checks passed, including
+  numeric draft persistence, native capability/actual-value agreement, old-worker
+  rejection and default-64 behavior. All seven native patch layers reproduced
+  their recorded tree hashes through the repository's preparation checker.
+
+The two-stage HTTP probe used identical 12,682-token reference prompts, B=2,048,
+R=512, Q8 KV, two MTP drafts and eight CPU threads. Both document replies were
+`Received.`; both question replies returned the expected reference key. Each
+question reused 12,684 prefix tokens, captured native Query `[12689,12705)` and
+replayed `[12689,12714)`. Requests, responses, document text and native logs were
+saved separately for each run.
+
+| Block tokens | Document HTTP time | Question HTTP time |
+| --- | ---: | ---: |
+| 32 | 90.875 s | 3.140 s |
+| 64 | 87.625 s | 1.656 s |
+
+These are single-run smoke-test timings, not a throughput benchmark or a general
+quality comparison. The 200K figures above are memory estimates, not a 200K recall
+test. HTTP concurrency was rerun at C2; C4/C8 and image requests were not rerun.
 
 ## Validation on 2026-10-23
 

@@ -7,13 +7,14 @@ for name in ('source','worker','model','tokenizer','out'):ap.add_argument('--'+n
 ap.add_argument('--gpu',required=True)
 ap.add_argument('--port',type=int,default=18287)
 ap.add_argument('--lanes',type=int,choices=range(2,9),default=2)
+ap.add_argument('--block-tokens',type=int,choices=(32,64),default=64)
 ap.add_argument('--q8',action='store_true');a=ap.parse_args()
 for name in ('source','worker','model','tokenizer','out'):setattr(a,name,getattr(a,name).resolve())
 out=a.out;out.mkdir(parents=True,exist_ok=True)
 port=a.port;base=f'http://127.0.0.1:{port}';source=a.source
 cmd=[sys.executable,str(Path(__file__).with_name('server.py')),'--source',str(source),'--worker',str(a.worker),
  '--model',str(a.model),'--tokenizer',str(a.tokenizer),
- '--gpu',a.gpu,'--port',str(port),'--context','8192','--budget','512','--reserve','512',
+ '--gpu',a.gpu,'--port',str(port),'--kvmem-block-tokens',str(a.block_tokens),'--context','8192','--budget','512','--reserve','512',
  '--log',str(out/'native.log'),'--host-mib','256','--prefill','128','--max-tokens','64','--concurrency',str(a.lanes),'--retained-sessions',str(max(4,a.lanes+1)),
  '--mtp-drafts','2','--kv-type','q8_0' if a.q8 else 'f16','--','--threads','8','--stage-mib','256','--tail-skip','0','--expert-swaps','0','--kvmem-verify-transfers']
 # Verify-transfers belongs to native diagnostics; the wrapper intentionally owns all --kvmem-* flags.

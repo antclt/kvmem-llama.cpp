@@ -1,7 +1,7 @@
 """Local, independently hosted configuration UI and owned inference-process controller.
 
 Uses the selected checkout's canonical launcher in DryRun mode; never constructs
-shell command strings. No third-party Python dependencies. Windows launch support.
+shell command strings. System telemetry uses psutil. Windows launch support.
 """
 import argparse
 import copy
@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from console_chat import ChatBridge, MAX_BODY
+from console_hardware import SystemDiskSampler
 from model_health import request_parameters, unchecked
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,11 +36,105 @@ DEFAULTS = dict(Backend='ninfer', Model='', Worker='', Gpu='', Context=262144,
                 Budget=32768, Reserve=1024, HostMiB=16384, Prefill=128,
                 MaxTokens=1024, Port=18200, ListenHost='127.0.0.1',
                 SinkTokens=12288, RecentTokens=1024)
+# Initial UI recipes; never merge engine-specific flags into saved configurations.
+ENGINE_DEFAULTS = {'ninfer': {'Context': 262144,
+            'Budget': 47104,
+            'Reserve': 2048,
+            'MaxTokens': 0,
+            'ThinkingBudget': 16384,
+            'ReasoningEffort': 'xhigh',
+            'PreserveThinking': True,
+            'HostMiB': 12288,
+            'SinkTokens': 12288,
+            'RecentTokens': 1024,
+            'Concurrency': 1,
+            'QueryScorer': 'page-softmax',
+            'ScoreAggregation': 'mean',
+            'GraphAlpha': 0.2,
+            'Lrfu': False,
+            'QueryMaxTokens': 512,
+            'QueryReplayMaxTokens': 2048,
+            'ThinkingMode': 'default',
+            'KvType': 'int8',
+            'Prefill': 256,
+            'DraftTokens': 4,
+            'DraftPolicy': 'adaptive',
+            'NgramDrafts': 31,
+            'NgramMinMatch': 12,
+            'FastPrefill': True,
+            'DeviceProfile': 'auto',
+            'Vision': True,
+            'VisionResidency': 'cpu',
+            'VisionTokens': 1024,
+            'Backend': 'ninfer',
+            'SpeculativeMode': 'mtp',
+            'RetainedSessions': 1},
+ 'llamacpp': {'Context': 262144,
+              'Budget': 47104,
+              'Reserve': 2048,
+              'MaxTokens': 0,
+              'ThinkingBudget': 16384,
+              'ReasoningEffort': 'xhigh',
+              'PreserveThinking': True,
+              'HostMiB': 12288,
+              'SinkTokens': 12288,
+              'RecentTokens': 1024,
+              'Concurrency': 1,
+              'QueryScorer': 'page-softmax',
+              'ScoreAggregation': 'mean',
+              'GraphAlpha': 0.2,
+              'Lrfu': False,
+              'QueryMaxTokens': 512,
+              'QueryReplayMaxTokens': 2048,
+              'ThinkingMode': 'on',
+              'KvTypeK': 'q8_0',
+              'KvTypeV': 'q8_0',
+              'Prefill': 256,
+              'DraftTokens': 3,
+              'DraftPolicy': 'fixed',
+              'Vision': True,
+              'VisionResidency': 'cpu',
+              'VisionTokens': 1024,
+              'Backend': 'llamacpp',
+              'SpeculativeMode': 'mtp',
+              'RetainedSessions': 1},
+ 'polystrata': {'Context': 262144,
+                'Budget': 47104,
+                'Reserve': 2048,
+                'MaxTokens': 0,
+                'ThinkingBudget': 16384,
+                'ReasoningEffort': 'xhigh',
+                'PreserveThinking': True,
+                'HostMiB': 12288,
+                'SinkTokens': 12288,
+                'RecentTokens': 1024,
+                'Concurrency': 1,
+                'QueryScorer': 'page-softmax',
+                'ScoreAggregation': 'mean',
+                'GraphAlpha': 0.2,
+                'Lrfu': False,
+                'QueryMaxTokens': 512,
+                'QueryReplayMaxTokens': 2048,
+                'ThinkingMode': 'on',
+                'KvType': 'q8_0',
+                'Prefill': 512,
+                'DraftTokens': 2,
+                'DraftPolicy': 'adaptive',
+                'Vision': False,
+                'VramReserveMiB': 256,
+                'Backend': 'polystrata',
+                'SpeculativeMode': 'mtp',
+                'RetainedSessions': 2,
+                'WorkerArgs': ['--elastic-experts-headroom',
+                               '--elastic-headroom-mib',
+                               '128',
+                               '--elastic-physical-reserve-mib',
+                               '512']}}
 STRINGS = {'Tokenizer','PolystrataSource','Python','VisionWorker','Mmproj','QueryScorer','Backend', 'Model', 'Worker', 'Gpu', 'ListenHost', 'KvType', 'KvTypeK', 'KvTypeV', 'DiskPath',
            'VisionResidency',
            'DeviceProfile', 'ScoreAggregation', 'QueryScorer', 'ApiKey', 'ModelAlias', 'LogLevel',
            'ChatTemplateFile', 'ThinkingMode', 'ReasoningEffort', 'SpeculativeMode', 'DraftPolicy', 'DraftModel'}
-INTEGERS = {'VramReserveMiB', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
+INTEGERS = {'BlockTokens', 'VramReserveMiB', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
             'MtpDrafts', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions',
             'VisionTokens', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'DiskMiB', 'DraftTokens',
             'QueryMaxTokens', 'QueryReplayMaxTokens', 'ReplayMaxTokens'}
@@ -70,6 +165,12 @@ def normalize(data, backends):
     p = copy.deepcopy(params)
     if p.get('Backend') not in NATIVE or p.get('Backend') not in backends:
         raise ValueError('This backend is not installed in the selected backend checkout')
+    if p['Backend'] == 'polystrata':
+        p.setdefault('BlockTokens', 64)
+        if type(p['BlockTokens']) is not int or p['BlockTokens'] not in (32, 64):
+            raise ValueError('PolyStrata BlockTokens must be 32 or 64')
+    elif 'BlockTokens' in p:
+        raise ValueError('BlockTokens configures PolyStrata in this console')
     for key, value in p.items():
         if key in STRINGS and (not isinstance(value, str) or '\x00' in value or len(value) > 8192):
             raise ValueError(f'{key} must be a string without NUL characters')
@@ -118,8 +219,6 @@ def normalize(data, backends):
         raise ValueError('NInfer supports default/off at startup; thinking-on is selected by requests')
     if p.get('ReasoningEffort') not in (None, 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'):
         raise ValueError('Unsupported ReasoningEffort')
-    if p['Backend'] not in {'ninfer','polystrata'} and {'ReasoningEffort', 'PreserveThinking'} & p.keys():
-        raise ValueError('ReasoningEffort and PreserveThinking configure NInfer or PolyStrata only')
     if p.get('ThinkingMode') == 'off' and p.get('ReasoningEffort'):
         raise ValueError('ReasoningEffort conflicts with ThinkingMode off')
     if p['Backend'] != 'llamacpp' and {'KvTypeK', 'KvTypeV'} & p.keys():
@@ -141,6 +240,10 @@ def normalize(data, backends):
             raise ValueError('DraftTokens conflicts with MtpDrafts')
         if 'DraftPolicy' in p and 'AdaptiveMtp' in p and (policy == 'adaptive') != p['AdaptiveMtp']:
             raise ValueError('DraftPolicy conflicts with AdaptiveMtp')
+        if p['Backend'] == 'polystrata' and mode == 'mtp':
+            policy = 'adaptive'
+            p['DraftPolicy'] = policy
+            p.pop('AdaptiveMtp', None)
         if mode == 'none':
             if count or policy == 'adaptive' or p.get('NgramDrafts') or p.get('DraftModel'):
                 raise ValueError('Disabled speculative decoding cannot have active draft options')
@@ -165,7 +268,7 @@ def normalize(data, backends):
     if p['Backend']=='polystrata':
         if p.get('KvType','f16') not in {'f16','q8_0'}: raise ValueError('PolyStrata KV format must be f16 or q8_0')
         if ',' in p.get('Gpu',''): raise ValueError('PolyStrata currently supports one GPU')
-        if p.get('ReasoningEffort') not in (None,'none','low','medium','high'): raise ValueError('PolyStrata reasoning effort must be none, low, medium or high')
+        if p.get('ReasoningEffort') not in (None,'none','low','medium','high','xhigh'): raise ValueError('PolyStrata reasoning effort must be none, low, medium or high')
         if p.get('ThinkingMode')=='on' and p.get('ReasoningEffort')=='none': raise ValueError('ThinkingMode conflicts with ReasoningEffort none')
     gpu = p.get('Gpu', '')
     if gpu and not all(re.fullmatch(r'GPU-[0-9a-fA-F-]{8,64}', x) for x in gpu.split(',')):
@@ -339,7 +442,7 @@ class Controller:
         lines = text.split('\n')
         self.observed_pending = lines.pop()
         for line in lines:
-            for marker in ('KVMEM_SCORING ', 'KVMEM_LIMITS '):
+            for marker in ('KVMEM_SCORING ', 'KVMEM_LIMITS ', 'KVMEM_BLOCKS '):
                 if marker not in line:
                     continue
                 for key, value in re.findall(r'(\w+)=([^\s]+)', line.split(marker, 1)[1]):
@@ -349,7 +452,7 @@ class Controller:
                         self.observed_scoring[key] = value == '1'
                     elif key in {'lambda', 'top_frac', 'graph_alpha'}:
                         self.observed_scoring[key] = float(value)
-                    elif key in {'query_max_tokens', 'query_replay_max_tokens'}:
+                    elif key in {'query_max_tokens', 'query_replay_max_tokens', 'block_tokens'}:
                         self.observed_scoring[key] = int(value)
 
     def worker_defaults(self):
@@ -384,8 +487,7 @@ class Controller:
         if self.draft_path.exists():
             return without_secrets(json.loads(self.draft_path.read_text(encoding='utf-8')))
         backend = DEFAULTS['Backend'] if DEFAULTS['Backend'] in self.backends else self.backends[0]
-        return {'schema_version': 1, 'parameters': {**DEFAULTS, 'Backend': backend,
-                'Prefill': 512 if backend == 'polystrata' else DEFAULTS['Prefill']}}
+        return {'schema_version': 1, 'parameters': {**DEFAULTS, **copy.deepcopy(ENGINE_DEFAULTS[backend])}}
 
     def save(self, data):
         clean = without_secrets(normalize(data, self.backends))
@@ -451,6 +553,13 @@ class Controller:
             native_argv = result.get('native_argv', argv)
             result['worker'] = self.worker_capabilities(native_argv[0], params['Backend'])
             result['resolved_scoring'] = self.scoring_from_argv(native_argv)
+            if params['Backend'] == 'polystrata':
+                block = params.get('BlockTokens', 64)
+                if block not in result['worker'].get('block_tokens', {}).get('supported', []):
+                    raise ValueError('PolyStrata worker does not support BlockTokens; update the backend')
+                if '--kvmem-block-tokens' not in native_argv or int(native_argv[native_argv.index('--kvmem-block-tokens') + 1]) != block:
+                    raise ValueError('PolyStrata BlockTokens differs from the native launch plan')
+                result['resolved_scoring']['block_tokens'] = block
             return result
         finally:
             Path(name).unlink(missing_ok=True)
@@ -988,6 +1097,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, self.control.model_directories())
             elif path == '/api/launcher/status':
                 self.reply(200, self.control.status())
+            elif path == '/api/launcher/hardware':
+                self.reply(200, self.server.hardware.snapshot())
             elif path == '/api/launcher/log':
                 self.reply(200, {'text': self.control.log_tail()})
             elif path == '/api/launcher/logs':
@@ -1166,6 +1277,7 @@ def main():
             args.port = port
     control.port = server.server_port
     server.control, server.gpus = control, gpu_inventory()
+    server.hardware = SystemDiskSampler().start()
     url = f'http://127.0.0.1:{server.server_port}/monitor/' + ('?lang=en' if args.language == 'en' else '')
     print(f'KVMem console: {url}', flush=True)
     if args.language == 'en':
@@ -1189,6 +1301,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        server.hardware.close()
         control.stop(); server.server_close()
 
 

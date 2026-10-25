@@ -54,7 +54,19 @@ class WrapperTest(unittest.TestCase):
                         self.assertEqual('--no-kvmem-lrfu' in argv, history == '--no-lrfu',
                                          'Explicit off must override the native cosine default')
                         self.assertEqual(argv[argv.index('--kvmem-query-replay-max-tokens')+1], '256')
+            for size in (32,64):
+                configured=run(['--kvmem-block-tokens',str(size),'--budget','128','--reserve',str(size),
+                                '--prefill',str(size),'--sink','0','--recent',str(size)])
+                self.assertEqual(configured.returncode,0,configured.stderr)
+                argv=json.loads(configured.stdout)['args']
+                self.assertEqual(argv[argv.index('--kvmem-block-tokens')+1],str(size))
+            for invalid in (['--kvmem-block-tokens','16'],['--kvmem-block-tokens','32','--budget','96'],
+                            ['--kvmem-block-tokens','64','--reserve','32'],
+                            ['--kvmem-block-tokens','32','--sink','16'],
+                            ['--','--kvmem-block-tokens','32']):
+                self.assertEqual(run(invalid).returncode,2,invalid)
             cfg = json.loads(valid.stdout)
+            self.assertEqual(cfg['args'][cfg['args'].index('--kvmem-block-tokens')+1],'64')
             self.assertEqual(cfg["args"][1], str(root/"model with spaces.gguf"))
             self.assertEqual(cfg["gpu"], 0)
             self.assertEqual(cfg["env"]["CUDA_DEVICE_ORDER"], "PCI_BUS_ID")
@@ -112,8 +124,11 @@ class WrapperTest(unittest.TestCase):
             self.assertEqual(disk.returncode,0,disk.stderr)
             disk_args=json.loads(disk.stdout)["args"]
             self.assertEqual(disk_args[disk_args.index("--kvmem-disk-mib")+1],"512")
+            unlimited = run(["--max-tokens","0"])
+            self.assertEqual(unlimited.returncode,0,unlimited.stderr)
+            self.assertIsNone(json.loads(unlimited.stdout)["kvmem_default_max_tokens"])
             for extra in (["--budget","0"], ["--budget","129"], ["--reserve","65"], ["--context","2147483648"],
-                          ["--prefill","8193"], ["--max-tokens","0"], ["--recent","0"], ["--sink","4096"],
+                          ["--prefill","8193"], ["--max-tokens","-1"], ["--recent","0"], ["--sink","4096"],
                           ["--host-mib","0"], ["--port","65536"], ["--lrfu-lambda","nan"], ["--lrfu-top-frac","0"],
                           ["--host","0.0.0.0"], ["--gpu","GPU-a,GPU-b"], ["--concurrency","9"],
                           ["--gpu","GPU-a,GPU-a","--concurrency","2"], ["--concurrency","9"],

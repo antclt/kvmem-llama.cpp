@@ -1,8 +1,8 @@
 diff --git a/docs/BACKENDS.md b/docs/BACKENDS.md
-index 028ccd1..2189073 100644
+index 9e6399a8f2689d42b85c433a5a6f1ce63df237b9..fa5c1962d1c8eb59d77b35cf65581c0aa01a8858 100644
 --- a/docs/BACKENDS.md
 +++ b/docs/BACKENDS.md
-@@ -144,6 +144,32 @@ the previous request's high water. Parked sessions retain their Host-backed hist
+@@ -150,6 +150,32 @@ the previous request's high water. Parked sessions retain their Host-backed hist
  steps with 1024 rows of lookahead. `poly_elastic_test MODEL.gguf --kv-reclaim-test` checks accepted KV, recurrent
  state, statistics and restored-session logits across immediate reclamation.
  
@@ -36,10 +36,10 @@ index 028ccd1..2189073 100644
  
  There are two levels.
 diff --git a/src/poly/engine.cpp b/src/poly/engine.cpp
-index 29517a2..9ec3a7b 100644
+index 58b966042c1ad3793f472cb3d3c48810c0d5989b..6787ad20fe3292f7d3482cd8f029801df7caa70f 100644
 --- a/src/poly/engine.cpp
 +++ b/src/poly/engine.cpp
-@@ -9,6 +9,7 @@
+@@ -10,6 +10,7 @@
  #include "mmq.hpp"
  #include "qwen35.hpp"
  #include "runtime.hpp"
@@ -47,7 +47,7 @@ index 29517a2..9ec3a7b 100644
  #include "strata/poly/kernels.hpp"
  #include "strata/kernels/native_mmvq.hpp"
  
-@@ -763,7 +764,10 @@ void Engine::cover(int64_t end) {
+@@ -824,7 +825,10 @@ void Engine::cover(int64_t end) {
          if (want > k.mapped) more += want - k.mapped;   // trim_card_kv() leaves a piece it cuts through
          held += k.mapped;
      }
@@ -59,7 +59,7 @@ index 29517a2..9ec3a7b 100644
          size_t free_b = 0, total_b = 0;
          ck(cudaMemGetInfo(&free_b, &total_b), "cudaMemGetInfo");
          const size_t quarter = (size_t(std::max(reserve_mib_, 0)) << 20) / 4;
-@@ -775,6 +779,7 @@ void Engine::cover(int64_t end) {
+@@ -836,6 +840,7 @@ void Engine::cover(int64_t end) {
      for (Kv& k : kv_)
          vmm_map(k, size(k), (size_t) ((kKvGrow + k.per - 1) / k.per) * k.bytes, "the attention cache");
      kv_rows_ = rows;
@@ -67,7 +67,7 @@ index 29517a2..9ec3a7b 100644
  }
  
  int64_t Engine::kv_rows_for(int64_t end) const {
-@@ -887,6 +892,7 @@ void Engine::shrink_cache(size_t bytes) {
+@@ -948,6 +953,7 @@ void Engine::shrink_cache(size_t bytes) {
          --cached_;
      }
      ck(cudaStreamSynchronize(cs(st_)), "the expert cache");
@@ -75,7 +75,7 @@ index 29517a2..9ec3a7b 100644
      vmm_unmap(arena_, cut);
      if (cut > kTail) zero_vram(exp_ + end, kTail);
      exp_at_ = std::min(exp_at_, end);
-@@ -931,6 +937,37 @@ void Engine::elastic_info() const {
+@@ -992,6 +998,37 @@ void Engine::elastic_info() const {
      std::printf("INFO elastic_experts=1 expert_slots=%d expert_cache_mib=%lld expert_cache_mapped_mib=%zu "
                  "elastic_workspace_mib=%zu elastic_workspace_full_mib=%zu vram_free_mib=%lld\n", cached_,
                  (long long)(exp_at_ >> 20), arena_.mapped >> 20, mapped >> 20, full >> 20, (long long)vram_free_mib());
@@ -113,7 +113,7 @@ index 29517a2..9ec3a7b 100644
  }
  
  void Engine::elastic_report(const char* phase, double ms) {
-@@ -957,6 +994,7 @@ void Engine::elastic_workspace(bool full) {
+@@ -1018,6 +1055,7 @@ void Engine::elastic_workspace(bool full) {
      if (full) {
          size_t need = 0, free_b = 0, total_b = 0;
          for (const auto& w : elastic_workspaces_) need += w.full - w.mapped;
@@ -121,7 +121,7 @@ index 29517a2..9ec3a7b 100644
          ck(cudaMemGetInfo(&free_b, &total_b), "elastic workspace admission");
          const size_t guard = size_t(std::max(reserve_mib_, 256)) << 20;
          if (need + guard > free_b) shrink_cache(need + guard - free_b);
-@@ -982,6 +1020,10 @@ void Engine::elastic_workspace(bool full) {
+@@ -1043,6 +1081,10 @@ void Engine::elastic_workspace(bool full) {
      staged_il_ = -1;
      elastic_full_ = full;
      elastic_ticks_ = 0;
@@ -132,7 +132,7 @@ index 29517a2..9ec3a7b 100644
      elastic_report(full ? "prefill" : "decode", ms_since(started));
  }
  
-@@ -993,6 +1035,54 @@ void Engine::elastic_tick() {
+@@ -1054,6 +1096,54 @@ void Engine::elastic_tick() {
      ck(cudaMemGetInfo(&free_b, &total_b), "elastic cache budget");
      const size_t guard = size_t(std::max(reserve_mib_, 256)) << 20;
      const auto started = Clock::now();
@@ -187,7 +187,7 @@ index 29517a2..9ec3a7b 100644
      if (free_b < guard / 2) {
          shrink_cache(guard - free_b);
          held_is_budget();
-@@ -1148,6 +1238,9 @@ void Engine::load_moe(int il, bool shared) {
+@@ -1209,6 +1299,9 @@ void Engine::load_moe(int il, bool shared) {
  
  // The engine for a model file: its general.architecture says which.
  std::unique_ptr<Engine> Engine::open(const Options& o) {
@@ -198,10 +198,10 @@ index 29517a2..9ec3a7b 100644
      const MetaValue* arch = file.get("general.architecture");
      const std::string name = arch ? arch->s : std::string();
 diff --git a/src/poly/engine.hpp b/src/poly/engine.hpp
-index 3710f90..676fdb7 100644
+index 218fd16cf40475c66166c799cd9fa2b72d691273..4d99e8ace69030f5742111f3f11c9daa0f46947b 100644
 --- a/src/poly/engine.hpp
 +++ b/src/poly/engine.hpp
-@@ -54,6 +54,9 @@ struct Options {
+@@ -58,6 +58,9 @@ struct Options {
      std::string profile;          ///< expert use counts; orders the expert cache, and save_profile() adds to it
      bool gpu_experts = true;
      bool elastic_experts = false; ///< lend idle prompt workspace to experts during solo Qwen35 MoE decode
@@ -211,7 +211,7 @@ index 3710f90..676fdb7 100644
      bool dump = false;            ///< print a checksum of every stage, for comparing against llama.cpp
      // A prompt batch.  More tokens a call and a larger staging buffer read a prompt faster, and both take VRAM
      // that the expert cache, and so decoding, does without.
-@@ -526,6 +529,7 @@ protected:
+@@ -534,6 +537,7 @@ protected:
      void* elastic_alloc(size_t bytes, size_t decode_bytes, const char* what);
      void elastic_workspace(bool full);
      void elastic_tick();
@@ -219,7 +219,7 @@ index 3710f90..676fdb7 100644
      void elastic_report(const char* phase, double ms = 0);
      int room(int n) const;
      int room_key(int n) const;
-@@ -561,10 +565,16 @@ protected:
+@@ -569,10 +573,16 @@ protected:
      friend struct ElasticTestAccess;
  #ifdef STRATA_ELASTIC_TESTING
      int elastic_fail_after_ = -1;
@@ -237,10 +237,10 @@ index 3710f90..676fdb7 100644
      void vmm_map(Mapped& m, size_t bytes, size_t piece, const char* what);
      void vmm_unmap(Mapped& m, size_t bytes);
 diff --git a/src/poly/main.cpp b/src/poly/main.cpp
-index ea768e8..1222240 100644
+index 219e4d22a315f601e463ec6289ad4baaf6b1c5a5..fcb8acec0041bb4426dd1980bfe479220da958df 100644
 --- a/src/poly/main.cpp
 +++ b/src/poly/main.cpp
-@@ -1352,6 +1352,9 @@ void usage() {
+@@ -1353,6 +1353,9 @@ void usage() {
                   "                         exit and by --serve after an answer, every 10 s at most\n"
                   "  --no-gpu-experts       keep every routed expert on the CPU\n"
                   "  --elastic-experts      lend idle prompt workspace to experts during solo Qwen35 MoE decode\n"
@@ -250,7 +250,7 @@ index ea768e8..1222240 100644
                   "  --any-node             on a PC with several NUMA nodes, let the CPU threads run on any of them\n"
                   "                         (default: on the node whose memory holds most of the experts)\n"
                   "  --window N             the most tokens that go through the model at once while an answer is\n"
-@@ -1479,6 +1482,9 @@ int main(int argc, char** argv) {
+@@ -1486,6 +1489,9 @@ int main(int argc, char** argv) {
          else if (a == "--expert-profile") o.profile = val();
          else if (a == "--no-gpu-experts") o.gpu_experts = false;
          else if (a == "--elastic-experts") o.elastic_experts = true;
@@ -262,7 +262,7 @@ index ea768e8..1222240 100644
          else if (a == "--kv-whole") o.kv_grow = false;
 diff --git a/src/poly/windows_vram.hpp b/src/poly/windows_vram.hpp
 new file mode 100644
-index 0000000..8647e7d
+index 0000000000000000000000000000000000000000..8647e7d22c25f235c4c9761fe2cd13d67805cfca
 --- /dev/null
 +++ b/src/poly/windows_vram.hpp
 @@ -0,0 +1,78 @@
@@ -345,7 +345,7 @@ index 0000000..8647e7d
 +namespace strata::poly { inline VramBudget windows_vram(int){return {};} }
 +#endif
 diff --git a/tools/poly_elastic_test.cpp b/tools/poly_elastic_test.cpp
-index d1a2128..d8fe450 100644
+index d1a21289bf7857bfbe9bf2a6885d1ddf356a19a7..d8fe450e7ae6e37be944f508839649fff7f98b7f 100644
 --- a/tools/poly_elastic_test.cpp
 +++ b/tools/poly_elastic_test.cpp
 @@ -27,6 +27,62 @@ struct KvmemTestAccess {

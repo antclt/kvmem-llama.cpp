@@ -12,12 +12,12 @@ function Setting($name,$default) { if($Parameters.ContainsKey($name)) { $Paramet
 foreach($name in @('StageLayers','FastPrefill','NgramDrafts','NgramMinMatch','DeviceProfile','KvTypeK','KvTypeV','AdaptiveMtp','LogLevel')) {
     if($Parameters.ContainsKey($name)) { throw "PolyStrata does not expose -$name in this integration" }
 }
-if((Setting 'ReasoningEffort' '') -notin @('','none','low','medium','high')) { throw 'PolyStrata reasoning effort must be none, low, medium or high' }
+if((Setting 'ReasoningEffort' '') -notin @('','none','low','medium','high','xhigh')) { throw 'PolyStrata reasoning effort must be none, low, medium or high' }
 if(((Setting 'ThinkingMode' 'default') -eq 'off' -and (Setting 'ReasoningEffort' '') -notin @('','none')) -or ((Setting 'ThinkingMode' 'default') -eq 'on' -and (Setting 'ReasoningEffort' '') -eq 'none')) { throw 'ThinkingMode conflicts with ReasoningEffort' }
 $mode=Setting 'SpeculativeMode' $(if((Setting 'MtpDrafts' 0) -gt 0){'mtp'}else{'none'})
 $count=Setting 'DraftTokens' (Setting 'MtpDrafts' $(if($mode -eq 'mtp'){2}else{0}))
 if($Parameters.ContainsKey('MtpDrafts') -and $Parameters.ContainsKey('DraftTokens') -and $Parameters.MtpDrafts -ne $count) { throw 'DraftTokens conflicts with MtpDrafts' }
-if($mode -notin @('none','mtp') -or ($mode -eq 'none' -and $count) -or ($mode -eq 'mtp' -and ($count -lt 1 -or $count -gt 3)) -or (Setting 'DraftPolicy' 'fixed') -ne 'fixed' -or (Setting 'DraftModel' '')) { throw 'PolyStrata supports fixed embedded MTP with 1..3 drafts in solo execution; native batch uses ordinary decode' }
+if($mode -notin @('none','mtp') -or ($mode -eq 'none' -and $count) -or ($mode -eq 'mtp' -and ($count -lt 1 -or $count -gt 3)) -or (Setting 'DraftPolicy' 'adaptive') -notin @('fixed','adaptive') -or (Setting 'DraftModel' '')) { throw 'PolyStrata supports native adaptive embedded MTP with a 1..3 draft ceiling in solo execution; native batch uses ordinary decode' }
 $gpu=Setting 'Gpu' $env:CUDA_VISIBLE_DEVICES
 if($gpu -notmatch '^GPU-[0-9a-fA-F-]{8,64}$') { throw 'PolyStrata requires one GPU UUID' }
 $worker=Setting 'Worker' (Join-Path $Root 'workers/polystrata/strata-poly.exe')
@@ -37,9 +37,10 @@ if(!(Test-Path -LiteralPath $python -PathType Leaf)) {
 }
 $worker=(Resolve-Path -LiteralPath $worker).Path;$model=(Resolve-Path -LiteralPath $model).Path;$python=(Resolve-Path -LiteralPath $python).Path
 $arguments=@((Join-Path $Root 'tools/polystrata/server.py'),'--source',$tree,'--worker',$worker,'--model',$model,'--gpu',$gpu)
+$arguments+=@('--kvmem-block-tokens',[string](Setting 'BlockTokens' 64))
 $arguments+=@('--thinking-mode',[string](Setting 'ThinkingMode' 'default'))
 if($Parameters.ContainsKey('ThinkingBudget')) { $arguments+=@('--thinking-budget',[string]$Parameters.ThinkingBudget) }
-if(Setting 'ReasoningEffort' '') { $arguments+=@('--reasoning-effort',[string]$Parameters.ReasoningEffort) }
+if(Setting 'ReasoningEffort' '') { $arguments+=@('--reasoning-effort',$(if($Parameters.ReasoningEffort -eq 'xhigh'){'high'}else{[string]$Parameters.ReasoningEffort})) }
 if(Setting 'PreserveThinking' $true) { $arguments+='--preserve-thinking' } else { $arguments+='--no-preserve-thinking' }
 if($tokenizer) {
     if(!(Test-Path -LiteralPath (Join-Path $tokenizer 'tokenizer.json') -PathType Leaf)) {throw "Missing PolyStrata tokenizer: $tokenizer"}
@@ -93,7 +94,7 @@ if(Setting 'DryRun' $false) {
         $safeEnv.STRATA_FATTN=$resolved.env.STRATA_FATTN
         $safeEnv.STRATA_FDEC=$resolved.env.STRATA_FDEC
     } finally { $check.Dispose() }
-    @{effective_settings=@{model_alias=$resolved.model_name;max_tokens=$resolved.kvmem_default_max_tokens;preserve_thinking=$resolved.preserve_thinking;vram_reserve_mib=$resolved.kvmem_vram_reserve_mib};backend='polystrata';native_argv=@($resolved.exe)+@($resolved.args);argv=@($python)+$arguments;environment=$safeEnv;capabilities=@{architecture='qwen35moe';gpu_count=1;batch_mtp=$false;solo_mtp=($count -gt 0);concurrency=(Setting 'Concurrency' 1);kv_type=$kv;storage_quota='process'}} | ConvertTo-Json -Depth 8
+    @{effective_settings=@{block_tokens=[int](Setting 'BlockTokens' 64);draft_policy=$(if($count){'adaptive'}else{'fixed'});draft_tokens=$count;model_alias=$resolved.model_name;max_tokens=$resolved.kvmem_default_max_tokens;preserve_thinking=$resolved.preserve_thinking;vram_reserve_mib=$resolved.kvmem_vram_reserve_mib};backend='polystrata';native_argv=@($resolved.exe)+@($resolved.args);argv=@($python)+$arguments;environment=$safeEnv;capabilities=@{architecture='qwen35moe';gpu_count=1;batch_mtp=$false;solo_mtp=($count -gt 0);concurrency=(Setting 'Concurrency' 1);kv_type=$kv;storage_quota='process'}} | ConvertTo-Json -Depth 8
     return
 }
 $info=New-KVMemProcessInfo $python $arguments

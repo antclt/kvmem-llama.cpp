@@ -305,3 +305,17 @@
 #app .s-launch .l-elastic > .s-title { font-size:16px; margin:0; }
 #app .s-launch .l-elastic > .l-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }
 @media(max-width:700px) { #app .s-launch .l-elastic > .l-fields { grid-template-columns:minmax(0,1fr); } }
+
+/* Rare runtime overrides stay out of the everyday settings surface. */
+#app .s-launch .l-native > .l-engine-summary { color:var(--s-ink); font-size:14px; }
+#app .s-launch .l-engine-badge { display:inline-block; margin-left:10px; padding:3px 8px; border:1px solid var(--s-line); border-radius:6px; color:var(--s-muted); font-size:12px; font-weight:400; }
+#app .s-launch .l-engine-disclosure { margin-top:16px; border:1px solid var(--s-line); border-radius:10px; background:var(--s-soft); padding:0 16px; }
+#app .s-launch .l-engine-disclosure > summary { padding:15px 0; color:var(--s-ink); font-size:14px; cursor:pointer; }
+#app .s-launch .l-engine-status { float:right; color:var(--s-muted); font-size:13px; margin-left:12px; }
+#app .s-launch .l-engine-disclosure[open] > summary { border-bottom:1px solid var(--s-line); }
+#app .s-launch .l-engine-disclosure .l-engine-fields { grid-template-columns:repeat(2,minmax(0,1fr)); margin:18px 0; gap:18px; }
+#app .s-launch .l-engine-fields .l-field { font-size:14px; gap:8px; }
+#app .s-launch .l-engine-fields input,#app .s-launch .l-engine-fields textarea { background:var(--s-surface); }
+#app .s-launch .l-engine-fields textarea { font:13px/1.7 "Cascadia Code",Consolas,monospace; resize:vertical; min-height:100px; }
+#app .s-launch .l-vision-assets { grid-template-columns:1fr; }
+@media(max-width:700px) { #app .s-launch .l-engine-disclosure .l-engine-fields { grid-template-columns:1fr; } }

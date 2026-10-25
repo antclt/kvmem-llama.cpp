@@ -10,6 +10,8 @@ param(
     [string]$ValidationReport,
     [string]$PythonArchive,
     [string]$PythonSha256,
+    [string]$PsutilWheel,
+    [string]$PsutilSha256,
     [string]$LlamaUiDir,
     [string]$PolystrataWorker,
     [string]$PolystrataVisionWorker,
@@ -27,6 +29,7 @@ if(!$LlamaSource) { $LlamaSource=Join-Path $source 'backends/llamacpp' }
 $LlamaSource=(Resolve-Path -LiteralPath $LlamaSource).Path
 if(!(Test-Path -LiteralPath (Join-Path $LlamaSource 'LICENSE') -PathType Leaf)) {throw 'LlamaSource must identify the source used to build LlamaWorker, including its license'}
 if ([bool]$PythonArchive -ne [bool]$PythonSha256) { throw 'Supply both PythonArchive and PythonSha256 for the offline console' }
+if ($PythonArchive -and (!$PsutilWheel -or !$PsutilSha256)) { throw 'Supply PsutilWheel and PsutilSha256 for the offline console' }
 if (!$PolystrataWorker -and ($PolystrataVisionWorker -or $PolystrataPythonRuntime -or $PolystrataGgmlSource -or $PolystrataValidationReport)) {throw 'PolyStrata component options require PolystrataWorker'}
 if ($PolystrataWorker) {
     if ($PythonArchive) {throw 'With PolyStrata, use PolystrataPythonRuntime (including frontend dependencies) instead of the standard-library PythonArchive'}
@@ -181,7 +184,7 @@ if ($LlamaUiDir) {
     Copy-Item -LiteralPath $LlamaUiDir -Destination (Join-Path $OutputDir 'workers/share/kvmem/ui') -Recurse
 }
 if ($PythonArchive) {
-    & (Join-Path $PSScriptRoot 'package-console.ps1') -OutputDir $OutputDir -PythonArchive $PythonArchive -PythonSha256 $PythonSha256
+    & (Join-Path $PSScriptRoot 'package-console.ps1') -OutputDir $OutputDir -PythonArchive $PythonArchive -PythonSha256 $PythonSha256 -PsutilWheel $PsutilWheel -PsutilSha256 $PsutilSha256
     [IO.File]::AppendAllText((Join-Path $OutputDir 'README.md'), "`n## Desktop console`n`nDouble-click START-HERE-EN.bat for English, or START-HERE-CN.bat for Chinese startup instructions. Python is bundled. See START-HERE.txt for details.`n", [Text.UTF8Encoding]::new($false))
 }
 if ($PolystrataWorker) {

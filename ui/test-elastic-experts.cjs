@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 module.exports=async({browser,base,info,stage})=>{
  const context=await browser.newContext({viewport:{width:1440,height:1100}}),page=await context.newPage(),errors=[],previews=[];
  const p={...info.draft.parameters,Backend:'polystrata',Model:'C:/fixture/model.gguf',Gpu:'GPU-elastic-fixture',Context:262144,Budget:32768,Reserve:2048,Prefill:512,RetainedSessions:4,ThinkingMode:'on',QueryScorer:'page-softmax',GraphAlpha:.2,Lrfu:false,
-  WorkerArgs:['--threads','8','--elastic-experts-headroom','--elastic-headroom-mib','384','--elastic-physical-reserve-mib','768']};
+  DraftTokens:2,WorkerArgs:['--threads','8','--elastic-experts-headroom','--elastic-headroom-mib','384','--elastic-physical-reserve-mib','768']};
  let status={state:'ready',pid:12,instance:'elastic-first',active_config:{schema_version:1,parameters:p}};
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/api/launcher/info',r=>r.fulfill({json:{...info,query_scoring_version:2,gpus:[{uuid:p.Gpu,name:'Fixture GPU'}],status,draft:{schema_version:1,parameters:p}}}));
@@ -26,7 +26,7 @@ module.exports=async({browser,base,info,stage})=>{
   assert.deepEqual(await preview(),expected);
   await ceiling.fill('1025');const count=previews.length;await page.locator('[data-action=preview]').click();await page.getByText('检查未通过',{exact:true}).waitFor();assert.equal(previews.length,count);await page.locator('[data-dialog=check] [data-dialog-close]').click();await ceiling.fill('512');
   await page.locator('[data-draft-state]').filter({hasText:'已自动保存'}).waitFor();await page.reload();await mode.waitFor({state:'attached'});await page.getByRole('tab',{name:'弹性专家'}).click();assert.equal(await ceiling.inputValue(),'512');assert.equal(await mode.inputValue(),'headroom');
-  await page.locator('.l-native').evaluate(e=>e.open=true);await raw.fill('[');assert.equal(await mode.isDisabled(),true);assert.equal(await raw.inputValue(),'[');
+  await page.locator('.l-native').evaluate(e=>e.open=true);await page.locator('[data-engine-arguments]').evaluate(e=>e.open=true);await raw.fill('[');assert.equal(await mode.isDisabled(),true);assert.equal(await raw.inputValue(),'[');
   await raw.fill('["--threads","4","--elastic-experts-headroom"]');assert.equal(await mode.inputValue(),'headroom');assert.equal(await ceiling.inputValue(),'128');assert.equal(await reserve.inputValue(),'512');
   await raw.fill('["--elastic-experts","--elastic-experts"]');assert.equal(await mode.isDisabled(),true);
   await raw.fill('["--threads","4","--elastic-experts"]');assert.equal(await mode.inputValue(),'workspace');assert.equal(await mode.isEnabled(),true);

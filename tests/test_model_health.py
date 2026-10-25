@@ -79,6 +79,17 @@ class HealthTests(unittest.TestCase):
         path=self.root/'wrong.ninfer'; gguf(path)
         self.assertFalse(self.inspect(path, 'ninfer')['can_start'])
 
+    def test_llama_projector_selection_and_corruption(self):
+        model=self.root/'model.gguf';gguf(model)
+        self.assertFalse(self.inspect(model,Vision=True)['can_start'])
+        projector=self.root/'mmproj.gguf';gguf(projector)
+        self.assertTrue(self.inspect(model,Vision=True)['can_start'])
+        second=self.root/'other-mmproj.gguf';gguf(second)
+        self.assertFalse(self.inspect(model,Vision=True)['can_start'])
+        self.assertTrue(self.inspect(model,Vision=True,Mmproj=str(projector))['can_start'])
+        projector.write_bytes(b'corrupt')
+        self.assertFalse(self.inspect(model,Vision=True,Mmproj=str(projector))['can_start'])
+
     def test_bonsai_gguf_block_extents(self):
         path = self.root/'bonsai.gguf'
         for kind, size in [(142,34),(143,28)]:

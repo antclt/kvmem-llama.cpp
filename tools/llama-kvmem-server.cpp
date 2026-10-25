@@ -17,6 +17,7 @@
 #include "kvmem/monitor.hpp"
 #include "kvmem/monitor_hardware.hpp"
 #include "kvmem-lane-pool.h"
+#include "kvmem-http-pool.h"
 #include "kvmem-execution-scope.h"
 #include <atomic>
 #include "kvmem-server-devices.h"
@@ -88,6 +89,7 @@ static void print_usage(const char * argv0) {
             "  --no-kvmem-trace           disable diagnostics, overriding the environment\n"
             "  --host HOST                bind address (default 127.0.0.1)\n"
             "  --port N                   port (default 8080)\n"
+            "  --threads-http N           fixed HTTP workers (auto: 2 per inference lane)\n"
             "  --ui-dir PATH              serve static chat UI from PATH\n"
             "  --no-ui                    disable bundled chat UI\n"
             "  -c, --ctx-size N           context size (default 2048)\n"
@@ -1505,16 +1507,8 @@ int main(int argc, char ** argv) {
     httplib::Server svr;
     svr.set_read_timeout(options.timeout, 0);
     svr.set_write_timeout(options.timeout, 0);
-    const int http_workers = options.threads_http_set ?
-        (options.threads_http > 0 ? options.threads_http :
-            std::max(2 * options.parallel, std::max(5, static_cast<int>(std::thread::hardware_concurrency()) - 1))) :
-        std::max(2 * options.parallel, static_cast<int>(CPPHTTPLIB_THREAD_POOL_COUNT));
-    if (options.threads_http_set || options.parallel > 1) {
-        svr.new_task_queue = [http_workers] {
-            return new httplib::ThreadPool(http_workers, static_cast<size_t>(http_workers) + 1024);
-        };
-        kvmem_diag("KVMEM_HTTP threads=%d timeout=%d\n", http_workers, options.timeout);
-    }
+    const int http_workers = kvmem_configure_http_pool(svr, options.parallel, options.threads_http);
+    kvmem_diag("KVMEM_HTTP threads=%d max_threads=%d timeout=%d\n", http_workers, http_workers, options.timeout);
     svr.set_idle_interval(0, 100000);
     svr.set_default_headers({
         {"Access-Control-Allow-Origin", "*"},
@@ -1548,6 +1542,7 @@ int main(int argc, char ** argv) {
     startup["generation_limit"] = generation_limit;
     startup["default_max_tokens"] = std::min(st.n_predict_default > 0 ? st.n_predict_default : generation_limit, generation_limit);
     startup["http"]["threads"] = http_workers;
+    startup["http"]["max_threads"] = http_workers;
     if (!config_sources.contains("--threads-batch") && options.threads > 0)
         startup["sources"]["--threads-batch"] = "inherited:--threads";
     if (!config_sources.contains("--ubatch-size")) startup["sources"]["--ubatch-size"] = "inherited:--batch-size";
@@ -2007,6 +2002,9 @@ int main(int argc, char ** argv) {
         const auto graph_messages=llama_driver_graph_messages(st,inputs,formatted,*parsed_prompt);
         kvmem_diag("KVMEM_TRACE graph_messages spans=%zu structured=%zu\n",graph_messages.size(),inputs.messages.size());
         llama_kvmem_set_graph_messages(graph_messages);
+        st.mm_root_boundary = !inputs.messages.empty() && inputs.messages.front().role == "system" && !graph_messages.empty()
+            ? graph_messages.front().end : 0;
+        st.mm_tail_boundary = graph_messages.size() >= 2 ? graph_messages[graph_messages.size()-2].begin : 0;
         st.history_input_end = uint32_t(toks.size());
         if (st.kparams.lrfu && !formatted.generation_prompt.empty() &&
             prompt.size() >= formatted.generation_prompt.size() &&
@@ -2078,6 +2076,7 @@ int main(int argc, char ** argv) {
 
         const std::string request_id = kvmem_chat_request_id();
         const std::string cid = "chatcmpl-" + request_id;
+        monitor.update(monitor_id, {{"native_request_id", is_responses ? "resp_" + request_id : cid}});
         llama_context * ctx = st.ctx;
         const llama_vocab * vocab = st.vocab;
 
@@ -2118,6 +2117,7 @@ int main(int argc, char ** argv) {
             const int prompt_n = n_prompt - cache_n;
             st.progress.prefilled(cache_n);
             monitor.update(monitor_id, {{"status", "generating"}, {"cached_tokens", cache_n},
+                {"prefill_ms", prefill_ms}, {"prompt_new_tokens", prompt_n},
                 {"prefill_tps", prefill_ms > 0 ? json(1000.0 * prompt_n / prefill_ms) : json(nullptr)}});
             st.log.start_generation();
             return [timings, request_metrics, &st, &monitor, monitor_id, t_turn0, t_pf1, prefill_ms, n_prompt, prompt_n, cache_n](int n_gen, bool verbose = true, int64_t sampled_us = 0) {
@@ -2130,7 +2130,17 @@ int main(int argc, char ** argv) {
                 const double prompt_per_second = prefill_ms > 0.0 ? 1000.0 * (double) prompt_n / prefill_ms : 0.0;
                 const double predicted_per_second = gen_ms > 0.0 ? 1000.0 * (double) n_gen / gen_ms : 0.0;
                 *timings = request_metrics->stats.timings();
-                monitor.update(monitor_id, {{"generated_tokens", n_gen}, {"decode_tps", (*timings)["predicted_per_second"]}});
+                const auto & metrics = request_metrics->stats;
+                const bool live = metrics.live_sample_us > 0;
+                monitor.update(monitor_id, {{"generated_tokens", n_gen},
+                    {"decode_tps", (*timings)["predicted_per_second"]},
+                    {"decode_tps_mean", (*timings)["predicted_per_second"]},
+                    {"decode_tps_live", live ? json(metrics.live_tps) : json(nullptr)},
+                    {"decode_tps_window_ms", live ? json(metrics.live_window_us / 1000.0) : json(nullptr)},
+                    {"decode_tps_sampled_at_ms", live ? json(kvmem::monitor::now_ms() - (ggml_time_us() - metrics.live_sample_us) / 1000) : json(nullptr)},
+                    {"decode_ms", (*timings)["predicted_ms"]},
+                    {"ttft_ms", metrics.first_token ? json((metrics.native.t_prompt_last - metrics.native.t_start) / 1000.0) : json(nullptr)},
+                    {"ttft_scope", "execution"}});
                 if (!verbose) {
                     return;
                 }
@@ -2148,13 +2158,18 @@ int main(int argc, char ** argv) {
             };
         };
 
-        auto set_spec_metrics = [request_metrics, timings](const kvmem_spec_gen_stats & gst) {
+        auto set_spec_metrics = [&, request_metrics, timings, monitor_id](const kvmem_spec_gen_stats & gst) {
             auto & stats = request_metrics->stats;
             stats.native.n_draft_tokens = gst.draft_tokens;
             stats.native.n_draft_accepted = gst.accepted_tokens;
             stats.native.n_draft_verif_steps = gst.verification_steps;
             stats.accepted_per_position = gst.accepted_per_position;
             stats.speculative = gst.metrics();
+            monitor.update(monitor_id, {{"drafts_offered", gst.draft_tokens},
+                {"drafts_accepted", gst.accepted_tokens}, {"speculative", stats.speculative}});
+            if (gst.algorithm == kvmem::SpeculativeAlgorithm::Mtp)
+                monitor.update(monitor_id, {{"mtp_drafts_offered", gst.draft_tokens},
+                    {"mtp_drafts_accepted", gst.accepted_tokens}});
             *timings = stats.timings();
         };
         int n_cache_hit = 0;
@@ -2171,6 +2186,7 @@ int main(int argc, char ** argv) {
             } else if (hit_limit) {
                 finish = "length";
             }
+            monitor.update(monitor_id, {{"finish_reason", finish}});
             if (is_responses) {
                 kvmem_diag("KVMEM_TRACE chat_out n_tool_calls=%zu finish=%s content_chars=%zu reasoning_chars=%zu\n",
                         msg.tool_calls.size(), finish.c_str(),
@@ -2243,7 +2259,7 @@ int main(int argc, char ** argv) {
             auto monitor_error = std::make_shared<std::atomic<bool>>(false);
             res.set_chunked_content_provider("text/event-stream",
                 [slot, &st, &req, toks, cid, request_id, created, max_tokens, sparams, formatted, stops,
-                 spec_stream, ctx, vocab, make_emit_gen_wall, timings, request_metrics, set_spec_metrics, timings_per_token, include_usage, is_responses, monitor_error](size_t, httplib::DataSink & sink) mutable {
+                 spec_stream, ctx, vocab, make_emit_gen_wall, timings, request_metrics, set_spec_metrics, timings_per_token, include_usage, is_responses, monitor_error, &monitor, monitor_id](size_t, httplib::DataSink & sink) mutable {
                     kvmem_execution_scope execution(st.execution.get());
                     StreamIo io;
                     io.on_prefill = [&st, request_metrics](int rows, int remaining) {
@@ -2441,6 +2457,7 @@ int main(int argc, char ** argv) {
                             }
                             emit_gen_wall((int) gen.size());
                             llama_driver_commit(st, toks, gen);
+                            monitor.update(monitor_id, {{"finish_reason", !responses->prev.tool_calls.empty() ? "tool_calls" : (int)gen.size() >= max_tokens ? "length" : "stop"}});
                             for (const std::string & ev : kvmem_responses_stream_done(
                                          responses->state, responses->prev, request_id, st.model_name,
                                          (int) toks.size(), (int) gen.size(), n_cache_hit)) {
@@ -2460,6 +2477,7 @@ int main(int argc, char ** argv) {
                             send(stream_choice_chunk(cid, st.model_name, created, flush_deltas[i], nullptr, ts).dump());
                         }
                         const char * finish = sco.finish_reason(hit_limit);
+                        monitor.update(monitor_id, {{"finish_reason", finish}});
                         kvmem_diag("KVMEM_TRACE chat_stream n_tc_delta=%d finish=%s "
                                 "content_chars=%zu reasoning_chars=%zu\n",
                                 sco.n_tc_delta, finish,
@@ -2499,6 +2517,7 @@ int main(int argc, char ** argv) {
                         }
                         emit_gen_wall((int) gen.size());
                         llama_driver_commit(st, toks, gen);
+                        monitor.update(monitor_id, {{"finish_reason", !responses->prev.tool_calls.empty() ? "tool_calls" : (int)gen.size() >= max_tokens ? "length" : "stop"}});
                         for (const std::string & ev : kvmem_responses_stream_done(
                                      responses->state, responses->prev, request_id, st.model_name,
                                      (int) toks.size(), (int) gen.size(), n_cache_hit)) {
@@ -2518,6 +2537,7 @@ int main(int argc, char ** argv) {
                         send(stream_choice_chunk(cid, st.model_name, created, flush_deltas[i], nullptr, ts).dump());
                     }
                     const char * finish = sco.finish_reason(hit_limit);
+                    monitor.update(monitor_id, {{"finish_reason", finish}});
                     kvmem_diag("KVMEM_TRACE chat_stream n_tc_delta=%d finish=%s "
                             "content_chars=%zu reasoning_chars=%zu\n",
                             sco.n_tc_delta, finish,

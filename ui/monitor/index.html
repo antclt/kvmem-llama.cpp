@@ -11,7 +11,7 @@
 <section class="s-card s-state">
 <div class="s-card-head"><h1 class="s-title">模型状态</h1><span class="s-badge" data-service-state>等待服务数据</span></div>
 <div class="s-model" data-value="model">正在读取模型信息</div>
-<div class="s-state-row s-overview-row"><div class="s-overview-chips"><span data-value="execution">正在读取推理设备</span><span data-value="queue"></span></div><label>查看请求 <select data-request-select aria-label="查看请求"><option value="">暂无请求</option></select></label></div>
+<div class="s-state-row s-overview-row"><div class="s-overview-chips"><span data-value="execution">正在读取推理设备</span><span data-value="queue"></span><span data-value="speculative-live" hidden></span></div><label>查看请求 <select data-request-select aria-label="查看请求"><option value="">暂无请求</option></select></label></div>
 <details class="s-runtime-details"><summary>运行参数</summary><div class="s-runtime-facts"><div data-value="effective-config"></div><div data-value="mtp"></div><div data-value="vram-reserve"></div><div data-effective-scoring aria-live="polite"></div></div></details>
 <div class="s-state-row"><span data-value="request-scope">暂无请求</span><span class="s-muted" data-value="output">等待服务数据</span></div>
 <div class="s-track" role="meter" aria-label="输出 token 预算使用，非完成百分比" aria-valuemin="0" aria-valuemax="100"><div class="s-bar" data-bar="output" style="width:0"></div></div>
@@ -30,9 +30,10 @@
 <section class="s-card s-cache"><div class="s-title-with-help"><h2 class="s-title">系统与缓存</h2><button class="s-metric-help" type="button" popovertarget="monitor-note-cache" aria-label="系统与缓存说明">i</button></div>
 <div class="s-bar-row"><span>CPU 负载</span><span><span data-value="cpu">—</span> %</span></div>
 <div><div class="s-bar-row"><span>系统内存</span><span data-value="ram">未采集</span></div><div class="s-track"><div class="s-bar" data-bar="ram" style="width:0"></div></div></div>
-<div class="s-bar-row"><span>可用 RAM</span><span><span data-value="ram-available">—</span> GiB</span></div><div class="s-bar-row"><span>系统磁盘读取</span><span><span data-value="system-disk">—</span> MiB/s</span></div><div><div class="s-bar-row"><span>RAM 历史缓存</span><span data-value="host">未采集</span></div><div class="s-track"><div class="s-bar" data-bar="host" style="width:0"></div></div></div>
+<div class="s-bar-row"><span>可用 RAM</span><span><span data-value="ram-available">—</span> GiB</span></div><div class="s-bar-row"><span>系统磁盘读取</span><span><span data-value="system-disk">—</span> MiB/s</span></div><div class="s-bar-row"><span>系统磁盘写入</span><span><span data-value="system-disk-write">—</span> MiB/s</span></div><div><div class="s-bar-row"><span>RAM 历史缓存</span><span data-value="host">未采集</span></div><div class="s-track"><div class="s-bar" data-bar="host" style="width:0"></div></div></div>
 <div><div class="s-bar-row"><span>SSD 历史缓存</span><span data-value="ssd">未采集</span></div><div class="s-track"><div class="s-bar" data-bar="ssd" style="width:0"></div></div></div>
-<details class="s-cache-details"><summary>缓存详情</summary><dl class="s-facts"><dt>空闲保留会话</dt><dd data-value="sessions">未采集</dd><dt data-value="history-label">历史命中 / 淘汰</dt><dd data-value="history">未采集</dd><dt data-value="cache-disk-label">缓存读取 · MiB/s</dt><dd data-value="disk">—</dd></dl><p class="s-note-text s-muted" data-value="cache-age"></p></details></section></div>
+<details class="s-cache-details"><summary>缓存详情</summary><dl class="s-facts"><dt>空闲保留会话</dt><dd data-value="sessions">未采集</dd><dt data-value="history-label">历史命中 / 淘汰</dt><dd data-value="history">未采集</dd><dt data-value="cache-disk-label">缓存读取 · MiB/s</dt><dd data-value="disk">—</dd></dl><dl class="s-facts" data-cache-metrics></dl><p class="s-note-text s-muted" data-value="cache-age"></p></details></section></div>
+<section class="s-card s-native-metrics" data-backend-metrics hidden><details><summary>引擎统计</summary><div data-backend-sections></div></details></section>
 <footer class="s-footer"><span data-footer>连接到当前 KVMem 服务</span><span>KVMem</span></footer>
 </main>
 <main class="s-log-page" data-view="logs" hidden>

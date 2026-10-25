@@ -53,20 +53,22 @@ class OneClickTests(unittest.TestCase):
         self.assertNotEqual(old.returncode, 0)
         self.assertIn('does not match', old.stdout)
 
-    @unittest.skipUnless(os.environ.get('KVMEM_TEST_PYTHON_ARCHIVE'), 'set KVMEM_TEST_PYTHON_ARCHIVE for portable integration')
+    @unittest.skipUnless(os.environ.get('KVMEM_TEST_PYTHON_ARCHIVE') and os.environ.get('KVMEM_TEST_PSUTIL_WHEEL'), 'set KVMEM_TEST_PYTHON_ARCHIVE for portable integration')
     def test_offline_package_without_system_python(self):
         archive = Path(os.environ['KVMEM_TEST_PYTHON_ARCHIVE'])
         # Use the publisher-verified archive as a fixture; the mismatch case checks enforcement.
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        wheel = Path(os.environ['KVMEM_TEST_PSUTIL_WHEEL'])
+        wheel_args = ('-PsutilWheel', wheel, '-PsutilSha256', hashlib.sha256(wheel.read_bytes()).hexdigest())
         with tempfile.TemporaryDirectory(prefix='kvmem-one-click-') as folder:
             package = Path(folder) / 'package with spaces'
             builder = ROOT / 'scripts/windows/package-console.ps1'
             result = self.run_script(builder, '-OutputDir', package, '-PythonArchive', archive,
-                                     '-PythonSha256', '0' * 64, '-SourceDir', self.source)
+                                     '-PythonSha256', '0' * 64, '-SourceDir', self.source, *wheel_args)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(package.exists(), 'mismatched archive must not modify the output')
             result = self.run_script(builder, '-OutputDir', package, '-PythonArchive', archive,
-                                     '-PythonSha256', digest, '-SourceDir', self.source)
+                                     '-PythonSha256', digest, '-SourceDir', self.source, *wheel_args)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             manifest = json.loads((package / 'console-build.json').read_text())
             self.assertTrue(manifest['offline_console'])

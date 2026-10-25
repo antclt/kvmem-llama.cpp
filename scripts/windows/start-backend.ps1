@@ -24,10 +24,11 @@ param(
     [switch]$PreserveThinking,
     [ValidateRange(256, 2147483647)][int]$Context = 262144,
     [ValidateRange(128, 2147483647)][int]$Budget = 32768,
-    [ValidateRange(64, 2147483647)][int]$Reserve = 1024,
+    [ValidateSet(32,64)][int]$BlockTokens = 64,
+    [ValidateRange(32, 2147483647)][int]$Reserve = 1024,
     [ValidateRange(1, 1048576)][int]$HostMiB = 16384,
-    [ValidateRange(128, 2147483647)][int]$Prefill = 128,
-    [ValidateRange(1, 2147483647)][int]$MaxTokens = 1024,
+    [ValidateRange(1, 2147483647)][int]$Prefill = 128,
+    [ValidateRange(0, 2147483647)][int]$MaxTokens = 1024,
     [string]$KvType,
     [string]$KvTypeK,
     [string]$KvTypeV,
@@ -103,6 +104,7 @@ if ($Backend -eq 'ninfer') {
     }
 }
 if ($Backend -eq 'polystrata') {
+    $capabilities.block_tokens = @{default=64;supported=@(32,64);startup_fixed=$true}
     $capabilities.supported_combinations=@{
         text=@{architectures=@('qwen35moe');kv=@('f16','q8_0');max_concurrency=8;max_devices=1}
         mtp=@{drafts=@(0..3);solo=$true;batch=$false;batch_fallback='ordinary_decode'}
@@ -111,6 +113,12 @@ if ($Backend -eq 'polystrata') {
     }
 }
 if ($Describe) { $capabilities | ConvertTo-Json -Depth 4; return }
+if ($Backend -ne 'polystrata' -and $PSBoundParameters.ContainsKey('BlockTokens')) {
+    throw '-BlockTokens configures PolyStrata in this launcher'
+}
+if ($Backend -ne 'polystrata' -and ($Reserve -lt 64 -or $Prefill -lt 128)) {
+    throw 'This backend requires Reserve >=64 and Prefill >=128 in the shared launcher'
+}
 if ($Backend -eq 'polystrata') {
     & (Join-Path $PSScriptRoot 'start-polystrata.ps1') -Parameters $PSBoundParameters -Root $root -WorkerArgs $WorkerArgs
     return
@@ -162,8 +170,12 @@ foreach ($setting in @(
     @('LogLevel', '^(-lv|--verbosity|--log-verbosity|--log-level)(=|$)'),
     @('ChatTemplateFile', '^--chat-template(-file)?(=|$)'),
     @('ThinkingMode', '^--(enable-thinking|no-think(ing)?)(=|$)'),
-    @('ReasoningEffort', '^--default-reasoning-effort(=|$)'),
-    @('PreserveThinking', '^--preserve-thinking(=|$)'),
+    @('ReasoningEffort', '^--(default-reasoning-effort|reasoning-effort)(=|$)'),
+    @('ThinkingBudget', '^--(default-thinking-budget|reasoning-budget)(=|$)'),
+    @('MaxTokens', '^(-n|--n-predict|--predict|--default-max-tokens)(=|$)'),
+    @('Vision', '^--(mmproj|mmproj-offload|no-mmproj-offload|mmproj-device|image-max-tokens)(=|$)'),
+    @('Mmproj', '^--mmproj(=|$)'),
+    @('PreserveThinking', '^--(preserve-thinking|chat-template-kwargs)(=|$)'),
     @('CpuVisionIdleSeconds', '^--cpu-vision-idle-seconds(=|$)'),
     @('Concurrency', '^(-np|--parallel|--max-concurrency)(=|$)')
 )) {
@@ -250,10 +262,11 @@ if ($Backend -eq 'ninfer') {
         Write-Warning "NgramDrafts reduced from $requestedNgramDrafts to $NgramDrafts for Concurrency $Concurrency"
     }
     $nativeArgs = @($Model, '--host', $ListenHost, '--port', "$Port", '--max-context', "$Context",
-        '--max-concurrency', "$Concurrency", '--prefill-chunk', "$Prefill", '--default-max-tokens', "$MaxTokens",
+        '--max-concurrency', "$Concurrency", '--prefill-chunk', "$Prefill",
         '--kvmem-budget', "$Budget", '--kvmem-gen-reserve', "$Reserve", '--kvmem-host-mib', "$HostMiB",
         '--kvmem-sink-tokens', "$SinkTokens", '--kvmem-recent-tokens', "$RecentTokens",
         '--kvmem-sessions', "$RetainedSessions", '--kv-dtype', $KvType, '--device-profile', $DeviceProfile)
+    if ($MaxTokens -gt 0) { $nativeArgs += @('--default-max-tokens', "$MaxTokens") }
     if ($gpuIds.Count -gt 1) { $nativeArgs += @('--devices', ((0..($gpuIds.Count - 1)) -join ',')) }
     else { $nativeArgs += @('--device', '0') }
     if ($StageLayers.Count) { $nativeArgs += @('--stage-layers', ($StageLayers -join ',')) }
@@ -265,7 +278,7 @@ if ($Backend -eq 'ninfer') {
     if ($Vision -and $VisionResidency -eq 'cpu') { $nativeArgs += @('--cpu-vision-idle-seconds', "$CpuVisionIdleSeconds") }
     if ($ThinkingBudget -gt 0) { $nativeArgs += @('--default-thinking-budget', "$ThinkingBudget") }
     if ($ReasoningEffort) { $nativeArgs += @('--default-reasoning-effort', $ReasoningEffort) }
-    if ($PreserveThinking) { $nativeArgs += '--preserve-thinking' }
+    if ($PreserveThinking) { $nativeArgs += '--preserve-thinking' } # false/unset inherits the model template
 } else {
     # Legacy KvType still sets both sides. Explicit K/V values override that base;
     # emit separate native flags when either independent value was requested.
@@ -283,7 +296,7 @@ if ($Backend -eq 'ninfer') {
     if (($effectiveK -in $quantized) -ne ($effectiveV -in $quantized)) {
         throw 'llama.cpp cannot mix floating-point and quantized K/V; choose q8_0/q5_0/q4_0 for both, or f16/f32 for both'
     }
-    foreach ($name in @('StageLayers', 'FastPrefill', 'NgramDrafts', 'NgramMinMatch', 'Vision', 'VisionResidency', 'CpuVisionIdleSeconds', 'VisionTokens', 'DeviceProfile', 'ThinkingBudget', 'ReasoningEffort', 'PreserveThinking')) {
+    foreach ($name in @('StageLayers', 'FastPrefill', 'NgramDrafts', 'NgramMinMatch', 'DeviceProfile', 'CpuVisionIdleSeconds')) {
         if ($PSBoundParameters.ContainsKey($name)) { throw "-$name configures ninfer; use llama native options in -WorkerArgs" }
     }
     if ($SpeculativeMode -ne 'none') {
@@ -291,13 +304,33 @@ if ($Backend -eq 'ninfer') {
         if ($DraftModel) { $nativeArgsSpec += @('--spec-draft-model', $DraftModel) }
     } else { $nativeArgsSpec = @() }
     $nativeArgs = @('-m', $Model, '--host', $ListenHost, '--port', "$Port", '-c', "$Context",
-        '-n', "$MaxTokens", '--kvmem-budget', "$Budget", '--kvmem-gen-reserve', "$Reserve",
+        '-n', $(if ($MaxTokens -eq 0) { '-1' } else { "$MaxTokens" }), '--kvmem-budget', "$Budget", '--kvmem-gen-reserve', "$Reserve",
         '-b', "$Prefill", '-ub', "$Prefill",
         '--kvmem-sink-tokens', "$SinkTokens", '--kvmem-recent-tokens', "$RecentTokens")
     if ($separateKv) { $nativeArgs += @('--cache-type-k', $effectiveK, '--cache-type-v', $effectiveV) }
     else { $nativeArgs += @('--kv-dtype', $KvType) }
     $nativeArgs += @('--kvmem-host-mib', "$HostMiB", '--kvmem-sessions', "$RetainedSessions")
     if ($PSBoundParameters.ContainsKey('Concurrency')) { $nativeArgs += @('--parallel', "$Concurrency") }
+    if ($PSBoundParameters.ContainsKey('ThinkingBudget')) {
+        $nativeArgs += @('--reasoning-budget', $(if ($ThinkingBudget -eq 0) { '-1' } else { "$ThinkingBudget" }))
+    }
+    if ($ReasoningEffort) { $nativeArgs += @('--reasoning-effort', $ReasoningEffort) }
+    if ($PSBoundParameters.ContainsKey('PreserveThinking')) {
+        $nativeArgs += @('--chat-template-kwargs', (@{preserve_thinking=[bool]$PreserveThinking} | ConvertTo-Json -Compress))
+    }
+    if ($Vision) {
+        if (!$Mmproj) {
+            $folder = Split-Path -Parent $Model
+            $stem = [IO.Path]::GetFileNameWithoutExtension($Model)
+            $exact = @(@((Join-Path $folder "$stem-mmproj.gguf"), (Join-Path $folder "mmproj-$stem.gguf")) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+            $candidates = @(if ($exact.Count) { $exact } else { Get-ChildItem -LiteralPath $folder -File -Filter '*mmproj*.gguf' | ForEach-Object { $_.FullName } })
+            if ($candidates.Count -ne 1) { throw 'Vision requires -Mmproj: no unique adjacent projector was found; select the matching GGUF explicitly' }
+            $Mmproj = $candidates[0]
+        }
+        if (!(Test-Path -LiteralPath $Mmproj -PathType Leaf) -or [IO.Path]::GetExtension($Mmproj) -ne '.gguf') { throw 'Mmproj must be an existing matching GGUF file' }
+        $nativeArgs += @('--mmproj', (Resolve-Path -LiteralPath $Mmproj).Path,
+            $(if ($VisionResidency -eq 'cpu') { '--no-mmproj-offload' } else { '--mmproj-offload' }), '--image-max-tokens', "$VisionTokens")
+    }
 }
 if ($ApiKey) { $nativeArgs += @('--api-key', $ApiKey) }
 if ($ModelAlias) { $nativeArgs += @($(if ($Backend -eq 'ninfer') { '--model-id' } else { '--alias' }), $ModelAlias) }

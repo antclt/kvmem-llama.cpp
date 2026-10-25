@@ -1,8 +1,8 @@
 diff --git a/docs/BACKENDS.md b/docs/BACKENDS.md
-index 0db525e..028ccd1 100644
+index 4aa5f006a9ff4e61f13ec8503290885f37cd844a..9e6399a8f2689d42b85c433a5a6f1ce63df237b9 100644
 --- a/docs/BACKENDS.md
 +++ b/docs/BACKENDS.md
-@@ -138,6 +138,12 @@ Qualification uses `poly_elastic_test MODEL.gguf [--no-graphs]`: exact native KV
+@@ -144,6 +144,12 @@ Qualification uses `poly_elastic_test MODEL.gguf [--no-graphs]`: exact native KV
  across map cycles, full versus narrow workspace logits with fixed expert placement, partial-admission rollback,
  real cache growth/reclaim, Pressure and bounded Query/replay. These are functional tests, not recall-quality tests.
  
@@ -16,10 +16,10 @@ index 0db525e..028ccd1 100644
  
  There are two levels.
 diff --git a/src/poly/engine.cpp b/src/poly/engine.cpp
-index 8e64e03..29517a2 100644
+index 79fcd7e21d0067c84305cb4820d7cff03f9b0a85..58b966042c1ad3793f472cb3d3c48810c0d5989b 100644
 --- a/src/poly/engine.cpp
 +++ b/src/poly/engine.cpp
-@@ -792,7 +792,16 @@ size_t Engine::trim_card_kv(int64_t end) {
+@@ -853,7 +853,16 @@ size_t Engine::trim_card_kv(int64_t end) {
      const int64_t before = kv_reach_;
      kv_reach_ = end;
      if (kv_.empty() || !exp_ || all_cached()) return 0;
@@ -38,10 +38,10 @@ index 8e64e03..29517a2 100644
      OnCard here(device_, split_);
      ck(cudaDeviceSynchronize(), "the attention cache");
 diff --git a/src/poly/main.cpp b/src/poly/main.cpp
-index 10e7666..ea768e8 100644
+index ee1b221e32b30e167df7959c7c1270c22b4fbf62..219e4d22a315f601e463ec6289ad4baaf6b1c5a5 100644
 --- a/src/poly/main.cpp
 +++ b/src/poly/main.cpp
-@@ -471,8 +471,8 @@ struct Session {
+@@ -472,8 +472,8 @@ struct Session {
          if (const size_t freed = engine.trim_kv(n)) {
              const int had = engine.cached_experts();
              engine.mind_vram();
@@ -53,7 +53,7 @@ index 10e7666..ea768e8 100644
          }
          asked += n;
 diff --git a/tools/poly_elastic_test.cpp b/tools/poly_elastic_test.cpp
-index 3611137..d1a2128 100644
+index 361113763a505595c0c0c516c584b3d7ab36eddf..d1a21289bf7857bfbe9bf2a6885d1ddf356a19a7 100644
 --- a/tools/poly_elastic_test.cpp
 +++ b/tools/poly_elastic_test.cpp
 @@ -27,6 +27,32 @@ struct KvmemTestAccess {

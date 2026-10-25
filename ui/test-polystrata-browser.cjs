@@ -49,6 +49,15 @@ let browser;
  await page.locator('#thinking-btn').click();await page.locator('#s-thinking [data-v=low]').click();await page.locator('#s-budget').fill('128');await page.locator('#s-apply').click();
  await page.locator('#input').fill('second');await page.locator('#send-btn').click();await page.waitForFunction(()=>document.querySelectorAll('.st-msg').length>=4&&!document.querySelector('#send-btn').disabled);
  assert.equal(sent[1].reasoning_effort,'low');assert.equal(sent[1].reasoning_budget_tokens,128);assert.equal(sent[1].messages[1].reasoning_content,'exact reasoning');
+ // Regenerating an earlier answer uses the same overrides and excludes later turns.
+ await page.locator('[data-msg-regen]').first().click();
+ await page.locator('[data-swipe-count]').first().filter({hasText:'2/2'}).waitFor();
+ assert.equal(sent[2].reasoning_effort,'low');assert.equal(sent[2].reasoning_budget_tokens,128);
+ assert.equal(sent[2].messages.length,1);assert.equal(sent[2].messages[0].content,'first');
+ await page.locator('[data-msg-prev]').first().click();
+ await page.locator('[data-swipe-count]').first().filter({hasText:'1/2'}).waitFor();
+ await page.locator('[data-msg-next]').first().click();
+ await page.locator('[data-swipe-count]').first().filter({hasText:'2/2'}).waitFor();
  await page.locator('#thinking-btn').click();await page.screenshot({path:path.join(evidence,'ui-consistency-chat.png'),fullPage:true,animations:'disabled'});
  await page.locator('#s-reset').click();await page.waitForFunction(()=>document.querySelector('#s-thinking [data-v=none]').getAttribute('aria-checked')==='true');
  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

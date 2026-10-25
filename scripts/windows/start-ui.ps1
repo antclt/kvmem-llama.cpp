@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 try {
-    foreach ($relative in 'scripts/local-console.py', 'scripts/console_chat.py', 'scripts/model_health.py',
+    foreach ($relative in 'scripts/local-console.py', 'scripts/console_chat.py', 'scripts/model_health.py', 'scripts/console_hardware.py',
                           'scripts/model_health_ninfer/__init__.py', 'scripts/model_health_ninfer/reader.py',
                           'scripts/model_health_ninfer/schema.py', 'scripts/model_health_ninfer/layouts.py',
                           'scripts/model_health_ninfer/formats.py', 'scripts/model_health_ninfer/framing.py',
@@ -39,18 +39,18 @@ try {
     $env:PYLAUNCHER_ALLOW_INSTALL = $null
     $env:PYLAUNCHER_ALWAYS_INSTALL = $null
     $env:PYTHON_MANAGER_AUTOMATIC_INSTALL = 'false'
-    $probe = 'import sys,ctypes,json,http.server,urllib.request,webbrowser; assert sys.version_info >= (3,10); assert sys.maxsize > 2**32; print(sys.executable)'
+    $probe = 'import sys,ctypes,json,http.server,urllib.request,webbrowser,psutil; assert sys.version_info >= (3,10); assert sys.maxsize > 2**32; print(sys.executable)'
     $embedded = Join-Path $root 'runtime/python/python.exe'
     $python = $null
     if (Test-Path -LiteralPath $embedded -PathType Leaf) {
-        $output = & $embedded -I -S -c $probe 2>&1
+        $output = & $embedded -I -c $probe 2>&1
         if ($LASTEXITCODE -ne 0) { throw 'The bundled Python runtime is incomplete. Extract a fresh copy of the KVMem ZIP.' }
         $python = $embedded
     } else {
         foreach ($name in 'python.exe', 'py.exe') {
             $candidate = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
             if (!$candidate -or $candidate.Source -like '*\Microsoft\WindowsApps\*') { continue }
-            $arguments = @('-I', '-S', '-c', $probe)
+            $arguments = @('-I', '-c', $probe)
             if ($name -eq 'py.exe') { $arguments = @('-3') + $arguments }
             try {
                 $output = @(& $candidate.Source @arguments 2>$null)
@@ -60,7 +60,7 @@ try {
             } catch { continue }
         }
         if (!$python) {
-            throw 'Python was not found. Use a KVMem package with runtime/python included, or install 64-bit Python 3.10+ from https://www.python.org/downloads/windows/ .'
+            throw 'Python with psutil was not found. Use a complete KVMem package, or install 64-bit Python 3.10+ and run: python -m pip install -r scripts/requirements-console.txt'
         }
     }
     if ($Check) {
@@ -69,7 +69,7 @@ try {
         exit 0
     }
     if (!$StateDir) { $StateDir = Join-Path $root 'build/local-console' }
-    $arguments = @('-X', 'utf8', '-I', '-S', (Join-Path $root 'scripts/local-console.py'), '--port', "$Port", '--state-dir', $StateDir, '--prompt-port', '--language', $Language)
+    $arguments = @('-X', 'utf8', '-I', (Join-Path $root 'scripts/local-console.py'), '--port', "$Port", '--state-dir', $StateDir, '--prompt-port', '--language', $Language)
     if (!$NoBrowser) { $arguments += '--open-browser' }
     Write-Output 'KVMem - local launch console'
     & $python @arguments

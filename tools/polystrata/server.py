@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--port", type=int, default=18200)
     parser.add_argument("--context", type=int, default=262144)
     parser.add_argument("--budget", type=int, default=32768)
+    parser.add_argument("--kvmem-block-tokens", type=int, choices=(32, 64), default=64,
+                        help="KVMem block size in tokens; fixed for this worker (default: 64)")
     parser.add_argument("--reserve", type=int, default=1024)
     parser.add_argument("--host-mib", type=int, default=4096)
     parser.add_argument("--disk-path", type=Path)
@@ -79,14 +81,15 @@ def main():
         parser.error("vision requires both --vision-worker and --mmproj")
     if not 1 <= args.vision_tokens <= 16384 or not 1 <= args.vision_threads <= 1024:
         parser.error("invalid vision token or thread limit")
+    block = args.kvmem_block_tokens
     checks = [
-        (128 <= args.budget <= 2147483647 and args.budget % 64 == 0, "Budget must be >=128 and a multiple of 64"),
-        (64 <= args.reserve <= 2147483647 and args.reserve % 64 == 0, "Reserve must be >=64 and a multiple of 64"),
+        (128 <= args.budget <= 2147483647 and args.budget % block == 0, f"Budget must be >=128 and a multiple of {block}"),
+        (block <= args.reserve <= 2147483647 and args.reserve % block == 0, f"Reserve must be >={block} and a multiple of {block}"),
         (args.budget + args.reserve <= args.context <= 2147483647, "Context must be >= Budget + Reserve"),
         (1 <= args.prefill <= args.reserve, "Prefill must be positive and <= Reserve"),
-        (1 <= args.max_tokens <= args.context, "MaxTokens must be positive and <= Context"),
-        (args.sink >= 0 and args.sink % 64 == 0, "SinkTokens must be nonnegative and a multiple of 64"),
-        (args.recent >= 64 and args.recent % 64 == 0, "RecentTokens must be >=64 and a multiple of 64"),
+        (0 <= args.max_tokens <= args.context, "MaxTokens must be 0 (unlimited) or positive and <= Context"),
+        (args.sink >= 0 and args.sink % block == 0, f"SinkTokens must be nonnegative and a multiple of {block}"),
+        (args.recent >= block and args.recent % block == 0, f"RecentTokens must be >={block} and a multiple of {block}"),
         (args.sink + args.recent <= args.budget, "SinkTokens + RecentTokens must be <= Budget"),
         (1 <= args.host_mib <= (1 << 24), "HostMiB is outside the supported range"),
         (1 <= args.port <= 65535, "Port must be 1..65535"),
@@ -145,6 +148,7 @@ def main():
                    "--prompt-batch", str(args.prefill), "--window", str(1+args.mtp_drafts), "--lookup", "0",
                    "--prompt-cache", "0", "--conversation-cache-mib", "0", "--conversation-cache-slots", "0",
                    "--kvmem-budget", str(args.budget), "--kvmem-gen-reserve", str(args.reserve),
+                   "--kvmem-block-tokens", str(block),
                    "--kvmem-host-mib", str(args.host_mib), "--kvmem-sink-tokens", str(args.sink),
                    "--kvmem-recent-tokens", str(args.recent), "--kvmem-score-agg", args.score_agg,
                    "--kvmem-query-scorer",args.query_scorer,"--kvmem-graph-alpha",str(args.graph_alpha),
@@ -182,7 +186,7 @@ def main():
                 "STRATA_FATTN": os.environ.get("STRATA_FATTN", "1"),
                 "STRATA_FDEC": os.environ.get("STRATA_FDEC", "1")},
         "kvmem_monitor_gpu_uuid": gpu_uuids[0],
-        "warm_start": False, "kvmem_default_max_tokens": args.max_tokens,
+        "warm_start": False, "kvmem_default_max_tokens": args.max_tokens or None,
     }
     if args.log:
         config["log"]=str(args.log.resolve())
@@ -192,6 +196,8 @@ def main():
     if effort is not None: config["reasoning_effort"] = effort
     if args.thinking_budget is not None: config["reasoning_budget_tokens"] = args.thinking_budget
     config["preserve_thinking"] = args.preserve_thinking
+    config["kvmem_mtp_policy"] = "native-adaptive" if args.mtp_drafts else "off"
+    config["kvmem_mtp_drafts_max"] = args.mtp_drafts
     config["client_reasoning_history"] = True
     config["kvmem_console_only"] = True
     config["kvmem_vram_reserve_mib"] = args.vram_reserve_mib
@@ -232,10 +238,10 @@ def main():
                     continue
                 for line in lines:
                     marker = line.split(' ', 1)[0]
-                    if line.endswith('\n') and marker in {'KVMEM_SCORING', 'KVMEM_LIMITS'} and marker not in seen:
+                    if line.endswith('\n') and marker in {'KVMEM_SCORING', 'KVMEM_LIMITS', 'KVMEM_BLOCKS'} and marker not in seen:
                         print(line.rstrip(), flush=True)
                         seen.add(marker)
-                if len(seen) == 2:
+                if len(seen) == 3:
                     return
         thread = threading.Thread(target=relay_scoring, daemon=True)
         thread.start()

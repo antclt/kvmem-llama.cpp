@@ -297,6 +297,7 @@ Include package version, GPU, driver, model, changed settings and error logs whe
 | [Multi-backend runtime](docs/multi-backend.md) | Startup, capabilities and supported combinations |
 | [Backend differences](docs/multi-backend-differences.md) | Defaults, budgets, R, KV and vision |
 | [Active KV tiering](docs/active-kv-tiering.md) | Shared RAM/SSD quotas and lifetime |
+| [Checkpoint coverage](docs/checkpoint-policy.md) | Experimental spread retention, Host budget and SSD images |
 | [Tiering validation](docs/active-kv-tiering-validation-20261010.md) | Qualification evidence and limits |
 | [Memory backend contract](docs/memory-backend-contract.md) | Backend integration contracts |
 | [Migration validation](docs/ninfer-all-migration-validation.md) | Pinned NInfer baseline |
