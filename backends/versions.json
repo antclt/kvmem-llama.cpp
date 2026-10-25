@@ -138,8 +138,8 @@
     "upstream": "https://github.com/VecSzn/PolyStrata.git",
     "base_commit": "145493e66580c80bba09b0130f667a2b1789da69",
     "license_file": "backends/polystrata/LICENSE",
-    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 64)",
-    "patched_tree": "51266e7969b708c020c3de508384aa584e535c10",
+    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 64); shutdown releases the frontend's shared log handles so Windows removes their temporary directory",
+    "patched_tree": "8bee3407b3cbb245f2d2d8b454258218a0c3e01a",
     "source_tag": "v0.1.45-poly.4",
     "patches": [
       {
@@ -202,6 +202,15 @@
           "elastic-mtp"
         ],
         "after_tree": "51266e7969b708c020c3de508384aa584e535c10"
+      },
+      {
+        "id": "serve-log-close",
+        "path": "backends/patches/polystrata-serve-log-close.patch",
+        "sha256": "ab64ed2c85429dfa252ef423c18557a10a780fdf7bb2ab3f2cefc901e89a47f8",
+        "requires": [
+          "block-tokens"
+        ],
+        "after_tree": "8bee3407b3cbb245f2d2d8b454258218a0c3e01a"
       }
     ]
   }

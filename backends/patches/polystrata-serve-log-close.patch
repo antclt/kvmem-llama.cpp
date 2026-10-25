@@ -1,0 +1,43 @@
+diff --git a/serve/images.py b/serve/images.py
+index bd62fa4d..caaf8e8a 100644
+--- a/serve/images.py
++++ b/serve/images.py
+@@ -203,6 +203,14 @@ class ImageGen:
+             except (OSError, ValueError):
+                 pass
+ 
++    def close(self) -> None:
++        """The server ends: release the shared log's handle (the config's "log" is opened for this object's life).
++        Without it the handle outlives the server and Windows refuses to remove the log's temporary directory."""
++        log, self.log = self.log, None
++        if log is not None:
++            with contextlib.suppress(OSError):
++                log.close()
++
+     def _prune(self) -> None:
+         """Keep the newest keep_files PNGs of response_format url (the oldest go)."""
+         files = sorted((p for p in self.dir.glob("*.png") if FILE_NAME.match(p.name)), key=lambda p: p.stat().st_mtime)
+diff --git a/serve/server.py b/serve/server.py
+index 738d53d8..a651762b 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -2607,6 +2607,10 @@ class Vision:
+         """#914: close() for good: the server ends, so the encoder's directory (one ~10 MB .sve per image, on a tmpfs
+         /tmp that is RAM) goes with it instead of piling up with every start.  unload() keeps it for the restart."""
+         self.close()
++        log = self.spawn[1]
++        if log is not None:                             # the shared log's handle: unload() keeps it, the end releases it
++            with contextlib.suppress(OSError):
++                log.close()
+         shutil.rmtree(self.dir, ignore_errors=True)
+ 
+ 
+@@ -7685,7 +7689,7 @@ def shutdown(svc: Service, httpd, hub=None) -> None:
+     ones the server started with (#37) - and the MCP servers PolyStrata started."""
+     engine, vision = svc.engine, svc.vision
+     closers = [httpd.shutdown, getattr(engine, "close", None), vision.shutdown if vision else None,
+-               hub.close if hub is not None else None]
++               svc.images.close if svc.images else None, hub.close if hub is not None else None]
+     for close in filter(None, closers):
+         try:
+             close()
