@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-from console_chat import ChatBridge, context_payload
+from console_chat import ChatBridge, context_payload, request_metrics
 
 class Upstream(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
@@ -100,6 +100,39 @@ class TransportTests(unittest.TestCase):
         c,r=self.request(id='invalid',reasoning_budget_tokens=0);self.assertEqual(r.status,400);r.read();c.close()
 
 class ContextTests(unittest.TestCase):
+    def test_exact_native_id_join_and_ambiguous_rows(self):
+        control=Control(1);control.backend='llamacpp';bridge=ChatBridge(control)
+        bridge.records['browser']={'id':'browser','instance':'one','native_id':'chatcmpl-abc','state':'answering'}
+        row={'id':'42','native_request_id':'chatcmpl-abc','status':'generating','decode_tps':10,
+             'decode_tps_live':20,'decode_tps_window_ms':3000,'decode_tps_sampled_at_ms':time.time()*1000}
+        bridge.get_json=MagicMock(return_value={'active':[row],'recent':[]})
+        result=bridge.record('browser')['metrics']
+        self.assertEqual(result['decode_tps'],20)
+        self.assertEqual(result['decode_tps_mean'],10)
+        control.backend='ninfer'
+        self.assertEqual(bridge.record('browser')['metrics']['decode_tps'],20)
+        bridge.get_json.return_value={'active':[row,dict(row,id='43')],'recent':[]}
+        self.assertNotIn('metrics',bridge.record('browser'))
+        bridge.get_json.return_value={'active':[dict(row,native_request_id='other')],'recent':[]}
+        self.assertNotIn('metrics',bridge.record('browser'))
+
+    def test_live_speed_scope_freshness_and_native_sse_fallback(self):
+        row={'id':'1','status':'generating','decode_tps':10,'decode_tps_live':20,
+             'decode_tps_window_ms':3000,'decode_tps_sampled_at_ms':time.time()*1000-20000}
+        snapshot={'active':[row],'recent':[]}
+        for backend in ('llamacpp','ninfer'):
+            value=request_metrics({},snapshot,row,backend)
+            self.assertIsNone(value['decode_tps'])
+            self.assertEqual(value['decode_tps_mean'],10)
+        self.assertEqual(request_metrics({},snapshot,row,'polystrata')['decode_tps'],10)
+        value=request_metrics({'state':'completed','finish_reason':'length','timings':{
+            'prompt_ms':200,'predicted_ms':1000,'predicted_per_second':12,'draft_n':20,'draft_n_accepted':10}}, {}, None,'ninfer')
+        self.assertIsNone(value['decode_tps'])
+        self.assertEqual(value['decode_tps_mean'],12)
+        self.assertEqual(value['prefill_ms'],200)
+        self.assertEqual(value['drafts_accepted'],10)
+        self.assertEqual(value['finish_reason'],'length')
+
     def test_native_props_fallbacks_and_unknown_thinking(self):
         for backend in ('ninfer', 'llamacpp'):
             state={'state':'ready','instance':'one','url':'http://localhost:99',

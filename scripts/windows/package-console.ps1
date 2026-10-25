@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory)][string]$OutputDir,
     [Parameter(Mandatory)][string]$PythonArchive,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$PythonSha256,
+    [Parameter(Mandatory)][string]$PsutilWheel,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$PsutilSha256,
     [string]$SourceDir,
     [string]$ChatUiDir
 )
@@ -36,7 +38,7 @@ $files = @('START-HERE-CN.bat', 'START-HERE-EN.bat', 'scripts/local-console.py',
            'scripts/windows/describe-launch-json.ps1', 'scripts/windows/start-backend.ps1',
            'scripts/windows/start-ninfer.ps1', 'scripts/windows/start-dflash2.ps1','scripts/windows/start-polystrata.ps1','tools/polystrata/server.py','tools/polystrata/assets.py',
            'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/select-model.ps1', 'scripts/speculative-capabilities.json')
-$files += 'scripts/model_health.py'
+$files += 'scripts/model_health.py', 'scripts/console_hardware.py', 'scripts/requirements-console.txt'
 foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'formats.py', 'framing.py', 'file_io.py', 'LICENSE', 'PROVENANCE.json') {
     $files += 'scripts/model_health_ninfer/' + $name
 }
@@ -80,6 +82,10 @@ $null = New-Item -ItemType Directory -Path (Split-Path $runtime) -Force
 $python = Join-Path $runtime 'python.exe'
 $version = @(& $python -I -S -c 'import sys,ctypes,json,http.server,urllib.request,webbrowser; assert sys.version_info >= (3,10); assert sys.maxsize > 2**32; print(sys.version.split()[0])')
 if ($LASTEXITCODE -ne 0) { throw 'Bundled Python failed its x64 standard-library check' }
+& $python -I -S (Join-Path $source 'scripts/install-console-dependency.py') --wheel $PsutilWheel --sha256 $PsutilSha256 --runtime $runtime
+if ($LASTEXITCODE -ne 0) { throw 'Cannot install the verified psutil wheel' }
+& $python -I -c 'import psutil; assert psutil.__version__.split(chr(46)) == list(map(str, (7, 2, 2))); print(psutil.__version__)'
+if ($LASTEXITCODE -ne 0) { throw 'Bundled psutil failed its import check' }
 foreach ($relative in $files) {
     $destination = Join-Path $output $relative
     $null = New-Item -ItemType Directory -Path (Split-Path $destination) -Force
@@ -153,7 +159,7 @@ $hashes = @{}
 foreach ($relative in $files) { $hashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $output $relative)).Hash.ToLowerInvariant() }
 $manifest = @{ schema_version=1; launch_contract_version=2; python_version=[string]$version[-1];
     console_chat_protocol=1; chat_manifest_sha256=(Get-FileHash -LiteralPath $chatManifest).Hash.ToLowerInvariant();
-    python_archive_sha256=$PythonSha256.ToLowerInvariant(); offline_console=$true;
+    python_archive_sha256=$PythonSha256.ToLowerInvariant(); psutil_wheel_sha256=$PsutilSha256.ToLowerInvariant(); offline_console=$true;
     models_included=$false; controller_files=$hashes }
 [IO.File]::WriteAllText((Join-Path $output 'console-build.json'), ($manifest | ConvertTo-Json -Depth 5), $utf8)
 Write-Output "One-click console added: $output"

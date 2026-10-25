@@ -87,7 +87,7 @@ def main():
         (block <= args.reserve <= 2147483647 and args.reserve % block == 0, f"Reserve must be >={block} and a multiple of {block}"),
         (args.budget + args.reserve <= args.context <= 2147483647, "Context must be >= Budget + Reserve"),
         (1 <= args.prefill <= args.reserve, "Prefill must be positive and <= Reserve"),
-        (1 <= args.max_tokens <= args.context, "MaxTokens must be positive and <= Context"),
+        (0 <= args.max_tokens <= args.context, "MaxTokens must be 0 (unlimited) or positive and <= Context"),
         (args.sink >= 0 and args.sink % block == 0, f"SinkTokens must be nonnegative and a multiple of {block}"),
         (args.recent >= block and args.recent % block == 0, f"RecentTokens must be >={block} and a multiple of {block}"),
         (args.sink + args.recent <= args.budget, "SinkTokens + RecentTokens must be <= Budget"),
@@ -186,7 +186,7 @@ def main():
                 "STRATA_FATTN": os.environ.get("STRATA_FATTN", "1"),
                 "STRATA_FDEC": os.environ.get("STRATA_FDEC", "1")},
         "kvmem_monitor_gpu_uuid": gpu_uuids[0],
-        "warm_start": False, "kvmem_default_max_tokens": args.max_tokens,
+        "warm_start": False, "kvmem_default_max_tokens": args.max_tokens or None,
     }
     if args.log:
         config["log"]=str(args.log.resolve())
@@ -196,6 +196,8 @@ def main():
     if effort is not None: config["reasoning_effort"] = effort
     if args.thinking_budget is not None: config["reasoning_budget_tokens"] = args.thinking_budget
     config["preserve_thinking"] = args.preserve_thinking
+    config["kvmem_mtp_policy"] = "native-adaptive" if args.mtp_drafts else "off"
+    config["kvmem_mtp_drafts_max"] = args.mtp_drafts
     config["client_reasoning_history"] = True
     config["kvmem_console_only"] = True
     config["kvmem_vram_reserve_mib"] = args.vram_reserve_mib

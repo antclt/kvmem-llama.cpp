@@ -27,6 +27,8 @@ async function until(fn){for(let i=0;i<100;i++){try{if(await fn())return;}catch{
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base+'/monitor/?lang=en#config');await page.locator('[data-param=Backend]').waitFor();
  await page.locator('[data-param=Backend]').selectOption('ninfer');
+ await page.locator('[data-param=SpeculativeMode]').evaluate(el=>{el.value='none';el.dispatchEvent(new Event('change',{bubbles:true}));});
+ await page.locator('[data-param=Vision]').evaluate(el=>{el.checked=false;el.dispatchEvent(new Event('change',{bubbles:true}));});
  await page.locator('[data-param=Model]').fill(model);
  const card=page.locator('[data-model-health]'),start=page.locator('[data-action=start]');
  await until(async()=>await card.getAttribute('data-state')==='ready');

@@ -1,4 +1,9 @@
 export const english: Record<string, string> = {
+  "MTP 接受 / 提议": "MTP accepted / proposed",
+"排队中":"Queued",
+"预填充中":"Prefilling",
+  "解码耗时": "Decode time",
+  "推测解码提议 / 接受": "Speculative proposals / accepted",
   今天: "Today",
   昨天: "Yesterday",
   近七天: "Previous 7 days",
@@ -15,6 +20,7 @@ export const english: Record<string, string> = {
   "参数超出有效范围，已保留原值":
     "Value is out of range; the previous setting was kept",
   "不限（-1）": "Unlimited (-1)",
+  "不限制（跟随服务）": "Unlimited (service default)",
   "思考预算必须为正整数；总输出包含思考和正文。":
     "The thinking budget must be positive. The output limit includes reasoning and answers.",
   "思考预算 0 表示不设思考预算；总输出仍限制思考和正文。":

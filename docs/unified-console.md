@@ -19,8 +19,10 @@ the running configuration, and API keys are never returned by the status endpoin
 Completed messages show the native average decode rate, output count and stop
 reason. A one-token reply or an absent/nonpositive native rate has no displayed
 decode speed. The details show native prefill/reuse counts and client wait times.
-Live message rates require an exact request match: PolyStrata supplies that match;
-other workers can still show their native final means and service-wide monitoring.
+Live message rates require an exact request match: PolyStrata supplies a client ID,
+and llama.cpp/NInfer attach the native response ID to their monitor rows. Request
+interval rates use native output-commit counters; global engine rates are never
+substituted for a chat-request rate.
 
 Histories remain in the browser. Import and backup support KVMem, llama-ui and
 PolyStrata exports. Imported IDs are stable, branches and reasoning are retained,
@@ -110,3 +112,62 @@ This UI change does not alter native C++ inference code. Expert-profile persiste
 is a separate pending integration item; initial expert-cache adaptation and system
 memory pressure can still cause slow starts. Batch MTP and multi-GPU PolyStrata
 remain outside the current integration.
+
+## Shared system disk telemetry
+
+Install console dependencies with `python -m pip install -r scripts/requirements-console.txt`.
+The psutil collector supports Windows, Linux and macOS; this does not imply that the
+existing Windows service launcher is portable. Windows distributions bundle psutil.
+
+`GET /api/launcher/hardware` serves one cached system-wide sample to all monitor clients
+and all three backends, even when no inference service is running. The collector uses
+cumulative psutil disk read/write bytes and monotonic elapsed time, approximately once
+per second. Values are bytes/s, rendered as MiB/s. They include other processes, unlike
+the separate backend cache I/O counters. GPU and engine metrics remain backend-owned.
+First samples, unavailable counters, reset counters and expired readings display a dash.
+The API reports its scope, status, sample time and actual interval. Unsupported or
+permission-restricted OS counters are unavailable, never fabricated zeroes.
+Standalone/older workers without this console endpoint retain native disk readings.
+New controller code takes effect on console restart; replacing UI files alone cannot
+activate the collector inside an already-running Python process.
+
+## Native metric details
+
+The monitor expands existing public metrics without estimating missing counters.
+Cache details include cumulative disk read/write bytes, operation counts, errors,
+history misses/swaps/transfers, checkpoints, resident pages and staging memory when
+reported. Native diagnostics are collapsed by default and retain their open state
+across polls. NInfer groups expose request/queue state, capacity, occupancy, CUDA
+residency, context-cache transfers/pressure, scheduler, batches, cumulative counters,
+mean throughput since startup, host work, uptime and optional expert statistics.
+llama.cpp conversation details retain each slot's native scope without summing shared
+conversation counters. PolyStrata request details show expert hit rate (native 0..1),
+speculative proposals/accepts and timing fields. Missing groups stay hidden.
+
+The chat bridge matches llama.cpp's native_request_id to the SSE response ID;
+ambiguous matches are rejected. Cumulative decode_tps is mapped to the mean, and only
+a fresh request-specific live window is shown as real time. NInfer's global 5-second
+rate is never used as a chat-request rate. Native SSE timing and speculative counters
+remain usable without a monitor-ID match. Speculative counts are not labeled MTP-only
+because an engine can include other draft algorithms. Completed-message details show
+native decode duration and draft proposals/accepts.
+
+The serving adapters publish native response IDs, phase durations, finish reasons and
+actual speculative counters directly into the bounded monitor records, including
+requests from external API clients. NInfer's execution TTFT is admission-to-first-token;
+`ttft_request_ms` separately retains the native preparation-and-queue-inclusive value.
+No-token outcomes have unavailable TTFT. The prefill duration follows the native
+`prompt_ms` phase convention. Live and final request means share NInfer's existing
+completion-timing calculation, including its first-token interval boundary.
+
+NInfer also reports a per-request approximately 5-second window from cumulative native
+commits and native generation time. The monitor prefers this structured sample; older
+workers can still supply an explicitly engine-scoped operational-log rate. llama.cpp
+retains its approximately 3-second request window. First incomplete windows, stopped
+requests and expired samples are unavailable. The main monitor and completed chat
+messages show actual MTP accepts/proposals; NInfer copy drafts are accounted separately.
+Transport failure overrides a prior normal generation result in monitoring.
+
+Native worker and controller updates take effect on restart. A new NInfer worker can
+be installed beside the active executable and DLLs and selected by the existing worker
+map, so updating files does not interrupt an already-running service.

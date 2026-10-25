@@ -1116,3 +1116,13 @@ html[lang="en"] #app .s-metric .s-number[data-value="reuse"] { font-size:clamp(1
   #app [data-view=monitor] .s-context-dial { grid-template-columns:96px minmax(0,1fr); }
   #app [data-view=monitor] .s-metric .s-number { font-size:30px; }
 }
+
+/* Native diagnostic groups remain folded until requested. */
+#app .s-native-metrics { margin-top:16px; }
+#app .s-native-metrics summary { cursor:pointer; font-size:15px; font-weight:500; padding:8px 0; }
+#app [data-backend-sections] { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); gap:0 24px; }
+#app [data-backend-sections] .s-cache-details { min-width:0; align-self:start; }
+#app [data-backend-sections] .s-facts { grid-template-columns:minmax(0,1fr) auto; }
+#app [data-backend-sections] dt { overflow-wrap:anywhere; }
+#app [data-backend-sections] dd { max-width:220px; overflow-wrap:anywhere; }
+#app .s-metric-warning { color:var(--s-warn-text); font-weight:600; }

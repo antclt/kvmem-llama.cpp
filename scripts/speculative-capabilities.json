@@ -48,13 +48,14 @@
     },
     "mtp": {
       "max_draft_tokens": 3,
-      "adaptive": false,
+      "adaptive": true,
       "ngram": false,
       "max_concurrency": 8,
       "max_devices": 1,
       "draft_asset": "embedded",
       "batch_drafts": false,
-      "solo_drafts": true
+      "solo_drafts": true,
+      "adaptive_kind": "native_cost"
     }
   }
 }
