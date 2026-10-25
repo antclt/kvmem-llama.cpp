@@ -24,9 +24,10 @@ param(
     [switch]$PreserveThinking,
     [ValidateRange(256, 2147483647)][int]$Context = 262144,
     [ValidateRange(128, 2147483647)][int]$Budget = 32768,
-    [ValidateRange(64, 2147483647)][int]$Reserve = 1024,
+    [ValidateSet(32,64)][int]$BlockTokens = 64,
+    [ValidateRange(32, 2147483647)][int]$Reserve = 1024,
     [ValidateRange(1, 1048576)][int]$HostMiB = 16384,
-    [ValidateRange(128, 2147483647)][int]$Prefill = 128,
+    [ValidateRange(1, 2147483647)][int]$Prefill = 128,
     [ValidateRange(1, 2147483647)][int]$MaxTokens = 1024,
     [string]$KvType,
     [string]$KvTypeK,
@@ -103,6 +104,7 @@ if ($Backend -eq 'ninfer') {
     }
 }
 if ($Backend -eq 'polystrata') {
+    $capabilities.block_tokens = @{default=64;supported=@(32,64);startup_fixed=$true}
     $capabilities.supported_combinations=@{
         text=@{architectures=@('qwen35moe');kv=@('f16','q8_0');max_concurrency=8;max_devices=1}
         mtp=@{drafts=@(0..3);solo=$true;batch=$false;batch_fallback='ordinary_decode'}
@@ -111,6 +113,12 @@ if ($Backend -eq 'polystrata') {
     }
 }
 if ($Describe) { $capabilities | ConvertTo-Json -Depth 4; return }
+if ($Backend -ne 'polystrata' -and $PSBoundParameters.ContainsKey('BlockTokens')) {
+    throw '-BlockTokens configures PolyStrata in this launcher'
+}
+if ($Backend -ne 'polystrata' -and ($Reserve -lt 64 -or $Prefill -lt 128)) {
+    throw 'This backend requires Reserve >=64 and Prefill >=128 in the shared launcher'
+}
 if ($Backend -eq 'polystrata') {
     & (Join-Path $PSScriptRoot 'start-polystrata.ps1') -Parameters $PSBoundParameters -Root $root -WorkerArgs $WorkerArgs
     return

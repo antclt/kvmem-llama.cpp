@@ -54,7 +54,19 @@ class WrapperTest(unittest.TestCase):
                         self.assertEqual('--no-kvmem-lrfu' in argv, history == '--no-lrfu',
                                          'Explicit off must override the native cosine default')
                         self.assertEqual(argv[argv.index('--kvmem-query-replay-max-tokens')+1], '256')
+            for size in (32,64):
+                configured=run(['--kvmem-block-tokens',str(size),'--budget','128','--reserve',str(size),
+                                '--prefill',str(size),'--sink','0','--recent',str(size)])
+                self.assertEqual(configured.returncode,0,configured.stderr)
+                argv=json.loads(configured.stdout)['args']
+                self.assertEqual(argv[argv.index('--kvmem-block-tokens')+1],str(size))
+            for invalid in (['--kvmem-block-tokens','16'],['--kvmem-block-tokens','32','--budget','96'],
+                            ['--kvmem-block-tokens','64','--reserve','32'],
+                            ['--kvmem-block-tokens','32','--sink','16'],
+                            ['--','--kvmem-block-tokens','32']):
+                self.assertEqual(run(invalid).returncode,2,invalid)
             cfg = json.loads(valid.stdout)
+            self.assertEqual(cfg['args'][cfg['args'].index('--kvmem-block-tokens')+1],'64')
             self.assertEqual(cfg["args"][1], str(root/"model with spaces.gguf"))
             self.assertEqual(cfg["gpu"], 0)
             self.assertEqual(cfg["env"]["CUDA_DEVICE_ORDER"], "PCI_BUS_ID")

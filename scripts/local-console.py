@@ -39,7 +39,7 @@ STRINGS = {'Tokenizer','PolystrataSource','Python','VisionWorker','Mmproj','Quer
            'VisionResidency',
            'DeviceProfile', 'ScoreAggregation', 'QueryScorer', 'ApiKey', 'ModelAlias', 'LogLevel',
            'ChatTemplateFile', 'ThinkingMode', 'ReasoningEffort', 'SpeculativeMode', 'DraftPolicy', 'DraftModel'}
-INTEGERS = {'VramReserveMiB', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
+INTEGERS = {'BlockTokens', 'VramReserveMiB', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
             'MtpDrafts', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions',
             'VisionTokens', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'DiskMiB', 'DraftTokens',
             'QueryMaxTokens', 'QueryReplayMaxTokens', 'ReplayMaxTokens'}
@@ -70,6 +70,12 @@ def normalize(data, backends):
     p = copy.deepcopy(params)
     if p.get('Backend') not in NATIVE or p.get('Backend') not in backends:
         raise ValueError('This backend is not installed in the selected backend checkout')
+    if p['Backend'] == 'polystrata':
+        p.setdefault('BlockTokens', 64)
+        if type(p['BlockTokens']) is not int or p['BlockTokens'] not in (32, 64):
+            raise ValueError('PolyStrata BlockTokens must be 32 or 64')
+    elif 'BlockTokens' in p:
+        raise ValueError('BlockTokens configures PolyStrata in this console')
     for key, value in p.items():
         if key in STRINGS and (not isinstance(value, str) or '\x00' in value or len(value) > 8192):
             raise ValueError(f'{key} must be a string without NUL characters')
@@ -339,7 +345,7 @@ class Controller:
         lines = text.split('\n')
         self.observed_pending = lines.pop()
         for line in lines:
-            for marker in ('KVMEM_SCORING ', 'KVMEM_LIMITS '):
+            for marker in ('KVMEM_SCORING ', 'KVMEM_LIMITS ', 'KVMEM_BLOCKS '):
                 if marker not in line:
                     continue
                 for key, value in re.findall(r'(\w+)=([^\s]+)', line.split(marker, 1)[1]):
@@ -349,7 +355,7 @@ class Controller:
                         self.observed_scoring[key] = value == '1'
                     elif key in {'lambda', 'top_frac', 'graph_alpha'}:
                         self.observed_scoring[key] = float(value)
-                    elif key in {'query_max_tokens', 'query_replay_max_tokens'}:
+                    elif key in {'query_max_tokens', 'query_replay_max_tokens', 'block_tokens'}:
                         self.observed_scoring[key] = int(value)
 
     def worker_defaults(self):
@@ -451,6 +457,13 @@ class Controller:
             native_argv = result.get('native_argv', argv)
             result['worker'] = self.worker_capabilities(native_argv[0], params['Backend'])
             result['resolved_scoring'] = self.scoring_from_argv(native_argv)
+            if params['Backend'] == 'polystrata':
+                block = params.get('BlockTokens', 64)
+                if block not in result['worker'].get('block_tokens', {}).get('supported', []):
+                    raise ValueError('PolyStrata worker does not support BlockTokens; update the backend')
+                if '--kvmem-block-tokens' not in native_argv or int(native_argv[native_argv.index('--kvmem-block-tokens') + 1]) != block:
+                    raise ValueError('PolyStrata BlockTokens differs from the native launch plan')
+                result['resolved_scoring']['block_tokens'] = block
             return result
         finally:
             Path(name).unlink(missing_ok=True)

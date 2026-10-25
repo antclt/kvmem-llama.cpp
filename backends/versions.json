@@ -110,8 +110,8 @@
     "upstream": "https://github.com/VecSzn/PolyStrata.git",
     "base_commit": "974552f562aecb3e86cdd2679e76e4515b52b9d2",
     "license_file": "backends/polystrata/LICENSE",
-    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base",
-    "patched_tree": "7aa6e4c18cbd43da822a1acd24145b539d23a0b3",
+    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 64)",
+    "patched_tree": "74fe791f4bf85d61709e20c9be3281cbc7a81185",
     "source_tag": "v0.1.45-poly.2",
     "patches": [
       {
@@ -165,6 +165,15 @@
           "elastic-headroom"
         ],
         "after_tree": "7aa6e4c18cbd43da822a1acd24145b539d23a0b3"
+      },
+      {
+        "id": "block-tokens",
+        "path": "backends/patches/polystrata-block-tokens.patch",
+        "sha256": "0bbe48e46215fa696cc453aa4ed491564cbc0d0274ed2068fea486e490fdd839",
+        "requires": [
+          "elastic-mtp"
+        ],
+        "after_tree": "74fe791f4bf85d61709e20c9be3281cbc7a81185"
       }
     ]
   }

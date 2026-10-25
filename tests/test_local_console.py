@@ -17,6 +17,37 @@ spec.loader.exec_module(console)
 
 
 class ConsoleTests(unittest.TestCase):
+    def test_polystrata_block_size_is_typed_backend_scoped_and_startup_fixed(self):
+        def normalize(**values):
+            return console.normalize({'schema_version':1,'parameters':{'Backend':'polystrata',**values}},
+                                     ['polystrata','ninfer','llamacpp'])['parameters']
+        self.assertEqual(normalize()['BlockTokens'],64)
+        for size in (32,64):
+            self.assertEqual(normalize(BlockTokens=size)['BlockTokens'],size)
+        for value in (16,128,True,32.0,'32',None):
+            with self.subTest(value=value), self.assertRaises(ValueError): normalize(BlockTokens=value)
+        for backend in ('ninfer','llamacpp'):
+            with self.assertRaises(ValueError): normalize(Backend=backend,BlockTokens=32)
+        self.controller.active=self.config
+        self.controller.active_plan={'resolved_scoring':{'block_tokens':32}}
+        self.controller.log_path.write_text('KVMEM_BLOCKS block_tokens=32\n',encoding='utf-8')
+        self.assertEqual(self.controller.status()['effective_scoring']['block_tokens'],32)
+        self.assertTrue(self.controller.status()['scoring_confirmed'])
+        self.controller.active_plan={'resolved_scoring':{'block_tokens':64}}
+        self.assertTrue(self.controller.status()['scoring_mismatch'])
+
+    def test_polystrata_plan_requires_matching_worker_block_capability(self):
+        worker=Path(self.tmp.name)/'worker.exe';worker.touch()
+        config={'schema_version':1,'parameters':{'Backend':'polystrata','Worker':str(worker),'BlockTokens':32}}
+        for supported,flag in (([32,64],32),([64],32),([],32),([32,64],64)):
+            response={'argv':['python','server.py'],'native_argv':[str(worker),'--kvmem-block-tokens',str(flag)]}
+            with patch.object(console.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(response))), \
+                 patch.object(self.controller,'worker_capabilities',return_value={'block_tokens':{'supported':supported}}):
+                if 32 in supported and flag==32:
+                    self.assertEqual(self.controller.plan(config)['resolved_scoring']['block_tokens'],32)
+                else:
+                    with self.assertRaisesRegex(ValueError,'BlockTokens'):self.controller.plan(config)
+
     def test_elastic_experts_native_switch_is_opt_in_and_backend_scoped(self):
         def validate(args, backend='polystrata'):
             return console.normalize({'schema_version':1,'parameters':{'Backend':backend,'WorkerArgs':args}},

@@ -4,8 +4,10 @@
 namespace kvmem {
 // Model-free CLI contract used by the local console before launching a worker.
 inline std::string launch_capabilities(const char* backend) {
+    const auto blocks = std::string(backend) == "polystrata"
+        ? "\"block_tokens\":{\"default\":64,\"supported\":[32,64],\"startup_fixed\":true}," : "";
     return std::string("{\"schema_version\":1,\"backend\":\"") + backend +
-        "\",\"query_scoring_revision\":2,"
+        "\"," + blocks + "\"query_scoring_revision\":2,"
         "\"query_scorers\":[\"page-softmax\",\"meanq-cosine\"],"
         "\"score_aggregations\":[\"mean\",\"max\"],"
         "\"independent_graph_lrfu\":true,\"signed_lrfu_hits\":true,"
