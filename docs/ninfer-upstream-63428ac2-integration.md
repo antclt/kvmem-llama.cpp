@@ -1,7 +1,8 @@
 # ninfer-all 63428ac2 接入记录
 
-日期：2026-10-25。状态：非 fork 候选完整构建、单卡和真实双卡 TP 核心功能通过；
-受控性能比较及 fork 运行验收尚未完成。没有提交或推送。
+日期：2026-10-26。版本：0.19.0。状态：完整构建、最终 fork 的核心功能、独立
+数值检查和三种 KV 的受控性能比较通过。同步 KVMem master `47cee454` 的
+checkpoint-policy 与 monitor-events；发布包仅包含 NVIDIA 50 系 ninfer 后端。
 
 ## 顺序和固定版本
 
@@ -10,7 +11,8 @@
 3. 最后移植 NVFP4 fork，单独记录来源、改动和性能结果。
 
 第一阶段依次保留 `kvmem`、`ptq1`、`ptq1-performance`、`t5-performance`、
-`query-memory` 五层补丁。非 fork 验收二进制已单独保存，随后加入 NVFP4 fork 三层。
+`query-memory` 五层补丁。非 fork 验收二进制已单独保存，随后加入 NVFP4 fork 三层、
+master 的 checkpoint-policy/monitor-events 两层和本地 Blackwell scale 修复，共十一层。
 
 用户于 2026-10-25 最终澄清：本轮 ninfer 只适配 Qwen dense。之前提到的
 35B-A3B MoE 限定已撤回。单卡核心功能使用本地 Qwen3.5-4B，单卡性能及 TP
@@ -45,9 +47,9 @@ Query/统计读取、初始 draft 生命周期及取消边界，才能放开提�
 - 至少检查 INT8、RK8V4、NVFP4 KV；分别报告 PP、TG、TTFT，不以输出逐字相同
   作为唯一正确性依据。
 - 单卡性能比较固定使用 RTX 5060 Ti，运行前检查占用。
-- 用户于 2026-10-25 明确授权 TP 测试同时使用 RTX 5060 Ti
-  (`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`) 与 RTX 5050 Laptop
-  (`GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`)。运行前检查两卡占用；
+- 用户于 2026-10-25 明确授权 TP 测试同时使用 RTX 5060 Ti（GPU-A）
+  与 RTX 5050 Laptop（GPU-B）。原始本地 metadata 保存实际 UUID，公开文档使用别名。
+  运行前检查两卡占用；
   优先以 5060 Ti 为 rank 0。双卡结果单独记录，不混入单卡受控比较。
 - TP 需要独立记录真实多卡验证；单卡编译或测试不能当作 TP 验收。
 - NVFP4 权重量化算子与 NVFP4 KV 格式分别验证，不互相代替。
@@ -135,16 +137,59 @@ TP 请求为非流式，未测客户端首 token 到达时间；历史 summary �
 构建前验证完整依赖，BuildOnly 拒绝失效 CMake 路径。缺失文件、内容变更、清单变更
 及旧缓存拒绝检查通过；重新配置后复用已有 CUDA 对象完成构建，没有改变基线算子。
 
-## NVFP4 fork 准备状态
+## NVFP4 fork 最终验收
 
 fork 固定为 `c02c7692bd10a9b4a7effef67b60f58673985aa6`。A16 和 INT8 两层
 按作者在该版本中的 TP 冲突解法移植；纳入的 130 个文件与作者快照逐字节一致。
-两层作者补丁和现有本地兼容层均能干净应用到上述非 fork 最终树，准备后的树为
-`61afe68864709124ab52ea0ce23e1548e81ac80e`，记录位于
-`prepared-fork-634/status.json`。保存非 fork 二进制及 manifest 至
-`nonfork-634-binaries` 后，已应用三层至活动候选和 manifest；本地层另补充了
-复用既有数值测试对象的集中构建目标，当前树为
-`4ba90563e7d315d9e2fa7b4b8053704932bb1a97`。fork 尚未编译或运行。
+非 fork 二进制及 manifest 保存在 `nonfork-634-binaries`。本地兼容层保留 Blackwell
+原生 KV codec，并约束环境变量作用域、默认路由和 StateImage 模式绑定。master 的
+checkpoint-policy 在新的 prefill 生命周期中捕获，monitor-events 沿用当前 master
+的原生请求计数与耗时语义。最终十一层树值：
+`2d5f335df7a9ad2bf0727ece037e06782edbba2a`。完整来源、各层 SHA-256 和树值见
+`backends/versions.json`；`prepare-backends.py --backend ninfer --check` 通过。
+
+运行 A16 独立数值参考时发现：作者软件 UE4M3 权重 scale 表把 `0x7F` 映射为零，
+Blackwell 原生 E4M3 转换却产生 NaN。仅在 unified 权重 pair/quad 解码入口归一化
+此值；NVFP4 KV codec 未改。新增独立 FP64 E2M1/E4M3 参考，穷举 256 个 code byte
+与 128 个非负 scale 的 32768 个组合，逐位比较 BF16 pair/quad 结果，全部通过。
+失败记录保留在 `fork-634-qualification/`，修复后记录在
+`fork-634-scale-oracle/`、`fork-634-qualification-fixed-scale/`。
+
+最终构建的 A16、INT8、fused norm、SwiGLU、add 五项算子参考全部通过；默认、
+INT8 legacy/unified、A16 legacy/unified 五个独立进程的路由检查和 native snapshot
+模式隔离通过。checkpoint pool、Qwen3.5 frontend、serve options、OpenAI schema
+四项运行契约通过。单卡三种 KV 各 67/67，真实双卡 TP 的 NVFP4 KV 65/65；
+原始记录分别位于 `single-634-fork-core/<kv>/`、`tp-634-fork-core/nvfp4/`。
+
+最终 fork 在前述完全相同的单卡性能设置下，预热一次、测量两次：
+
+| KV | 最终 PP tok/s | 相对原版 | 最终 wall TG tok/s | 相对原版 | 最终 TTFT s | 相对原版 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| INT8 | 760.58 | -2.82% | 87.59 | -0.68% | 10.772 | +2.90% |
+| RK8V4 | 757.98 | -3.10% | 87.74 | -0.62% | 10.809 | +3.21% |
+| NVFP4 | 754.22 | -0.77% | 86.63 | -0.58% | 10.863 | +0.78% |
+
+三种 KV 均未达到本轮 5% 的回退调查阈值。此为 8K、两次重复的核心检查，不代表
+全部长度或统计显著性。与冻结非 fork 候选的差异很小。最终原始记录位于
+`single-634-performance/<kv>-fork/`；前述 TP 性能表为非 fork 阶段，最终 fork TP
+另做功能验收，没有以该表声称最终 fork TP 加速。
+
+没有本地完整 NVFP4 权重模型，因此未声称其整模型性能提升；GGUF 模型的
+NVFP4 KV 功能/性能不能替代 NVFP4 权重模型验证。
 
 NVFP4 KV 已有上述单卡/TP 功能证据；这不等价于 NVFP4 权重算子验收。
 上游 TP 仍要求受支持的 GGUF 权重，fork 没有解除 NVFP4 权重的 TP 限制。
+
+## 可选 checkpoint policy 的边界
+
+此功能默认关闭，只有 `KVMEM_CHECKPOINT_POLICY=spread` 才启用。本轮以普通文档
+请求后单独提问验证。默认 12 个 checkpoint、1024 MiB host 预算下，MTP 3、
+Responses、interval 256 的核心回归通过；中段编辑复用 1408 token，前段编辑复用 26。
+6 个 checkpoint、256 MiB 的专门预算压力检查也通过：计费有界，缺少空间时跳过
+可选捕获，后续请求可恢复。记录在 `checkpoint-634-default-count/` 和
+`checkpoint-634-budget-pressure/`。
+
+另保留两个诊断失败：6 个 checkpoint 配 256/1024 MiB 的普通复用测试，经过多次
+续接后，中段编辑分别只复用 0/26 token，未达到测试期望。字节预算或计数预算不足
+时，近期端点可能挤走合法恢复前沿内的中间点；这是现有策略允许的重算回退，未将
+其冒充已修复缺陷，也未降低普通测试断言。小预算仍可能增加重算耗时。

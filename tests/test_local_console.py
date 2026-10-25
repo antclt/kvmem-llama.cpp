@@ -17,6 +17,25 @@ spec.loader.exec_module(console)
 
 
 class ConsoleTests(unittest.TestCase):
+    def test_ninfer_only_package_filters_backends_and_rejects_old_backend_drafts(self):
+        package = Path(self.tmp.name) / 'ninfer-package'
+        launcher = package / 'scripts/windows/start-backend.ps1'
+        launcher.parent.mkdir(parents=True)
+        launcher.write_bytes((console.ROOT / 'scripts/windows/start-backend.ps1').read_bytes())
+        (package / 'console-build.json').write_text(json.dumps({'supported_backends': ['ninfer']}))
+        state = package / 'state'
+        controller = console.Controller(package, state, 18197)
+        self.assertEqual(controller.backends, ['ninfer'])
+        self.assertEqual(set(controller.worker_defaults()), {'ninfer'})
+        with self.assertRaises(ValueError):
+            console.normalize({'schema_version': 1, 'parameters': {'Backend': 'llamacpp'}}, controller.backends)
+        controller.draft_path.write_text(json.dumps({'schema_version': 1, 'parameters': {'Backend': 'llamacpp', 'Model': 'old.gguf'}}))
+        self.assertEqual(controller.draft()['parameters']['Backend'], 'ninfer')
+        self.assertNotEqual(controller.draft()['parameters']['Model'], 'old.gguf')
+        (package / 'console-build.json').write_text(json.dumps({'supported_backends': 'ninfer'}))
+        with self.assertRaisesRegex(ValueError, 'backend list'):
+            console.Controller(package, state, 18197)
+
     def test_polystrata_block_size_is_typed_backend_scoped_and_startup_fixed(self):
         def normalize(**values):
             return console.normalize({'schema_version':1,'parameters':{'Backend':'polystrata',**values}},

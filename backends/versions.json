@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "6b35e771d692db21e3ea53c8a640d89cc3b3ee6e",
+    "patched_tree": "2d5f335df7a9ad2bf0727ece037e06782edbba2a",
     "patches": [
       {
         "id": "kvmem",
@@ -160,6 +160,16 @@
         ],
         "after_tree": "6b35e771d692db21e3ea53c8a640d89cc3b3ee6e",
         "source": "Native response IDs, execution/request TTFT, request interval rates, native means, finish reasons and actual MTP/copy counters"
+      },
+      {
+        "id": "nvfp4-blackwell-scale",
+        "path": "backends/patches/ninfer-nvfp4-blackwell-scale.patch",
+        "sha256": "f1705dad6c04399589c08c5392c5c7725a4448a2eb02482a2a1a490418cb0f71",
+        "requires": [
+          "monitor-events"
+        ],
+        "after_tree": "2d5f335df7a9ad2bf0727ece037e06782edbba2a",
+        "source": "Local Blackwell UE4M3 weight-scale normalization and exhaustive independent FP64 codec oracle"
       }
     ]
   },
