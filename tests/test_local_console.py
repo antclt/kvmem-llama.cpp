@@ -36,6 +36,7 @@ class ConsoleTests(unittest.TestCase):
         self.controller.active_plan={'resolved_scoring':{'block_tokens':64}}
         self.assertTrue(self.controller.status()['scoring_mismatch'])
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_polystrata_plan_requires_matching_worker_block_capability(self):
         worker=Path(self.tmp.name)/'worker.exe';worker.touch()
         config={'schema_version':1,'parameters':{'Backend':'polystrata','Worker':str(worker),'BlockTokens':32}}
