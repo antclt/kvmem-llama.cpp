@@ -93,10 +93,10 @@ index 03a57e830764dbc629ebeb093d99ca61ccd2ca28..3e35c818e961ab909c686f9626f34d9f
  
  `q8_g32_fp16` uses an 8-bit two's-complement signed code with the deliberately restricted interval
 diff --git a/docs/weight-conversion.md b/docs/weight-conversion.md
-index 93534864000b447d60ddd8fd1fb65911222ce3f7..027d1c328ad22242ea5bebbdf6c0f22d3ea5a145 100644
+index 88bfc4d97d9946407faf8f63fae1e8421a7ebc4a..163e48f1ed51de99e113523209171bebd0e8795b 100644
 --- a/docs/weight-conversion.md
 +++ b/docs/weight-conversion.md
-@@ -166,7 +166,13 @@ backend. Component availability and startup selection are independent.
+@@ -167,7 +167,13 @@ backend. Component availability and startup selection are independent.
  `bonsai2_27b_ternary` ([`ternary.py`](../tools/convert/ternary.py)) builds a Qwen3.8-27B artifact
  whose text tower comes from PrismML's `Ternary-Bonsai-2-27B-PQ2_0.gguf`. Every text projection
  except the GDN A/B controls, the output head and the token-embedding table are stored as
@@ -158,7 +158,7 @@ index a61dfbb39425f22f3ed3f2b355882fa47a1e085e..64ac5f5fcdfa45bf18018f9cc8fdbac5
   * dequantised values enter the transform unrounded, so out carries one BF16 rounding. No workspace
   * or persistent state.
 diff --git a/include/ninfer/ops/linear.h b/include/ninfer/ops/linear.h
-index b3cc5ab79ad1ee26cf0089c2c58b09b845304d17..b2c7cda33b3da2baeae6dc37d4e080686a3cdf4d 100644
+index 56066bfc6f8cb1e8ade31fd92529bdb82fea952e..9d24e2371681c75c65b7fa9bca3860141ff8081f 100644
 --- a/include/ninfer/ops/linear.h
 +++ b/include/ninfer/ops/linear.h
 @@ -11,6 +11,11 @@
@@ -335,7 +335,7 @@ index 63bf41fbaf946eb5972a19887f735a4e22b34196..9b348e341e559b438d2f1882b4db9a44
          out.high_offset         = aligned(out.code_bytes, 256);
          out.high_bytes          = mul(n, out.high_bytes_per_row);
 diff --git a/src/models/qwen3_5/execution/parameters.cpp b/src/models/qwen3_5/execution/parameters.cpp
-index 954cd3a58a1201c39645b810bf583cfbcdb5b5b9..fe4ec3acebedacb8a1ec89e19fa09eff3ab9db9a 100644
+index f8cef7c6d3405010286f56dca50fd6360f1007ff..22daef1c25ad17232ac1c4fa0bc0a56e2b0ab6fd 100644
 --- a/src/models/qwen3_5/execution/parameters.cpp
 +++ b/src/models/qwen3_5/execution/parameters.cpp
 @@ -33,7 +33,7 @@ public:
@@ -358,7 +358,7 @@ index 954cd3a58a1201c39645b810bf583cfbcdb5b5b9..fe4ec3acebedacb8a1ec89e19fa09eff
              pair->second.n == second_rows && pair->second.k == input_rows) {
              // The split projections are the separable half of the trade, so they take the cuBLAS
              // policy only when both settings ask for it.
-@@ -473,7 +473,7 @@ Parameters::Parameters(const Model& source) : model(source) {
+@@ -497,7 +497,7 @@ Parameters::Parameters(const Model& source) : model(source) {
      const auto& w        = model.weights();
      text.token_embedding = native_weight(model.weight(w.text.token_embedding).view);
      text.output_head     = prepare.head(w.text.output_head_use);
@@ -489,10 +489,10 @@ index 32a5969261c42b9d0cdddb45181088742bffea10..d591a479c73f9700366a6e2d541dc48e
  
  } // namespace ninfer::ops::detail
 diff --git a/src/ops/linear/linear.cpp b/src/ops/linear/linear.cpp
-index d1cb688c6dfac748bcd17765e0dd45febeb957cc..505f6ea6d43c335a38189661a2668e26f7cba8f7 100644
+index 4e135f1ade5fdd785ee69514d4f6490d174b78e1..5f62cbb58ec237d2b27657c4a9c6b893296f24b9 100644
 --- a/src/ops/linear/linear.cpp
 +++ b/src/ops/linear/linear.cpp
-@@ -123,6 +123,13 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
+@@ -125,6 +125,13 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
      case QType::Q8_G32_FP16:
          detail::q8_dispatch(x, w, out, policy, stream);
          return;
@@ -506,7 +506,7 @@ index d1cb688c6dfac748bcd17765e0dd45febeb957cc..505f6ea6d43c335a38189661a2668e26
      case QType::T2_G128_FP16:
          if (workspace != nullptr && detail::t2_a8_admits(policy) &&
              detail::t2_a8_supported(w, x.ne[1])) {
-@@ -168,6 +175,10 @@ std::size_t linear_route_workspace_bytes(QType qtype, std::int32_t output_rows,
+@@ -170,6 +177,10 @@ std::size_t linear_route_workspace_bytes(QType qtype, std::int32_t output_rows,
          (void)detail::select_q8_launch(output_rows, input_rows, min_tokens, policy);
          (void)detail::select_q8_launch(output_rows, input_rows, max_tokens, policy);
          return 0;
@@ -2651,7 +2651,7 @@ index 4be9fc12bccc992cbb322cd79ac41dbad53655a1..2e81c90b43fae1186dce8f0d92bf30e5
          }
          return bytes;
 diff --git a/src/ops/wrapper/gdn_input_proj.cpp b/src/ops/wrapper/gdn_input_proj.cpp
-index ca47daa0f7fb0bdf488bd0eeb9c8c57d6fc52557..81ac0e0dc3f23827c314085cbb51cfa12e31c6cd 100644
+index 30da179a5ea5d27c93e7d140fb39023ebc040b03..3b2f9b82a1b857385360b2c048fc806bd79fe999 100644
 --- a/src/ops/wrapper/gdn_input_proj.cpp
 +++ b/src/ops/wrapper/gdn_input_proj.cpp
 @@ -267,12 +267,16 @@ void require_record_capacity_domain(std::int32_t batch_size, std::int32_t min_wi
@@ -2847,10 +2847,10 @@ index 6584a003e86281b1ae2319cbf10395c353237f2f..bb6bc13c3f14c8bb6fb41912b4c47886
          throw std::invalid_argument("linear_swiglu: unsupported weight");
      }
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index d55f6b9e6bed1a9b0d682c111ebfecc7d14ebca2..7ff2a53767b17c266c17224a7fbc6ff26189d2c9 100644
+index 01e721946de40b777d66f47cb87576d18f336d64..999daaf3ec78d62502fa2fc221492f333f4ca14e 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -188,3 +188,12 @@ set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_cpu_vision_tests_PROGRAMS
+@@ -189,3 +189,12 @@ set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_cpu_vision_tests_PROGRAMS
    ninfer_qwen3_5_loading_test ninfer_request_log_test)
  ninfer_finalize_bundle(ninfer_cpu_vision_tests)
  ninfer_stage_runtime_dlls(ninfer_cpu_vision_tests)
@@ -2991,20 +2991,19 @@ index 0000000000000000000000000000000000000000..137fdabc2aaf4600baf329ddb5ef5cc7
 +        encode_row_split(torch.full((1,1,128), 2, dtype=torch.int8),
 +                         torch.ones((1,1), dtype=torch.float16), "ptq1_g128_fp16", (1,128))
 diff --git a/tests/artifact/tests.cmake b/tests/artifact/tests.cmake
-index 6057d8ae71a2f0d0f5e32da4ce28c6b5c7e3e076..ce14d2949cc91a4cff095725d7b4d925b12e4981 100644
+index 19eb7c8339015bc2ec97e166f5f393bb3398fc36..5f5c952041f84cdb4fb533598f9b42c14efb6a2a 100644
 --- a/tests/artifact/tests.cmake
 +++ b/tests/artifact/tests.cmake
-@@ -2,6 +2,10 @@ ninfer_add_test(ninfer_artifact_reader_test
-   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_reader.cpp"
+@@ -5,6 +5,9 @@ ninfer_add_test(ninfer_artifact_reader_test
+ ninfer_add_test(ninfer_artifact_selection_test
+   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_selection.cpp"
    LIBRARIES ninfer_artifact)
- 
 +ninfer_add_test(ninfer_artifact_ptq1_test
 +  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_ptq1.cpp"
 +  LIBRARIES ninfer_artifact)
-+
+ 
  ninfer_add_test(ninfer_artifact_permute_row_split_test
    SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_permute_row_split.cpp"
-   LIBRARIES ninfer_artifact)
 diff --git a/tests/convert/test_ternary.py b/tests/convert/test_ternary.py
 index c890d64fbccdfe5638c7d66f7aa85b869c474971..7f7b5c06361b1be19022c6f368e5e10fd271d20e 100644
 --- a/tests/convert/test_ternary.py
@@ -3176,7 +3175,7 @@ index 0000000000000000000000000000000000000000..1c9eeb9b465bc02aab45a48453a41fff
 +    }
 +}
 diff --git a/tests/ops/linear/tests.cmake b/tests/ops/linear/tests.cmake
-index 8ee5111596308929051db57bb1efc391c2d490fd..732d0fc67e38d65a2f8caa3d6d41c1aaa08d53e0 100644
+index 3ac0d628ada33b055f48912911744b63b50e6987..c9887d6e2e868e01cfaa42605cea253b6ea3e43e 100644
 --- a/tests/ops/linear/tests.cmake
 +++ b/tests/ops/linear/tests.cmake
 @@ -24,6 +24,14 @@ ninfer_add_op_test(ninfer_linear_t2_a16_test
@@ -3872,7 +3871,7 @@ index 57daf22fba639655d3185d3d59886a61feed78d4..98f3ea69c58e20b6b8a1eb2b09433143
      ) or len(request.target.shape) != 2:
          raise ValueError("import_encoded requires a known encoded matrix target")
 diff --git a/tools/convert/sources/logical.py b/tools/convert/sources/logical.py
-index 694a71f4bb550d034c2889d04ce8410ce26657f5..9627984b6c130c67ff1150762653c3371d7f0132 100644
+index f0e64eb290af7ddb7d7a40ad382c95e10c88cdbd..eb3cf128eeb9002725b925595e65a7a71bbc1758 100644
 --- a/tools/convert/sources/logical.py
 +++ b/tools/convert/sources/logical.py
 @@ -16,6 +16,8 @@ class EncodedRows:

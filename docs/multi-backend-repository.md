@@ -38,6 +38,15 @@ master's independent Query controls and native tool constraints. The separate
 The [migration record](ninfer-all-migration-validation.md) separates historical runtime
 evidence from the static-only checks of this split and its integration with current master.
 
+The 2026-10-25 candidate pins `63428ac249da8a6c5d891b508d7e483d8c7def6c`
+and includes the NVFP4 fork from `c02c7692bd10a9b4a7effef67b60f58673985aa6`
+as two author layers plus a local integration layer. The current scope is Qwen
+dense, including upstream's restricted GGUF tensor-parallel route. KVMem shared
+prefill batching and early first-token publication remain deferred. See the
+[current integration record](ninfer-upstream-63428ac2-integration.md) for completed
+checks, performance costs and remaining qualification; the records above remain
+historical evidence for their pinned revisions.
+
 ## Checkout and preparation
 
 ```sh
@@ -105,6 +114,13 @@ An existing compatible dependency installation can be passed with
 `-DVCPKG_INSTALLED_DIR=... -DVCPKG_MANIFEST_INSTALL=OFF`; no local prebuilt ninfer
 operator libraries are needed. The backend CMake default resolves the portable
 core at `../../kvmem` relative to `backends/ninfer`.
+
+Keep shared dependency installations outside dated experiment or worktree folders.
+Pin a versioned bundle and verify its headers, libraries and runtime DLLs before
+building; use the same bundle when running the worker. When a cached dependency
+root has disappeared or changed, reconfigure dependency discovery before resuming
+compilation. Reusable CUDA objects need not be deleted. Never overwrite a bundle
+still used by another build or remove it during ordinary experiment cleanup.
 
 The equivalent portable-core commands on Linux are:
 

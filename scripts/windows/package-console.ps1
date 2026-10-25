@@ -8,7 +8,8 @@ param(
     [Parameter(Mandatory)][string]$PsutilWheel,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$PsutilSha256,
     [string]$SourceDir,
-    [string]$ChatUiDir
+    [string]$ChatUiDir,
+    [ValidateSet('all','ninfer')][string]$Backend='all'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -45,6 +46,9 @@ foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'format
 foreach ($name in 'index.html', 'monitor.css', 'monitor.js', 'i18n.js', 'launcher.css', 'launcher.js',
                   'Strata-LICENSE.txt', 'Outfit-OFL.txt', 'outfit-latin-wght.woff2', 'console-shell.js', 'console-shell.css', 'history-export.html', 'logs.js', 'logs.css') {
     $files += 'ui/monitor/' + $name
+}
+if ($Backend -eq 'ninfer') {
+    $files = @($files | Where-Object { $_ -notmatch '(^tools/polystrata/|/start-(dflash2|polystrata)\.ps1$)' })
 }
 # Validate all inputs and reserved destinations before adding anything to a worker package.
 foreach ($relative in $files) {
@@ -153,6 +157,25 @@ To skip opening a browser: START-HERE-CN.bat -NoBrowser
 The console controls only services it starts. It never replaces a running worker.
 API keys are not stored in drafts or templates. Browser settings remain browser-local.
 '@
+if ($Backend -eq 'ninfer') {
+$readme = @'
+KVMem - NInfer
+
+Double-click START-HERE-EN.bat (English) or START-HERE-CN.bat (Chinese).
+The package includes Python, the console and Chat. No Python or Node.js installation is required.
+Select a local .ninfer Qwen dense model and a GPU, check the configuration, then Start service.
+Open Chat after the service is ready. Models are supplied separately.
+Keep the startup window open. Closing it stops only the services it started.
+Use START-HERE-EN.bat -Check for diagnostics, or -Port 18198 for another console port.
+
+双击 START-HERE-CN.bat，选择本机 .ninfer Qwen 稠密模型和显卡，检查配置后启动。
+服务就绪后打开聊天页面。Python、控制台、聊天界面均已内置，模型另行提供。
+请保持启动窗口开启；关闭窗口会停止它启动的服务。
+诊断：START-HERE-CN.bat -Check；更换控制台端口：START-HERE-CN.bat -Port 18198。
+
+GPU and model qualification: provenance/validation.json.
+'@
+}
 $utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllText((Join-Path $output 'START-HERE.txt'), $readme, $utf8)
 $hashes = @{}
@@ -160,6 +183,7 @@ foreach ($relative in $files) { $hashes[$relative] = (Get-FileHash -LiteralPath 
 $manifest = @{ schema_version=1; launch_contract_version=2; python_version=[string]$version[-1];
     console_chat_protocol=1; chat_manifest_sha256=(Get-FileHash -LiteralPath $chatManifest).Hash.ToLowerInvariant();
     python_archive_sha256=$PythonSha256.ToLowerInvariant(); psutil_wheel_sha256=$PsutilSha256.ToLowerInvariant(); offline_console=$true;
-    models_included=$false; controller_files=$hashes }
+    models_included=$false; controller_files=$hashes;
+    supported_backends=[string[]]$(if($Backend -eq 'ninfer'){@('ninfer')}else{@('llamacpp','ninfer','polystrata')}) }
 [IO.File]::WriteAllText((Join-Path $output 'console-build.json'), ($manifest | ConvertTo-Json -Depth 5), $utf8)
 Write-Output "One-click console added: $output"

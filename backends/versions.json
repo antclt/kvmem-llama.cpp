@@ -59,77 +59,117 @@
   "ninfer": {
     "path": "backends/ninfer",
     "upstream": "https://github.com/iamwavecut/ninfer-all.git",
-    "base_commit": "db8c114802a070a7903f84d01142fda0b00fa7df",
+    "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "5cc3a03b4560266bb13239f0846053e272bd9cbb",
+    "patched_tree": "2d5f335df7a9ad2bf0727ece037e06782edbba2a",
     "patches": [
       {
         "id": "kvmem",
         "path": "backends/patches/ninfer-kvmem.patch",
-        "sha256": "a52f08b10c57c30fc0b29ca0566b8cc2c22f2229dedff57cb900249410056a7b",
+        "sha256": "ea9c97cd974b10fa9bb3e4e3cdb2324665d766af644b9604461d1ab509d03603",
         "requires": [],
-        "after_tree": "16e95f34780a9f7c4404a63d9e0277a2fccfdc43"
+        "after_tree": "95d61c887cd1c5c8d5d8946f77d9ca3dce9bbc2d"
       },
       {
         "id": "ptq1",
         "path": "backends/patches/ninfer-ptq1.patch",
-        "sha256": "c02a1ba47b17230010a4c42f936341fd1977584cd74cf2e4aff04f3a13e91bc9",
+        "sha256": "7db19a6270789d562f932344c5eaa7939ed978fb525362973917d1f5965abe11",
         "requires": [
           "kvmem"
         ],
-        "after_tree": "d45854b6cf46d24d1aac17030ccf791773d3d0db",
+        "after_tree": "66242f2e906ab07e35381fe48719e62a16ee1742",
         "source": "1314521gjy/ninfer-fusion-kvmem@b6e6c20deb93fe5ed84e5715642dad21c0455ef0; local qualified port a81ebf9031c167a29f418093e8a7253a4811cd01"
       },
       {
         "id": "ptq1-performance",
         "path": "backends/patches/ninfer-ptq1-performance.patch",
-        "sha256": "960ec0ea605abeb858fa41a56af410cc26bbefb153c6e14205b00c7433ee2842",
+        "sha256": "f682ac51ae8f889c6ac438869cdeb5170f14b733062c205690a03dcdbe227355",
         "requires": [
           "ptq1"
         ],
-        "after_tree": "c3baa4e3085337591dd085de78a95ee909355003",
+        "after_tree": "4a3ca3f1d25441e109dae3610199cfd4b4d267e3",
         "source": "Local PTQ1 routing and calibration over the compact native port, without changing SM120 policy"
       },
       {
         "id": "t5-performance",
         "path": "backends/patches/ninfer-t5-performance.patch",
-        "sha256": "45f0f1276e54032d4267c1f917e64a752caedd40a0afd726c78b3cf5ef0969a8",
+        "sha256": "656197855a182e87326721ce6cd5b09323285cb1a2c8e567ac67882e65b873d8",
         "requires": [
           "ptq1-performance",
           "kvmem"
         ],
-        "after_tree": "0eed1e7ab5a4bfa0b0b41ca9ebd2db54b8942d09",
+        "after_tree": "380aa8ac68e5eb59d3b8ddcd0f6d65042132b4d0",
         "source": "JGamboa/ninfer-4090-windows@e905787f067de89ef6ef28c52d65a2ce91d425ca; RowSplit and existing BF16 producer adaptation"
       },
       {
         "id": "query-memory",
         "path": "backends/patches/ninfer-query-memory.patch",
-        "sha256": "7825269a6544ea8f11f1217103c71328d99b6468624d44ffdebf5407e111b4f9",
+        "sha256": "3221cf8a6ca4c39680b7ad96e9f5ad934c24aca53bb00bc6a78487a919298010",
         "requires": [
           "t5-performance"
         ],
-        "after_tree": "3bb18fca6acf320b93ee0ab3fed2152a95daa2e9",
+        "after_tree": "d2fcb9daf6efbb6d0289ac19b825a92fc0b177b5",
         "source": "Bounded BF16 Query capture, accepted Mean-Q sums, native Query lifecycle regressions and actual cancellation accounting"
       },
       {
-        "path": "backends/patches/ninfer-checkpoint-policy.patch",
-        "sha256": "02426aee6f3d80fc8f5f007608b9deb3438eaebc5442485991ca8e49db9b583d",
-        "after_tree": "7df5078b0879b8622353a250035f333ba9e8ab0b",
-        "id": "checkpoint-policy",
+        "id": "nvfp4-a16",
+        "path": "backends/patches/ninfer-nvfp4-a16.patch",
+        "sha256": "c50ec35c0d88a0599c99b643a3fde718ef4ee949223b560766e8cd2c76f9ad08",
         "requires": [
           "query-memory"
+        ],
+        "after_tree": "237496797aa7e46f0bde3cbbad22fd301d865ec8",
+        "source": "13thblade/ninfer-all-nvfp4@c02c7692bd10a9b4a7effef67b60f58673985aa6; author TP merge resolutions over upstream 63428ac2"
+      },
+      {
+        "id": "nvfp4-int8",
+        "path": "backends/patches/ninfer-nvfp4-int8.patch",
+        "sha256": "ba07459284ae1f478f03452a4cd6a2190f6fc501dbf6d646762914acac615ae0",
+        "requires": [
+          "nvfp4-a16"
+        ],
+        "after_tree": "a49df2cba6cb28d7c136219038b247c036c6138e",
+        "source": "13thblade/ninfer-all-nvfp4@c02c7692bd10a9b4a7effef67b60f58673985aa6; author TP merge resolutions over upstream 63428ac2"
+      },
+      {
+        "id": "nvfp4-kvmem",
+        "path": "backends/patches/ninfer-nvfp4-kvmem.patch",
+        "sha256": "785fab73247b964e3d143ad564d20b67f7bc16b60c04bd715402118411ea8d27",
+        "requires": [
+          "nvfp4-int8"
+        ],
+        "after_tree": "4ba90563e7d315d9e2fa7b4b8053704932bb1a97",
+        "source": "Local scoped/default routing, native snapshot mode binding and Blackwell KV codec preservation"
+      },
+      {
+        "path": "backends/patches/ninfer-checkpoint-policy.patch",
+        "sha256": "2540625374e3d9f7954f2ee1dbc691b294152bf22141c701a8554570d98de045",
+        "after_tree": "2b446ead9ba50f2f63e4395687bbc96bf6f11cc7",
+        "id": "checkpoint-policy",
+        "requires": [
+          "nvfp4-kvmem"
         ]
       },
       {
         "id": "monitor-events",
         "path": "backends/patches/ninfer-monitor-events.patch",
-        "sha256": "8cda7f7cb11cdee08e91c4fd1c7257eb87ff0bc5cc736c59e20fa6fab5e3d9fc",
+        "sha256": "4113d37477b6713a8b7e89a21cb59e8b78f30f40dc930bef8343992ca27f0ada",
         "requires": [
           "checkpoint-policy"
         ],
-        "after_tree": "5cc3a03b4560266bb13239f0846053e272bd9cbb",
+        "after_tree": "6b35e771d692db21e3ea53c8a640d89cc3b3ee6e",
         "source": "Native response IDs, execution/request TTFT, request interval rates, native means, finish reasons and actual MTP/copy counters"
+      },
+      {
+        "id": "nvfp4-blackwell-scale",
+        "path": "backends/patches/ninfer-nvfp4-blackwell-scale.patch",
+        "sha256": "f1705dad6c04399589c08c5392c5c7725a4448a2eb02482a2a1a490418cb0f71",
+        "requires": [
+          "monitor-events"
+        ],
+        "after_tree": "2d5f335df7a9ad2bf0727ece037e06782edbba2a",
+        "source": "Local Blackwell UE4M3 weight-scale normalization and exhaustive independent FP64 codec oracle"
       }
     ]
   },

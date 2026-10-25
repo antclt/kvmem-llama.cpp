@@ -154,7 +154,7 @@ index 64ac5f5fcdfa45bf18018f9cc8fdbac58e6cc094..387c92790153d5aeb43b45166cb7a2d4
   * dequantised values enter the transform unrounded, so out carries one BF16 rounding. No workspace
   * or persistent state.
 diff --git a/include/ninfer/ops/linear.h b/include/ninfer/ops/linear.h
-index b2c7cda33b3da2baeae6dc37d4e080686a3cdf4d..43c4fc6b2c31e27b77a24dfc5348691c8875ad9b 100644
+index 9d24e2371681c75c65b7fa9bca3860141ff8081f..478453c6deaac6d431dec04a10a68248dda771d0 100644
 --- a/include/ninfer/ops/linear.h
 +++ b/include/ninfer/ops/linear.h
 @@ -11,10 +11,11 @@
@@ -305,20 +305,20 @@ index 9b348e341e559b438d2f1882b4db9a44d40619eb..d5535bf61f6b3be7142b9cdd59d44b27
          }
          out.group_size          = geometry.group;
 diff --git a/src/models/qwen3_5/load/prepare.cpp b/src/models/qwen3_5/load/prepare.cpp
-index 23cd5451e600a26418208511ede7c794d67786ab..68f425a8b841d2c82aa671704d84632cf92ffeb1 100644
+index c15b251dfa772ee245d17462f418cb04ce29efb5..781748f202da38a88345d00cddaa64ab8de085fe 100644
 --- a/src/models/qwen3_5/load/prepare.cpp
 +++ b/src/models/qwen3_5/load/prepare.cpp
-@@ -34,6 +34,9 @@ bool stored_as(const artifact::Reader& reader, const artifact::ParameterReferenc
+@@ -37,6 +37,9 @@ bool stored_as(const artifact::Binder& binder, const artifact::ParameterReferenc
  
- bool keeps_permission(const artifact::Reader& reader, const artifact::ParameterReference& reference,
+ bool keeps_permission(const artifact::Binder& binder, const artifact::ParameterReference& reference,
                        ops::LinearPolicy policy) {
 +    if (ops::allows_a8(policy) && stored_as(reader, reference, QType::T5_G128_FP16)) {
 +        return true; // Integer tensor cores; independent of FP8/FP4 architecture support.
 +    }
      switch (policy) {
      case ops::LinearPolicy::AllowA4:
-         return kNvfp4A4Built && stored_as(reader, reference, QType::NVFP4);
-@@ -60,6 +63,12 @@ void apply_rank_policies(Bindings& bindings, std::span<const ops::DeviceTier> ra
+         return kNvfp4A4Built && stored_as(binder, reference, QType::NVFP4);
+@@ -63,6 +66,12 @@ void apply_rank_policies(Bindings& bindings, std::span<const ops::DeviceTier> ra
                                     std::to_string(weight.rank));
          }
          if (rank_tiers[weight.rank] == ops::DeviceTier::Blackwell) { continue; }
@@ -356,7 +356,7 @@ index 8605212f182675705c5d9f24ebfa1562767aed63..1dc99dc366aa59cb669853aea960dfa5
          embed_gather_t2_hadamard_kernel<kWarpsPerCta, true>
              <<<static_cast<unsigned>(ctas), kWarpsPerCta * kWarpSize, 0, stream>>>(
 diff --git a/src/ops/linear/linear.cpp b/src/ops/linear/linear.cpp
-index 1b024d87a1322c063426594caefb754ae69eba9c..abc734f581c270b276e636de95b7dfbd64b5eb5d 100644
+index 5b2ade3fea9e10dea6da157ab4033b45e9066294..e8c0b7d8851774defb281f8e58781e0167ce6a40 100644
 --- a/src/ops/linear/linear.cpp
 +++ b/src/ops/linear/linear.cpp
 @@ -1,3 +1,5 @@
@@ -365,7 +365,7 @@ index 1b024d87a1322c063426594caefb754ae69eba9c..abc734f581c270b276e636de95b7dfbd
  #include "core/weight.h"
  #include "ninfer/ops/linear.h"
  
-@@ -124,6 +126,11 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
+@@ -126,6 +128,11 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
      case QType::Q8_G32_FP16:
          detail::q8_dispatch(x, w, out, policy, stream);
          return;
@@ -377,7 +377,7 @@ index 1b024d87a1322c063426594caefb754ae69eba9c..abc734f581c270b276e636de95b7dfbd
      case QType::PTQ1_G128_FP16:
          if (workspace != nullptr && detail::t2_a8_admits(policy) && detail::t2_a8_supported(w, x.ne[1])) {
              detail::t2_a8_linear(x, w, out, *workspace, stream);
-@@ -176,6 +183,9 @@ std::size_t linear_route_workspace_bytes(QType qtype, std::int32_t output_rows,
+@@ -178,6 +185,9 @@ std::size_t linear_route_workspace_bytes(QType qtype, std::int32_t output_rows,
          (void)detail::select_q8_launch(output_rows, input_rows, min_tokens, policy);
          (void)detail::select_q8_launch(output_rows, input_rows, max_tokens, policy);
          return 0;
@@ -2091,7 +2091,7 @@ index 334b77dc30dbe6eb4eede8a17b4764f322d219fe..b99f6a4a24219a6fa873332914468106
          require_dense_metadata(table, out);
          if (is_empty_T(ids, out)) { return; }
 diff --git a/src/ops/wrapper/gdn_input_proj.cpp b/src/ops/wrapper/gdn_input_proj.cpp
-index 81ac0e0dc3f23827c314085cbb51cfa12e31c6cd..afe99bc2098df8f7f995de0ef31c4f2346eab0f9 100644
+index 3b2f9b82a1b857385360b2c048fc806bd79fe999..74e9c55d3984a7c2f8f802a0868bd877521f31b0 100644
 --- a/src/ops/wrapper/gdn_input_proj.cpp
 +++ b/src/ops/wrapper/gdn_input_proj.cpp
 @@ -1,3 +1,5 @@
@@ -2744,13 +2744,13 @@ index 0000000000000000000000000000000000000000..45a7c8af795c22e0ef8623f5ac1c9ae0
 +    return failures ? 1 : 0;
 +}
 diff --git a/tests/ops/linear/tests.cmake b/tests/ops/linear/tests.cmake
-index 732d0fc67e38d65a2f8caa3d6d41c1aaa08d53e0..29ea87a90f8e8b1026e78f0f6e9b9d74da89c6e4 100644
+index c9887d6e2e868e01cfaa42605cea253b6ea3e43e..62346bf50d9c78963d759c00fab75845b7357bc7 100644
 --- a/tests/ops/linear/tests.cmake
 +++ b/tests/ops/linear/tests.cmake
-@@ -70,3 +70,7 @@ ninfer_add_op_test(ninfer_linear_bf16_a16_test
- ninfer_add_op_test(ninfer_linear_gguf_test
-   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_gguf.cpp"
-   LIBRARIES ninfer_ops)
+@@ -77,3 +77,7 @@ ninfer_add_op_test(ninfer_linear_gguf_mmq_store_test
+ 
+ ninfer_add_op_test(ninfer_linear_gguf_mmq_limits_test
+   SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_gguf_mmq_limits.cpp")
 +
 +ninfer_add_op_test(ninfer_linear_t5_test STANDALONE
 +  SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_t5.cpp" LIBRARIES ninfer_ops)

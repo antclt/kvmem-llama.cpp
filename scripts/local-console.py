@@ -355,7 +355,15 @@ class Controller:
         build_info=self.backend_root/'BUILD-INFO.json'
         if build_info.is_file():
             package=json.loads(build_info.read_text(encoding='utf-8-sig'))
-            if package.get('backend')=='polystrata': self.backends=[name for name in self.backends if name=='polystrata']
+            if package.get('backend') in NATIVE:
+                self.backends=[name for name in self.backends if name==package['backend']]
+        console_build=self.backend_root/'console-build.json'
+        if console_build.is_file():
+            allowed=json.loads(console_build.read_text(encoding='utf-8-sig')).get('supported_backends')
+            if allowed is not None:
+                if not isinstance(allowed,list) or not allowed or any(name not in NATIVE for name in allowed):
+                    raise ValueError('Invalid console package backend list')
+                self.backends=[name for name in self.backends if name in allowed]
         self.launcher_query_contract = all(name in source for name in ('QueryScorer', 'GraphAlpha', 'QueryMaxTokens', 'QueryReplayMaxTokens'))
         profile_file = self.backend_root / 'scripts/speculative-capabilities.json'
         self.speculative_profiles = json.loads(profile_file.read_text(encoding='utf-8-sig')) if profile_file.is_file() else {}
@@ -485,7 +493,9 @@ class Controller:
 
     def draft(self):
         if self.draft_path.exists():
-            return without_secrets(json.loads(self.draft_path.read_text(encoding='utf-8')))
+            saved = without_secrets(json.loads(self.draft_path.read_text(encoding='utf-8')))
+            if saved.get('parameters', {}).get('Backend') in self.backends:
+                return saved
         backend = DEFAULTS['Backend'] if DEFAULTS['Backend'] in self.backends else self.backends[0]
         return {'schema_version': 1, 'parameters': {**DEFAULTS, **copy.deepcopy(ENGINE_DEFAULTS[backend])}}
 

@@ -101,10 +101,10 @@ no pip or network access is required on the end-user machine.
 
 The combined worker packager also accepts `-PsutilWheel`, `-PsutilSha256`, `-PythonArchive`, `-PythonSha256` and
 `-LlamaUiDir` (the built llama.cpp chat directory). These add the offline console before
-the package's final checksums are generated. llama.cpp chat files are placed under
-`workers/share/kvmem/ui`, matching the worker's binary-relative lookup; NInfer must be
-built with its chat and monitor assets embedded. Keep monitor-enabled workers and console
-assets on the same source revision.
+the package's final checksums are generated. Unified chat files are placed under
+`workers/share/kvmem/ui`, where the local console serves them for either backend.
+The standalone NInfer web UI is a separate native build option. Keep monitor-enabled
+workers and console assets on the same source revision.
 
 Default executable locations:
 
@@ -115,6 +115,23 @@ Supply each worker's DLL dependencies too. A separately installed worker may ins
 selected in the console's engine-specific settings. Shipping the console does not certify
 those binaries, their model compatibility, or their performance. Run the complete final ZIP
 through start/chat/monitor/stop acceptance before publishing.
+
+### NInfer-only NVIDIA 50-series package (0.19.0)
+
+Use `package-backends.ps1 -Backend ninfer`, omit `-LlamaWorker` and PolyStrata
+options, and supply `-NinferWorker`, `-NinferSource`, `-LlamaUiDir`, the verified
+Python/psutil archives and their SHA-256 values. `-LlamaSource` identifies the
+source/license for the unified chat UI; it does not add a llama.cpp worker.
+Build NInfer with `-DCMAKE_CUDA_ARCHITECTURES=120a -DNINFER_SM120_NATIVE=ON`
+for this package. Other architectures require a separately built package.
+
+This variant contains one inference worker and exposes only NInfer in the console.
+Saved configurations for absent backends fall back to NInfer defaults. The package
+records `VERSION`, its backend source manifest and runtime checks. Include the
+actual build/GPU/model validation in `-ValidationReport`; do not infer qualification
+from successful dependency loading. Qwen dense, TP limitations and deferred
+features are recorded in [the integration report](ninfer-upstream-63428ac2-integration.md).
+Models are supplied separately. Creating this ZIP does not create a release tag.
 
 Model-free verification:
 

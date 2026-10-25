@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 187f4da8eb9db53cf3dce52c22bf134803f8b3f4..3d16e8fd0939031848dc69fbfbcd410c88ff8281 100644
+index 75583ddf503c91e25fa1c4594ac9b2197b579937..1a9dd050755a6bbd5dd9b6391c5d0b8a7c1c9224 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -315,9 +315,22 @@ if(NOT EXISTS "${NINFER_KVMEM_SOURCE_DIR}/include/kvmem/memory_contract.hpp")
+@@ -333,9 +333,22 @@ if(NOT EXISTS "${NINFER_KVMEM_SOURCE_DIR}/include/kvmem/memory_contract.hpp")
  endif()
  add_subdirectory("${NINFER_KVMEM_SOURCE_DIR}" "kvmem-core" EXCLUDE_FROM_ALL)
  kvmem_enable_cuda_recall(CUDART_TARGET ${NINFER_CUDART_TARGET})
@@ -26,10 +26,10 @@ index 187f4da8eb9db53cf3dce52c22bf134803f8b3f4..3d16e8fd0939031848dc69fbfbcd410c
    add_subdirectory(apps)
    add_subdirectory(tools)
 diff --git a/docs/serving.md b/docs/serving.md
-index 76d62c5b3a0850f7e6ebb94a1ddf8d8c8403c552..755ef8822506a7785efe21f499c94a958e11e09c 100644
+index b4f66a9b95e573bb9a3dffb6a57b46b408ab13d9..94f795abd0f7a3a237076bac0cc41f1783a5c7b5 100644
 --- a/docs/serving.md
 +++ b/docs/serving.md
-@@ -1223,9 +1223,15 @@ last JSON chunk before `[DONE]`: the empty `choices` usage chunk when
+@@ -1229,9 +1229,15 @@ last JSON chunk before `[DONE]`: the empty `choices` usage chunk when
  }
  ```
  
@@ -48,6 +48,20 @@ index 76d62c5b3a0850f7e6ebb94a1ddf8d8c8403c552..755ef8822506a7785efe21f499c94a95
  starts at that first token and ends at the last committed output token. Accordingly, generation
  speed uses `max(predicted_n - 1, 0)` token intervals; the first token belongs to prompt latency and
  is not counted again as a decode interval. Zero-token, one-token, zero-duration, and exact-cache-hit
+diff --git a/include/ninfer/observability/execution.h b/include/ninfer/observability/execution.h
+index f50a8b1f6a08c47d43c467359cd7785b7a49da26..3040d7bead70850c1f74e7178488297fed3aa44f 100644
+--- a/include/ninfer/observability/execution.h
++++ b/include/ninfer/observability/execution.h
+@@ -32,7 +32,8 @@ struct GenerationTimings {
+     std::uint32_t overlay_exclusive_windows = 0;
+     double decode_seconds      = 0.0;
+     // Request wall phases at committed model-state boundaries. Prompt begins when admission and
+-    // its exact reuse choice are published and ends at the first accepted output token. Generation
++    // its exact reuse choice are published and ends at the first accepted output token, or
++    // at termination when prefill is cancelled before output. Generation
+     // spans the first through last accepted output token and therefore has N-1 token intervals.
+     double prompt_wall_seconds     = 0.0;
+     double generation_wall_seconds = 0.0;
 diff --git a/include/ninfer/ops/token_sums.h b/include/ninfer/ops/token_sums.h
 index 9c7ede518ca14fd2f735f9cfe5336c5fe09f40a4..1e044764a2463435b1ad462e7038f44bd1859094 100644
 --- a/include/ninfer/ops/token_sums.h
@@ -76,21 +90,11 @@ index 9c7ede518ca14fd2f735f9cfe5336c5fe09f40a4..1e044764a2463435b1ad462e7038f44b
 +void accumulate_query_sum(const Tensor& input, const Tensor& origin, const Tensor& range,
 +                          Tensor& output, cudaStream_t stream);
  } // namespace ninfer::ops
-diff --git a/include/ninfer/types.h b/include/ninfer/types.h
-index db3b352565b1b422d2b9c14bfab7a9853a0bb5b9..bb93a8c43ec51d031611fd5d0d047ef57546d427 100644
---- a/include/ninfer/types.h
-+++ b/include/ninfer/types.h
-@@ -1453,7 +1453,8 @@ struct GenerationTimings {
-     std::uint32_t overlay_exclusive_windows = 0;
-     double decode_seconds      = 0.0;
-     // Request wall phases at committed model-state boundaries. Prompt begins when admission and
--    // its exact reuse choice are published and ends at the first accepted output token. Generation
-+    // its exact reuse choice are published and ends at the first accepted output token, or
-+    // at termination when prefill is cancelled before output. Generation
-     // spans the first through last accepted output token and therefore has N-1 token intervals.
-     double prompt_wall_seconds     = 0.0;
-     double generation_wall_seconds = 0.0;
-@@ -1652,6 +1653,9 @@ struct GenerationResult {
+diff --git a/include/ninfer/request.h b/include/ninfer/request.h
+index c657bec75808f67fa5d5563f17947d84bba7e128..d7478db81fad8591473a14e7ffefbc46e149a3fd 100644
+--- a/include/ninfer/request.h
++++ b/include/ninfer/request.h
+@@ -657,6 +657,9 @@ struct GenerationResult {
      std::uint32_t reasoning_tokens = 0;
      FinishReason finish_reason     = FinishReason::None;
      std::optional<std::string> matched_stop_string;
@@ -167,10 +171,10 @@ index 30b1bb0f297c7af4d572fb270c0cef2b10dfab20..8292e8aa0d0d22b5af61df13749f2395
  };
  } // namespace ninfer::models::qwen3_5::execution
 diff --git a/src/models/qwen3_5/program/planning/startup.cpp b/src/models/qwen3_5/program/planning/startup.cpp
-index 9f7b759b0affe8b42df9864f0b0f31af55783de0..b8ef0d422dc4fc2c26ac1764965360476a5fadfd 100644
+index a42162a6c0bb8fc0bbac2d105d0219b0996690dc..02a8bacd954bc3f8b4a0f8be4c9161234c443363 100644
 --- a/src/models/qwen3_5/program/planning/startup.cpp
 +++ b/src/models/qwen3_5/program/planning/startup.cpp
-@@ -339,8 +339,11 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
+@@ -363,8 +363,11 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
                   dimension((widest_verify_window(plan) + 1) * plan.max_concurrency), layers},
                   "memory candidate keys");
              stats.candidate_origin = add_tensor(local, DType::I32, {1}, "memory candidate origin");
@@ -184,7 +188,7 @@ index 9f7b759b0affe8b42df9864f0b0f31af55783de0..b8ef0d422dc4fc2c26ac176496536047
              const auto capture_columns=std::max<std::size_t>(effective_prefill_chunk,
                  (widest_verify_window(plan)+1U)*plan.max_concurrency);
              stats.attention_queries=add_tensor(local,DType::BF16,
-@@ -361,9 +364,11 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
+@@ -385,9 +388,11 @@ PersistentLayout persistent_layout(const SequencePlanImpl& plan) {
          out.memory_statistics.front().attention_tokens=add_tensor(builder,DType::I32,
              {dimension(std::max<std::size_t>(effective_prefill_chunk,(widest_verify_window(plan)+1U)*plan.max_concurrency))},
              "memory consumed token capture");
@@ -222,7 +226,7 @@ index f6fccb09d911bcafdc2fa769372017ed5d7747ce..d36e2a59a6a51d609809311c4e01765f
      qwen3_5::StateImageDeviceLayout state_images;
      // ReplaySSM records, one layout per state shard: the first here, the rest in `extra`.
 diff --git a/src/models/qwen3_5/program/prefill.cpp b/src/models/qwen3_5/program/prefill.cpp
-index 69da1acecf4222293b91a2d1a717e1e76fb232a0..3e592bb84cfe97be6b48fa921af31d43233f2f34 100644
+index 9b0e197bd5059ebef25d8fe6931f48c301f71a09..b3f46c31c0920bd72530c0047749cea1d5db3469 100644
 --- a/src/models/qwen3_5/program/prefill.cpp
 +++ b/src/models/qwen3_5/program/prefill.cpp
 @@ -1,5 +1,8 @@
@@ -234,7 +238,7 @@ index 69da1acecf4222293b91a2d1a717e1e76fb232a0..3e592bb84cfe97be6b48fa921af31d43
  #include "kvmem/mean_key_retrieval.hpp"
  #include "models/qwen3_5/program/context_work.h"
  #include "models/qwen3_5/program/context.h"
-@@ -1229,6 +1232,24 @@ runtime::ExecutionTiming ProgramImpl::resolve_pending_raw(
+@@ -1241,6 +1244,24 @@ runtime::ExecutionTiming ProgramImpl::resolve_pending_raw(
      return timing.finish();
  }
  
@@ -259,7 +263,7 @@ index 69da1acecf4222293b91a2d1a717e1e76fb232a0..3e592bb84cfe97be6b48fa921af31d43
  runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                                                          RequestControl& request,
                                                          runtime::ExecutionTiming* failed_timing) {
-@@ -1600,6 +1621,11 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
+@@ -1683,6 +1704,11 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                      throw std::logic_error("staged prefill reached the prompt without sampling");
                  }
                  if (!finalized) {
@@ -271,39 +275,39 @@ index 69da1acecf4222293b91a2d1a717e1e76fb232a0..3e592bb84cfe97be6b48fa921af31d43
                      staged.elapsed_seconds += std::chrono::duration<double>(Clock::now() - started).count();
                      return runtime::PrefillStepResult{.summary=summary,
                          .processed_prompt_tokens=reported_tokens(),.timing=timing.finish()};
-@@ -1678,7 +1704,6 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
-         device.synchronize();
-         timing.end_wait();
-         staged.elapsed_seconds += std::chrono::duration<double>(Clock::now() - started).count();
--        const double vision_seconds       = staged.vision ? staged.vision->elapsed_seconds() : 0.0;
-         sequence.window.query_replay_active=false;
-         const std::uint32_t prompt_tokens = staged.prompt_tokens;
+@@ -1810,7 +1836,6 @@ runtime::PrefillStepResult ProgramImpl::complete_prefill_step(
+     std::uint32_t processed_prompt_tokens, std::span<const TokenId> initial_drafts,
+     bool drafts_pending, runtime::ExecutionTimingRecorder& timing) {
+     RequestControl::Prefill& staged   = *request.prefill;
+-    const double vision_seconds       = staged.vision ? staged.vision->elapsed_seconds() : 0.0;
+     const std::uint32_t prompt_tokens = staged.prompt_tokens;
+     sequence.window.query_replay_active = false;
  
-@@ -1707,18 +1732,7 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
-             throw std::logic_error("staged DFlash prefill did not reach the prompt frontier");
-         }
-         sequence.tail_hidden_valid      = true;
--        request.timings.vision_seconds  = vision_seconds;
--        request.timings.prefill_seconds = std::max(0.0, staged.elapsed_seconds - vision_seconds);
--        if (staged.vision) {
--            const execution::VisionOverlayWindowStats overlay = staged.vision->overlay_stats();
--            request.timings.overlay_windows           = overlay.windows;
--            request.timings.overlay_exclusive_windows = overlay.exclusive_windows;
--            request.timings.overlay_window_seconds    = overlay.window_seconds;
--            request.timings.overlay_evict_seconds     = overlay.evict_seconds;
--            request.timings.overlay_restore_seconds   = overlay.restore_seconds;
--            request.timings.overlay_evicted_bytes     = overlay.evicted_bytes;
--            request.timings.overlay_staged_bytes      = overlay.staged_bytes;
--        }
-+        request.snapshot_prefill_timings();
-         staged.prompt.release_all_media_payloads();
-         if (staged.vision) { staged.vision->retire_handoff(); }
+@@ -1835,18 +1860,7 @@ runtime::PrefillStepResult ProgramImpl::complete_prefill_step(
+         throw std::logic_error("staged DFlash prefill did not reach the prompt frontier");
+     }
+     sequence.tail_hidden_valid      = true;
+-    request.timings.vision_seconds  = vision_seconds;
+-    request.timings.prefill_seconds = std::max(0.0, staged.elapsed_seconds - vision_seconds);
+-    if (staged.vision) {
+-        const execution::VisionOverlayWindowStats overlay = staged.vision->overlay_stats();
+-        request.timings.overlay_windows           = overlay.windows;
+-        request.timings.overlay_exclusive_windows = overlay.exclusive_windows;
+-        request.timings.overlay_window_seconds    = overlay.window_seconds;
+-        request.timings.overlay_evict_seconds     = overlay.evict_seconds;
+-        request.timings.overlay_restore_seconds   = overlay.restore_seconds;
+-        request.timings.overlay_evicted_bytes     = overlay.evicted_bytes;
+-        request.timings.overlay_staged_bytes      = overlay.staged_bytes;
+-    }
++    request.snapshot_prefill_timings();
+     staged.prompt.release_all_media_payloads();
+     if (staged.vision) { staged.vision->retire_handoff(); }
  
 diff --git a/src/models/qwen3_5/program/program_impl.cpp b/src/models/qwen3_5/program/program_impl.cpp
-index 5c67cea5d8b8912958acd26b17f9b9ae803069d4..2dfe799625902b306bce7ffb99001f0fd5642339 100644
+index 5e421ded9a647a0410fcf2bc20850864466d4aa9..c488999d46d22e2ab727779834bb917e2bc3950a 100644
 --- a/src/models/qwen3_5/program/program_impl.cpp
 +++ b/src/models/qwen3_5/program/program_impl.cpp
-@@ -637,15 +637,19 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -651,15 +651,19 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
      prefill_hidden = plan.persistent.prefill_hidden.bind(backing);
      if (!plan.persistent.memory_statistics.empty()) {
          const auto& config = parameters.model.config().text;
@@ -328,7 +332,7 @@ index 5c67cea5d8b8912958acd26b17f9b9ae803069d4..2dfe799625902b306bce7ffb99001f0f
          memory_statistics->columns = (std::min(plan.prefill_chunk, plan.capacity) + 126U) / 64U;
          memory_statistics->ranks.resize(device.size());
          memory_candidate_statistics = *memory_statistics;
-@@ -665,7 +669,7 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -679,7 +683,7 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
              candidates.attention_tokens=stats.attention_tokens;
              if (!layout.layers) { continue; }
              stats.key_sums = layout.key_sums.bind(backings[rank]);
@@ -337,7 +341,7 @@ index 5c67cea5d8b8912958acd26b17f9b9ae803069d4..2dfe799625902b306bce7ffb99001f0f
              stats.attention_queries = layout.attention_queries.bind(backings[rank]);
              stats.attention_rows=layout.attention_rows.bind(backings[rank]);
              stats.attention_positions=layout.attention_positions.bind(backings[rank]);
-@@ -674,7 +678,7 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
+@@ -688,7 +692,7 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
              stats.attention_output=layout.attention_output.bind(backings[rank]);
              stats.ranges = layout.ranges.bind(backings[rank]);
              candidates.key_sums = layout.candidate_keys.bind(backings[rank]);
@@ -347,10 +351,10 @@ index 5c67cea5d8b8912958acd26b17f9b9ae803069d4..2dfe799625902b306bce7ffb99001f0f
              candidates.attention_tokens = stats.attention_tokens;
              candidates.attention_rows=stats.attention_rows;
 diff --git a/src/models/qwen3_5/program/program_impl.h b/src/models/qwen3_5/program/program_impl.h
-index 21544f8efde864f9f8dbb779ad6c2553233f5ff5..59c2490be7c75147b62d552880b910efa2b9eab9 100644
+index c09fe371ebc4693a5f4c59011c6e37ef3b8dc40e..6274cfdce6e89b96e8f86a0ef5db01581ab1890f 100644
 --- a/src/models/qwen3_5/program/program_impl.h
 +++ b/src/models/qwen3_5/program/program_impl.h
-@@ -603,6 +603,9 @@ struct KvmemWindowState {
+@@ -628,6 +628,9 @@ struct KvmemWindowState {
      std::unique_ptr<kvmem::RawKvStore> statistics;
      std::unique_ptr<kvmem::KvMemStore> selector;
      std::vector<std::vector<float>> query_rows;
@@ -360,7 +364,7 @@ index 21544f8efde864f9f8dbb779ad6c2553233f5ff5..59c2490be7c75147b62d552880b910ef
      kvmem::GraphSnapshot graph;
      kvmem::AttentionFeedback feedback;
      kvmem::OutputSampleState attention_scope;
-@@ -763,6 +766,9 @@ struct RequestControl {
+@@ -815,6 +818,9 @@ struct RequestControl {
  
      std::optional<Prefill> prefill;
  
@@ -670,10 +674,10 @@ index ad0bcd504c995ffff7d9d117b2acee7a69971ca9..df8017461587ae2797dab84aad9d00b1
  
  void ProgramImpl::observe_memory_attention(SequenceState& sequence,std::uint32_t begin,std::uint32_t end,
 diff --git a/src/models/qwen3_5/program/transactions/commit.cpp b/src/models/qwen3_5/program/transactions/commit.cpp
-index 13a56afc8cd9ffebb891768c6a5fcda6929d5494..307b36283dab77d13e614dd30197204b9aa06a6c 100644
+index f8a81c442b99c5abd4b546fa57656c0bcfabbd24..e4029a1ae59ecd9804f49583fdbae495ff8d2416 100644
 --- a/src/models/qwen3_5/program/transactions/commit.cpp
 +++ b/src/models/qwen3_5/program/transactions/commit.cpp
-@@ -994,6 +994,7 @@ AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
+@@ -997,6 +997,7 @@ AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
      try {
          device.synchronize();
      } catch (...) { return out; }
@@ -777,10 +781,10 @@ index 2babaf6c913138a59714e56977f2d210097a9220..9a750fbe22fa272a9b6cca23d3accac6
                  std::uint32_t block_tokens, Tensor& output, cudaStream_t stream) {
      const auto tokens = static_cast<std::int64_t>(input.ne[1]);
 diff --git a/src/runtime/engine/engine_core.h b/src/runtime/engine/engine_core.h
-index 250d87bfaca02321372630f23230e1506b94498b..9291bb44fba6fb3832562f3a606d5e4e45ff9d0a 100644
+index 366a3b9783ad186f5a9cb8ce98d4ecc133f68c2c..0b218d10c0f118960e4b514f9e7b650f9f7a02a1 100644
 --- a/src/runtime/engine/engine_core.h
 +++ b/src/runtime/engine/engine_core.h
-@@ -1366,6 +1366,9 @@ private:
+@@ -1422,6 +1422,9 @@ private:
                      .count();
              generation_wall_seconds =
                  std::chrono::duration<double>(*request->last_token - *request->first_token).count();
@@ -790,7 +794,7 @@ index 250d87bfaca02321372630f23230e1506b94498b..9291bb44fba6fb3832562f3a606d5e4e
          }
          release_planning_state(request);
          request->prompt      = {};
-@@ -1386,9 +1389,10 @@ private:
+@@ -1443,9 +1446,10 @@ private:
          result.finish_reason           = reason;
          result.matched_stop_string     = request->output.matched_stop_string();
          result.timings.prepare_seconds = request->prepare_seconds;
@@ -805,29 +809,29 @@ index 250d87bfaca02321372630f23230e1506b94498b..9291bb44fba6fb3832562f3a606d5e4e
          result.timings                 = request->generation_timings;
          result.timings.prepare_seconds = request->prepare_seconds;
 diff --git a/src/runtime/engine/gemma4_core.cpp b/src/runtime/engine/gemma4_core.cpp
-index 945aeca0d7fff47d1bfd92a7555e55e717828400..892f47a00f6c33f4ed2999dba7995f66431e84fe 100644
+index 39720c9f01f6cb8dbe4ac4558176ca0c92380a71..ec707451d3f1f868d37c677651bf122211f1b0e2 100644
 --- a/src/runtime/engine/gemma4_core.cpp
 +++ b/src/runtime/engine/gemma4_core.cpp
-@@ -1393,6 +1393,7 @@ struct Gemma4Core::Impl {
+@@ -1495,6 +1495,7 @@ struct Gemma4Core::Impl {
          result.matched_stop_string             = r.output.matched_stop_string();
          result.thinking                        = r.output.thinking_stats();
          result.thinking.post_thinking_sampling = r.post_thinking;
 +        result.computed_prompt_tokens          = r.prefilled - r.reused;
          result.reused_prompt_tokens            = r.reused;
          result.prefix_reuse_path               = r.reuse_path;
-         if (drafts > 0) { result.speculative = r.speculative; }
+         result.branches                        = std::move(r.branch_results);
 diff --git a/src/runtime/engine/qwen4_exp_core.cpp b/src/runtime/engine/qwen4_exp_core.cpp
-index 99c3aeb010a4a47925061b14dcec92d9a3717479..7caec48a89e6567d6fa2686457f18cdbf51de1e4 100644
+index a1f964d9df16cba007e97bfc220200ed50a6f856..66f0d40e6106a573ee36e4d6a8cd3625ebe585b2 100644
 --- a/src/runtime/engine/qwen4_exp_core.cpp
 +++ b/src/runtime/engine/qwen4_exp_core.cpp
-@@ -1602,6 +1602,7 @@ struct Qwen4ExpCore::Impl {
+@@ -1721,6 +1721,7 @@ struct Qwen4ExpCore::Impl {
          result.matched_stop_string             = r.output.matched_stop_string();
          result.thinking                        = r.output.thinking_stats();
          result.thinking.post_thinking_sampling = r.post_thinking;
 +        result.computed_prompt_tokens          = r.prefilled - r.reused;
          result.reused_prompt_tokens            = r.reused;
          result.prefix_reuse_path               = r.reuse_path;
-         if (drafts > 0) { result.speculative = r.speculative; }
+         result.branches                        = std::move(r.branch_results);
 diff --git a/src/serve/console_stats.cpp b/src/serve/console_stats.cpp
 index 6d050aef4aee146e54e40148db1cbcb3b40dcb40..6931be115505adc424c8d8a93a5bcd43cf36e6fb 100644
 --- a/src/serve/console_stats.cpp
@@ -842,10 +846,10 @@ index 6d050aef4aee146e54e40148db1cbcb3b40dcb40..6931be115505adc424c8d8a93a5bcd43
          // The first output token comes from prefill; the decode rate covers the rest, as the
          // request-done record does.
 diff --git a/src/serve/generation_service.cpp b/src/serve/generation_service.cpp
-index a5e0cedc9e68c11daeaf8a65c6370b1a5526e062..1dc1014379e0131a0422c50403065fe9ec094e62 100644
+index 5f5d0ed3e48527169bb67906f1131fedbb496e3e..a855e057da000b776a40d602f341f6d7cbc48ed8 100644
 --- a/src/serve/generation_service.cpp
 +++ b/src/serve/generation_service.cpp
-@@ -685,6 +685,7 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
+@@ -870,6 +870,7 @@ GenerationOutcome GenerationService::run(PreparedRequest& prepared, const Stream
          prepared.prepare_seconds +
          std::max(0.0, result.timings.total_seconds - result.timings.prepare_seconds);
      outcome.metrics.engine_timing                = result.engine_timing;
@@ -854,10 +858,10 @@ index a5e0cedc9e68c11daeaf8a65c6370b1a5526e062..1dc1014379e0131a0422c50403065fe9
      outcome.id_slot                              = result.slot;
      outcome.session_digest                       = result.session_digest;
 diff --git a/src/serve/generation_service.h b/src/serve/generation_service.h
-index 64336c8c3966c471dde1e234505bc3436f9bc94d..e3bd56ac04039aade1240980d00edefa64928b9a 100644
+index c41e43afbafcf60015be7cd2023527de5ff2ff28..f3a3880aca9a81c533f6613f992a9761395c9cdc 100644
 --- a/src/serve/generation_service.h
 +++ b/src/serve/generation_service.h
-@@ -59,6 +59,8 @@ struct GenerationMetrics {
+@@ -60,6 +60,8 @@ struct GenerationMetrics {
      std::uint64_t ngram_archive_drafted_tokens  = 0;
      std::uint64_t ngram_archive_accepted_tokens = 0;
      NgramArchiveStats ngram_archive;
@@ -924,10 +928,10 @@ index dc9ce7c2f890bca9b3d002e89e25c289aec1ab60..5209b6859e8023121435dac21be415e8
          outcome.completion_tokens > 0 ? static_cast<double>(outcome.completion_tokens - 1) : 0.0;
      std::ostringstream out;
 diff --git a/src/serve/request_log.cpp b/src/serve/request_log.cpp
-index b32850209b404112e7b7bfc93b47f67f9521af3a..1a2f685b0ff7e4323f197bba577d3bcebba858b3 100644
+index f81f7eb19fce5bcf41991a1bc0458a9c55712890..76244fc4ab947a32cb78dae382776cbf71689593 100644
 --- a/src/serve/request_log.cpp
 +++ b/src/serve/request_log.cpp
-@@ -607,8 +607,7 @@ std::string format_request_done(const RequestLogContext& context,
+@@ -614,8 +614,7 @@ std::string format_request_done(const RequestLogContext& context,
      // Prefill emits the first token; the remaining (gen - 1) come from decode.
      const double decode_tokens =
          outcome.completion_tokens > 0 ? static_cast<double>(outcome.completion_tokens - 1) : 0.0;
@@ -937,7 +941,7 @@ index b32850209b404112e7b7bfc93b47f67f9521af3a..1a2f685b0ff7e4323f197bba577d3bce
  
      std::ostringstream out;
      out << "[req " << context.id << "] done finish="
-@@ -968,9 +967,7 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
+@@ -976,9 +975,7 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
          Json{{"finish_reason", finish_reason_name(outcome.finish_reason)},
               {"prompt_tokens", outcome.prompt_tokens},
               {"completion_tokens", outcome.completion_tokens},
@@ -949,10 +953,10 @@ index b32850209b404112e7b7bfc93b47f67f9521af3a..1a2f685b0ff7e4323f197bba577d3bce
               {"prefix_reuse_path", prefix_reuse_path_name(outcome.metrics.prefix_reuse_path)},
               {"thinking_budget", outcome.thinking.requested_budget
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 7ff2a53767b17c266c17224a7fbc6ff26189d2c9..a3e86c19ab9f616e9c56ef92fb0cde78769827d4 100644
+index 999daaf3ec78d62502fa2fc221492f333f4ca14e..3d9cd3c12fd51eabcf56d6707f2b50bf6d93c302 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -48,6 +48,13 @@ set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_query_policy_tests_PROGRAMS
+@@ -49,6 +49,13 @@ set_property(GLOBAL PROPERTY NINFER_BUNDLE_ninfer_query_policy_tests_PROGRAMS
  ninfer_finalize_bundle(ninfer_query_policy_tests)
  ninfer_stage_runtime_dlls(ninfer_query_policy_tests)
  
@@ -1188,10 +1192,10 @@ index 7bd6d9ce43934b3bd36a9738af88ac14a2451225..01bae096d31a6fd4f725e790dec2536e
      retained.id_slot           = 3;
      retained.session_digest    = "0123456789abcdef";
 diff --git a/tests/test_request_log.cpp b/tests/test_request_log.cpp
-index b18aa2bdd3577d4a68aebbe1d143912d89108a50..c39e7b9da63b89c2eedf91b5b7450c27b89402ec 100644
+index c2134be6cec2cb1cf203cb79ab50d0e27309a7dd..9da999e19efab510029e92e3a4fdbebdd90ae1c8 100644
 --- a/tests/test_request_log.cpp
 +++ b/tests/test_request_log.cpp
-@@ -434,6 +434,7 @@ int main() {
+@@ -459,6 +459,7 @@ int main() {
      outcome.metrics.prefill_seconds         = 0.2345678901234;
      outcome.metrics.decode_seconds          = 5.3456789012345;
      outcome.metrics.total_seconds           = 5.7037035803702;
@@ -1199,7 +1203,7 @@ index b18aa2bdd3577d4a68aebbe1d143912d89108a50..c39e7b9da63b89c2eedf91b5b7450c27
      outcome.metrics.prefix_cache_hit_tokens = 101;
      outcome.metrics.prefix_reuse_path       = ninfer::PrefixReusePath::PrivateTurnClosure;
      outcome.metrics.engine_timing           = {
-@@ -602,6 +603,27 @@ int main() {
+@@ -627,6 +628,27 @@ int main() {
              "gen 3, 12 sources | thinking 256/256, control 19",
          "pretty request-done record mismatch");
  
