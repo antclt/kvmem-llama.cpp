@@ -108,72 +108,72 @@
   "polystrata": {
     "path": "backends/polystrata",
     "upstream": "https://github.com/VecSzn/PolyStrata.git",
-    "base_commit": "974552f562aecb3e86cdd2679e76e4515b52b9d2",
+    "base_commit": "145493e66580c80bba09b0130f667a2b1789da69",
     "license_file": "backends/polystrata/LICENSE",
     "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 64)",
-    "patched_tree": "74fe791f4bf85d61709e20c9be3281cbc7a81185",
-    "source_tag": "v0.1.45-poly.2",
+    "patched_tree": "51266e7969b708c020c3de508384aa584e535c10",
+    "source_tag": "v0.1.45-poly.4",
     "patches": [
       {
         "id": "kvmem",
         "path": "backends/patches/polystrata-kvmem.patch",
-        "sha256": "73be894e2d3e239b31f68d220370f199a41fc5c9813737d37c56cafb2083f807",
+        "sha256": "40cf4a53c595cb1f208468d90cbb1f1596ffb58319ba37d1b8b1a7998bb281eb",
         "requires": [],
-        "after_tree": "a653d25267c3a206c68091d4d6476dc4e57ef4bd"
+        "after_tree": "2f0cad79a1a673466707d09c8247c2cead4e0b30"
       },
       {
         "id": "attention-feedback-performance",
         "path": "backends/patches/polystrata-attention-feedback-performance.patch",
-        "sha256": "28a7743a2b355872d03e52124c23a8b1203b97e34944f2677a49ecf0c67f7dfc",
+        "sha256": "cc20630d5ef879158fb0b7108fdaeb3be2688c70ac60f2c267604b24e1d48f8c",
         "requires": [
           "kvmem"
         ],
-        "after_tree": "abd050da76aea2c55c7ad71396186cc2b4db73d6"
+        "after_tree": "2f8b7a269ec4f1b57415f46dd57bcba9bb1f6cbc"
       },
       {
         "id": "elastic-workspace",
         "path": "backends/patches/polystrata-elastic-workspace.patch",
-        "sha256": "26715ec3789edd9e39774f32ac82ee4e7b6c4b41539a1776079bf58a8dc73570",
+        "sha256": "100c7c5758a231fb62b5b3c04a5c6e0dd63ac1c3ecffa79cb909e3e32fb276de",
         "requires": [
           "attention-feedback-performance"
         ],
-        "after_tree": "e6dac36d8058d8ac0a05d6f79d26d1a6a1227c00"
+        "after_tree": "d144aafe7af61b0943dc2364ac94502fe92ae24f"
       },
       {
         "id": "elastic-kv-reclaim",
         "path": "backends/patches/polystrata-elastic-kv-reclaim.patch",
-        "sha256": "71eb2c80be0f0ca261a77ecb966ec96da235853592fa0dd204fe450e208fd25b",
+        "sha256": "81f758c117a06104cd809143bd3a6e99cdd125768db83fc021986b3d6fefa932",
         "requires": [
           "elastic-workspace"
         ],
-        "after_tree": "c8ed4f3dc6469d6c318d1dfb55130e0e14916a5c"
+        "after_tree": "cbd7abd75c08b01a62ad07645377c38518934e53"
       },
       {
         "id": "elastic-headroom",
         "path": "backends/patches/polystrata-elastic-headroom.patch",
-        "sha256": "14241a3abc4f2ca3590cf6cc44a343eb8a3e1b70404d16f0d53416460f8b34ab",
+        "sha256": "0bffce1d3d185d345794b5384086801ad6ce1317b45154a9dae2dac79191c95e",
         "requires": [
           "elastic-kv-reclaim"
         ],
-        "after_tree": "1f4a7ec983d67ad0b966cb042313bed92aacec73"
+        "after_tree": "72f3c1125b28e24b9e1a9dab7077f2c1d2de39d8"
       },
       {
         "id": "elastic-mtp",
         "path": "backends/patches/polystrata-elastic-mtp.patch",
-        "sha256": "85f3a95be5508178f46d6001e4c584ff3708d9a64f6af3555c325fc36070e751",
+        "sha256": "94122ad2f25bcbdffbbf77d3e531128777edbc615d2d1b59dde651703a35f957",
         "requires": [
           "elastic-headroom"
         ],
-        "after_tree": "7aa6e4c18cbd43da822a1acd24145b539d23a0b3"
+        "after_tree": "26c8b98f96d09bb2f9a0c6bdaf687c03ee374fe4"
       },
       {
         "id": "block-tokens",
         "path": "backends/patches/polystrata-block-tokens.patch",
-        "sha256": "0bbe48e46215fa696cc453aa4ed491564cbc0d0274ed2068fea486e490fdd839",
+        "sha256": "46183d6987e5530229ff38806db21b7f2ea2d7fbea482015f83739b7ca89a813",
         "requires": [
           "elastic-mtp"
         ],
-        "after_tree": "74fe791f4bf85d61709e20c9be3281cbc7a81185"
+        "after_tree": "51266e7969b708c020c3de508384aa584e535c10"
       }
     ]
   }
