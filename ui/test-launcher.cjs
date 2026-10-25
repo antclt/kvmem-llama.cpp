@@ -145,7 +145,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.locator('[data-param=Port]').fill('18321');
  const originalDraft=(await api('info')).body.draft;
  await page.locator('[data-preset=ninfer-v018]').click();
- assert.equal(await page.locator('[data-param=Context]').inputValue(),'204800');
+ assert.equal(await page.locator('[data-param=Context]').inputValue(),'262144');
  assert.equal(await page.locator('[data-param=Model]').inputValue(),'C:/models/my-existing-model.ninfer');
  assert.equal(await page.locator('[data-param=Port]').inputValue(),'18321');
  assert.equal(await page.locator('[data-preset=ninfer-v018]').getAttribute('aria-pressed'),'true');
@@ -157,10 +157,15 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.equal(await page.locator('[data-param=QueryScorer]').inputValue(),'page-softmax');
  assert.equal(await page.locator('[data-param=GraphAlpha]').inputValue(),'0.2');
  assert.equal(await page.locator('[data-param=Lrfu]').isChecked(),false);
- const expected={Context:204800,Budget:36864,Reserve:16384,HostMiB:12288,Prefill:256,MaxTokens:16384,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,DraftTokens:4,SpeculativeMode:'mtp',DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:8192,DeviceProfile:'off'};
+ const expected={Context:262144,Budget:47104,Reserve:2048,HostMiB:12288,Prefill:256,MaxTokens:0,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,DraftTokens:4,SpeculativeMode:'mtp',DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:16384,DeviceProfile:'auto',ReasoningEffort:'xhigh'};
  for(const [key,value] of Object.entries(expected))assert.equal(await page.locator('[data-param='+key+']').inputValue(),String(value),key);
- for(const key of ['Vision'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),true,key);
- for(const key of ['FastPrefill'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),false,key);
+ for(const key of ['Vision','FastPrefill'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),true,key);
+ assert.equal(await page.locator('[data-param=PreserveThinking]').inputValue(),'true');
+ assert.equal(await page.locator('[data-output-mode]').inputValue(),'unlimited');
+ assert.equal(await page.locator('[data-param=MaxTokens]').isVisible(),false);
+ await page.locator('[data-output-mode]').selectOption('limited');await page.locator('[data-param=MaxTokens]').fill('');
+ assert.equal(await page.locator('[data-param=MaxTokens]').isVisible(),true,'an incomplete limit is not silently treated as unlimited');
+ await page.locator('[data-param=MaxTokens]').fill('1234');await page.locator('[data-output-mode]').selectOption('unlimited');
  await page.waitForFunction(()=>document.querySelector('[data-draft-state]').textContent.includes('已自动保存'));
  const releaseDraft=await page.evaluate(()=>JSON.parse(localStorage.getItem('kvmem-launch-draft-v2')).parameters);
  for(const [key,value] of Object.entries(expected))assert.equal(releaseDraft[key],value,'persisted '+key);
@@ -168,7 +173,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.equal(await page.locator('[data-param=Model]').inputValue(),'C:/models/my-existing-model.ninfer');
  assert.ok(mutations.every(url=>new URL(url).pathname==='/api/launcher/inspect-model'),
   'select/undo may inspect the draft but must not mutate the server');
- assert.equal(await page.locator('[data-preset]').count(),1,'only the 0.18.0 release recipe');
+ assert.equal(await page.locator('[data-preset]').count(),1,'only the selected engine default template');
  await page.locator('[data-preset=ninfer-v018]').click();
  await page.getByRole('tab',{name:'服务与并发'}).click();
  assert.equal(await page.locator('[data-param=ListenHost]').isEnabled(),true);
@@ -194,14 +199,14 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.equal(await page.getByRole('tab',{name:'Cache & history'}).count(),1);
  await page.locator('[data-language-select]').selectOption('zh-CN');
  // Incomplete edits must survive reload without becoming a launch request.
- await page.locator('.l-native > summary').click();
+ await page.locator('.l-native > summary').click();await page.locator('[data-engine-arguments] > summary').click();
  await page.locator('[data-native]').fill('["--threads",');
  await page.locator('[data-param=Context]').fill('');
  await page.waitForFunction(()=>document.querySelector('[data-draft-state]').textContent.includes('已自动保存'));
  await page.reload();await page.locator('[data-param=Context]').waitFor();
  assert.equal(await page.locator('[data-param=Context]').inputValue(),'');
  assert.equal(await page.locator('[data-native]').inputValue(),'["--threads",');
- await page.locator('.l-native > summary').click();await page.locator('[data-native]').fill('[]');
+ await page.locator('.l-native > summary').click();await page.locator('[data-engine-arguments] > summary').click();await page.locator('[data-native]').fill('[]');
  await page.locator('[data-param=Context]').fill('8192');
  // Personal templates: full settings, apply/undo, rename, update and delete.
  await page.locator('[data-action=template]').click();
@@ -335,6 +340,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  if(process.env.SCREENSHOT_DIR){fs.mkdirSync(process.env.SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'launch-desktop.png'),fullPage:true});}
  await require('./test-launcher-settings.cjs')({browser,base,info});
  await require('./test-running-config.cjs')({browser,base,info});
+ await require('./test-engine-settings.cjs')({browser,base,info});
  await require('./test-elastic-experts.cjs')({browser,base,info});
  await require('./test-query-scoring.cjs')({browser,base,info});
  if(process.env.TEST_MODEL&&process.env.TEST_WORKER&&process.env.TEST_GPU){

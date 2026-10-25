@@ -206,11 +206,12 @@ class ConsoleTests(unittest.TestCase):
         value={'schema_version':1,'parameters':{'Backend':'polystrata','KvType':'q8_0',
                'SpeculativeMode':'mtp','DraftTokens':3,'Concurrency':4}}
         self.assertEqual(console.normalize(value,['polystrata'])['parameters']['DraftTokens'],3)
-        thinking={**value['parameters'],'ThinkingMode':'on','ThinkingBudget':128,'ReasoningEffort':'high','PreserveThinking':True}
+        self.assertEqual(console.normalize(value,['polystrata'])['parameters']['DraftPolicy'],'adaptive')
+        thinking={**value['parameters'],'ThinkingMode':'on','ThinkingBudget':128,'ReasoningEffort':'xhigh','PreserveThinking':True}
         self.assertEqual(console.normalize({'schema_version':1,'parameters':thinking},['polystrata'])['parameters']['ThinkingBudget'],128)
-        for invalid in ({'DraftTokens':4},{'DraftModel':'draft.gguf'},{'DraftPolicy':'adaptive'},
+        for invalid in ({'DraftTokens':4},{'DraftModel':'draft.gguf'},{'DraftPolicy':'unknown'},
                         {'KvType':'int8'},{'Gpu':'GPU-12345678,GPU-87654321'},
-                        {'ReasoningEffort':'xhigh'},{'ThinkingMode':'on','ReasoningEffort':'none'}):
+                        {'ReasoningEffort':'max'},{'ThinkingMode':'on','ReasoningEffort':'none'}):
             with self.subTest(invalid=invalid),self.assertRaises(ValueError):
                 console.normalize({'schema_version':1,'parameters':{**value['parameters'],**invalid}},['polystrata'])
 
@@ -289,7 +290,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('--preserve-thinking', argv)
         self.assertEqual(list(Path(self.tmp.name).glob('*.json')), [])
         for overrides in ({'ReasoningEffort': 'bad'}, {'ThinkingMode': 'off'},
-                          {'Backend': 'llamacpp'}, {'PreserveThinking': 'true'}):
+                          {'PreserveThinking': 'true'}):
             bad = json.loads(json.dumps(self.config))
             bad['parameters'].update(overrides)
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):

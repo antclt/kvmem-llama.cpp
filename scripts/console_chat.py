@@ -6,6 +6,7 @@ in memory. Cancellation closes the upstream connection, including during prefill
 import copy
 import http.client
 import json
+import math
 import queue
 import select
 import socket
@@ -16,6 +17,44 @@ from urllib.parse import urlsplit
 MAX_BODY = 64 * 1024 * 1024
 PARAMS = ('temperature', 'top_p', 'top_k', 'min_p', 'seed', 'max_tokens',
           'reasoning_budget_tokens', 'reasoning_effort', 'enable_thinking', 'preserve_thinking')
+
+
+def request_metrics(record, snapshot, row, backend):
+    """Normalize exact request data for the chat's live/mean display contract."""
+    finite = lambda value: type(value) in (int, float) and math.isfinite(value) and value >= 0
+    metrics = dict(row) if row else {}
+    if row:
+        metrics['decode_tps_mean'] = row.get('decode_tps_mean', row.get('decode_tps'))
+        # decode_tps on C++ monitors is a cumulative mean, not a live rate.
+        live = None
+        active = row in snapshot.get('active', []) and row.get('status') == 'generating'
+        if active and backend in ('llamacpp','ninfer'):
+            rate, window, sampled = (row.get(k) for k in
+                                     ('decode_tps_live','decode_tps_window_ms','decode_tps_sampled_at_ms'))
+            now = time.time() * 1000
+            if all(finite(v) for v in (rate,window,sampled)) and window > 0:
+                age = now - sampled
+                if -1000 <= age <= max(6000,window*2)+1000:
+                    live = rate
+        elif active and backend == 'polystrata' and finite(row.get('decode_tps')):
+            live = row['decode_tps']
+        metrics['decode_tps'] = live
+    # SSE timings are already bound to this browser request. They also work when
+    # an engine has no monitor response-ID mapping. Never use the global 5 s rate.
+    timings = record.get('timings') or {}
+    for source, target in {
+        'prompt_ms':'prefill_ms', 'prompt_n':'prompt_new_tokens', 'cache_n':'cached_tokens',
+        'prompt_per_second':'prefill_tps', 'predicted_n':'generated_tokens',
+        'predicted_ms':'decode_ms', 'predicted_per_second':'decode_tps_mean',
+        'draft_n':'drafts_offered', 'draft_n_accepted':'drafts_accepted',
+    }.items():
+        if finite(timings.get(source)):
+            metrics[target] = timings[source]
+    if record.get('finish_reason'):
+        metrics['finish_reason'] = record['finish_reason']
+    if record.get('state') in ('completed','cancelled','error'):
+        metrics['decode_tps'] = None
+    return metrics
 
 
 def context_payload(state, props, settings=None):
@@ -35,10 +74,14 @@ def context_payload(state, props, settings=None):
     for key in ('enable_thinking', 'reasoning_budget_tokens', 'preserve_thinking'):
         put(key, defaults.get(key))
     put('reasoning_effort', defaults.get('chat_template_kwargs', {}).get('reasoning_effort'))
+    put('preserve_thinking', defaults.get('chat_template_kwargs', {}).get('preserve_thinking'))
     # These are explicit parameters of the running process, never the editable draft.
     for key, field in [('MaxTokens','max_tokens'), ('ThinkingBudget','reasoning_budget_tokens'),
                        ('ReasoningEffort','reasoning_effort'), ('PreserveThinking','preserve_thinking')]:
-        if field not in effective: put(field, launch.get(key), 'launch')
+        if field not in effective:
+            value = launch.get(key)
+            if backend == 'ninfer' and key == 'PreserveThinking' and value is False: value = None
+            put(field, value, 'launch')
     mode = launch.get('ThinkingMode')
     if 'enable_thinking' not in effective and mode in ('on','off'):
         put('enable_thinking', mode == 'on', 'launch')
@@ -61,10 +104,12 @@ def context_payload(state, props, settings=None):
             if key in PARAMS: put(key, value)
         effort = effective.get('reasoning_effort')
         if effort is not None: put('enable_thinking', effort != 'none')
+    if backend == 'polystrata' and effective.get('reasoning_effort') == 'high':
+        effective['reasoning_effort'] = 'xhigh'
     capabilities = {'thinking': True, 'budget': True,
-                    'preserve': backend in ('ninfer','polystrata'),
-                    'efforts': ['low','medium','high'] if backend == 'polystrata' else
-                               ['minimal','low','medium','high','xhigh','max'] if backend == 'ninfer' else [],
+                    'preserve': backend in ('ninfer','polystrata','llamacpp'),
+                    'efforts': ['low','medium','xhigh'] if backend == 'polystrata' else
+                               ['minimal','low','medium','high','xhigh','max'],
                     'vision': bool(props.get('modalities', {}).get('vision', native.get('vision', False))),
                     'tools': False}
     return {'schema_version':1, 'state':state['state'], 'instance':state.get('instance'),
@@ -74,7 +119,8 @@ def context_payload(state, props, settings=None):
             'effective':effective, 'sources':sources, 'capabilities':capabilities,
             'budget_min':1 if backend=='ninfer' else 0,
             'sampling_by_mode':native.get('sampling', {}),
-            'sampling_by_effort':(settings or {}).get('sampling_by_effort', {}),
+            'sampling_by_effort':{('xhigh' if backend == 'polystrata' and k == 'high' else k): v
+                                  for k, v in (settings or {}).get('sampling_by_effort', {}).items()},
             'history_export_url':state.get('url','') + ('/kvmem-history-export' if backend=='polystrata' else '/history-export.html')}
 
 
@@ -139,14 +185,19 @@ class ChatBridge:
     def record(self, request_id):
         with self.lock: record = copy.deepcopy(self.records.get(request_id))
         if record:
+            snapshot, row, backend = {}, None, record.get('backend')
             try:
                 state = self.target(record['instance'])
+                backend = state.get('active_config', {}).get('parameters', {}).get('Backend')
                 snapshot = self.get_json(state, '/api/monitor/snapshot')
                 matches = [r for r in snapshot.get('active', []) + snapshot.get('recent', [])
                            if r.get('client_request_id') == request_id or
-                           (record.get('native_id') and r.get('id') == record['native_id'])]
-                if len(matches) == 1: record['metrics'] = matches[0]
+                           (record.get('native_id') and record['native_id'] in
+                            (r.get('native_request_id'), r.get('id')))]
+                if len(matches) == 1: row = matches[0]
             except (OSError, ValueError, http.client.HTTPException): pass
+            metrics = request_metrics(record, snapshot, row, backend)
+            if metrics: record['metrics'] = metrics
         return record
 
     def stream(self, handler, payload):
@@ -180,6 +231,7 @@ class ChatBridge:
             conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5)
             cancel = threading.Event()
             record = {'id':request_id,'instance':state.get('instance'),'state':'waiting',
+                      'backend':state.get('active_config', {}).get('parameters', {}).get('Backend'),
                       'started_at_ms':int(time.time()*1000),'finish_reason':None,'timings':None}
             with self.lock:
                 if request_id in self.records: raise ValueError('Duplicate request identity')

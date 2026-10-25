@@ -273,7 +273,20 @@ class Inspection:
                 self.required_file(vision_worker, 'vision_worker', '视觉 worker', 'Vision worker', 'disable_vision')
                 self.check('projector_pair', 'unknown', '视觉投影与文本模型的配对兼容性未验证', 'Projector/model pairing is unverified', layer='worker')
             else:
-                self.check('vision_path', 'unknown', '此引擎的视觉启动路径未检查', 'Vision launch path not checked', layer='worker')
+                explicit = self.p.get('Mmproj')
+                exact = [p for p in (path.with_name(path.stem + '-mmproj.gguf'), path.with_name('mmproj-' + path.stem + '.gguf')) if p.is_file()]
+                candidates = exact or sorted(p for p in path.parent.iterdir() if p.is_file() and 'mmproj' in p.name.lower() and p.suffix.lower() == '.gguf')
+                if not explicit and len(candidates) != 1:
+                    self.check('projector_missing', 'error', '请选择匹配的视觉投影文件', 'Select the matching vision projector', 'Mmproj: no unique adjacent GGUF', 'config', 'disable_vision')
+                else:
+                    projector = self.path(explicit) if explicit else candidates[0]
+                    if self.required_file(projector, 'projector', '视觉投影文件', 'Vision projector', 'disable_vision'):
+                        try:
+                            self.gguf(projector)
+                            self.report['features']['vision'] = 'present'
+                            self.check('projector_pair', 'unknown', '视觉文件已找到，配对兼容性由加载检查', 'Projector found; pairing is checked when loading', str(projector), 'worker')
+                        except (Invalid, UnicodeError) as e:
+                            self.check('projector_invalid', 'error', '视觉投影文件损坏', 'Invalid vision projector', str(e), 'config', 'disable_vision')
 
     def inspect_ninfer(self, path):
         from model_health_ninfer.reader import Artifact

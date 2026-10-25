@@ -12,11 +12,11 @@ const server=http.createServer((request,response)=>{
  response.setHeader('Content-Type',types[path.extname(target)]||'application/octet-stream');fs.createReadStream(target).pipe(response);
 });
 function settings(backend){
- const props={model_alias:'native-'+backend,default_generation_settings:{n_ctx:8192,params:{n_predict:64,temperature:.2}},modalities:{vision:false}};
+ const props={model_alias:'native-'+backend,default_generation_settings:{n_ctx:8192,params:{n_predict:-1,temperature:.2}},modalities:{vision:false}};
  if(backend==='ninfer')props.kvmem={enabled:true,selected_tokens:768};
  if(backend==='llamacpp')props.kvmem={generation_limit:8192,defaults:{enable_thinking:false,reasoning_budget_tokens:0,chat_template_kwargs:{}},sampling:{non_thinking:{temperature:.7},thinking:{temperature:.6}}};
  const input={state:{state:'ready',instance:'fixture-'+backend,url:'http://localhost:99',active_config:{parameters:{Backend:backend}}},props,
-  settings:backend==='polystrata'?{effective:{reasoning_effort:'none',max_tokens:64,reasoning_budget_tokens:32,preserve_thinking:true}}:null};
+  settings:backend==='polystrata'?{effective:{reasoning_effort:'none',max_tokens:0,reasoning_budget_tokens:32,preserve_thinking:true}}:null};
  const script='import json,sys;sys.path.insert(0,"scripts");from console_chat import context_payload;print(json.dumps(context_payload(**json.load(sys.stdin))))';
  const result=spawnSync(process.env.PYTHON||'python',['-X','utf8','-c',script],{cwd:path.join(__dirname,'..'),input:JSON.stringify(input),encoding:'utf8'});
  assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);
@@ -38,7 +38,8 @@ function settings(backend){
     sent.push(route.request().postDataJSON());
     assert.equal(route.request().headers()['x-kvmem-token'],'fixture-token');
     assert.equal(route.request().headers()['x-kvmem-instance'],ctx.instance);
-    return route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify({choices:[{delta:{content:'Fixture reply'},finish_reason:'stop'}],timings})+'\n\ndata: [DONE]\n\n'});
+    const speculative=timings.draft_n ? backend==='llamacpp' ? {backend:'draft-mtp',drafted_tokens:8,accepted_tokens:4} : backend==='ninfer' ? {backend:'mtp',drafted_tokens:8,accepted_tokens:4,mtp_drafted_tokens:6,mtp_accepted_tokens:3,ngram_drafted_tokens:2,ngram_accepted_tokens:1} : null : null;
+    return route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify({kvmem:speculative ? {speculative}:undefined,choices:[{delta:{content:'Fixture reply'},finish_reason:'stop'}],timings})+'\n\ndata: [DONE]\n\n'});
    });
    try{
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -75,6 +76,10 @@ function settings(backend){
     assert.equal(await dialog.getByLabel('temperature',{exact:true}).inputValue(),backend==='llamacpp'?'0.7':'0.2');
     assert.equal(await thinking.inputValue(),backend==='ninfer'?'unknown':'false');
     const output=dialog.getByLabel('总输出上限 · tokens',{exact:true});
+    assert.equal(await output.inputValue(),'');assert.equal(await output.getAttribute('placeholder'),'不限制（跟随服务）');
+    assert.equal(await output.evaluate(el=>el.checkValidity()),true);
+    await output.fill('64');await output.press('Tab');await output.fill('');await output.press('Tab');
+    assert.equal(await output.inputValue(),'');assert.equal(await output.getAttribute('placeholder'),'不限制（跟随服务）');
     await output.fill('16');await output.press('Tab');
     await output.fill('8193');await output.press('Tab');
     await dialog.getByRole('alert').filter({hasText:'max_tokens'}).waitFor();
@@ -94,7 +99,7 @@ function settings(backend){
     assert.equal(await footer.getByText('1 token',{exact:true}).count(),1);
     assert.equal(await footer.getByText(/tok\/s/).count(),0,'one token has no decode-step rate');
     for(const [native,expected] of [
-     [{predicted_n:5,predicted_ms:.001,predicted_per_second:12.5},'平均 12.5 tok/s'],
+     [{predicted_n:5,predicted_ms:2000,predicted_per_second:12.5,draft_n:8,draft_n_accepted:4},'平均 12.5 tok/s'],
      [{predicted_n:5,predicted_ms:.001,predicted_per_second:0},null],
      [{predicted_n:5,predicted_ms:.001},null],
      [{predicted_n:5,predicted_ms:.001,predicted_per_second:-1},null],
@@ -103,13 +108,19 @@ function settings(backend){
      assert.equal(await footer.getByText('5 token',{exact:true}).count(),1);
      if(expected)assert.equal(await footer.getByText(expected,{exact:true}).count(),1);
      else assert.equal(await footer.getByText(/tok\/s/).count(),0,'do not fabricate rate from elapsed time');
+     if(native.draft_n) {
+       if(backend!=='polystrata') assert.match(await footer.locator('.message-meta').textContent(),backend==='llamacpp' ? /MTP 接受 \/ 提议 4 \/ 8/ : /MTP 接受 \/ 提议 3 \/ 6/);
+       await footer.locator('summary').click();
+       assert.match(await footer.locator('.message-details').textContent(),/推测解码提议 \/ 接受：8 \/ 4/);
+       assert.match(await footer.locator('.message-details').textContent(),/解码耗时：2.00s/);
+     }
     }
     await page.getByRole('button',{name:'参数',exact:true}).click();
     await thinking.selectOption('true');
     assert.equal(await dialog.getByLabel('temperature',{exact:true}).inputValue(),backend==='llamacpp'?'0.6':'0.2');
     await dialog.getByLabel('关闭面板').click();await send();
     assert.equal(sent.at(-1).chat_template_kwargs.enable_thinking,true);
-    if(backend==='polystrata')assert.equal(sent.at(-1).reasoning_effort,'high');
+    if(backend==='polystrata')assert.equal(sent.at(-1).reasoning_effort,'xhigh');
     await page.reload();await page.locator('.message-footer').nth(5).waitFor();
     assert.equal(await page.locator('form').getByRole('button',{name:'删除对话',exact:true}).count(),0);
     await page.locator('.history-menu summary').click();

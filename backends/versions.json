@@ -62,7 +62,7 @@
     "base_commit": "db8c114802a070a7903f84d01142fda0b00fa7df",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "7df5078b0879b8622353a250035f333ba9e8ab0b",
+    "patched_tree": "5cc3a03b4560266bb13239f0846053e272bd9cbb",
     "patches": [
       {
         "id": "kvmem",
@@ -120,6 +120,16 @@
         "requires": [
           "query-memory"
         ]
+      },
+      {
+        "id": "monitor-events",
+        "path": "backends/patches/ninfer-monitor-events.patch",
+        "sha256": "8cda7f7cb11cdee08e91c4fd1c7257eb87ff0bc5cc736c59e20fa6fab5e3d9fc",
+        "requires": [
+          "checkpoint-policy"
+        ],
+        "after_tree": "5cc3a03b4560266bb13239f0846053e272bd9cbb",
+        "source": "Native response IDs, execution/request TTFT, request interval rates, native means, finish reasons and actual MTP/copy counters"
       }
     ]
   },

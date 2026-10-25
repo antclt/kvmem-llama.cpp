@@ -86,14 +86,20 @@ To add the console to a worker package, or create a console-only folder:
 .\scripts\windows\package-console.ps1 `
     -OutputDir 'D:\packages\KVMem' `
     -PythonArchive 'D:\downloads\python-X.Y.Z-embed-amd64.zip' `
-    -PythonSha256 '<official release SHA-256>'
+    -PythonSha256 '<official release SHA-256>' `
+    -PsutilWheel 'D:\downloads\psutil-7.2.2-cp37-abi3-win_amd64.whl' `
+    -PsutilSha256 '<PyPI wheel SHA-256>'
 ```
 
 The script copies the root entry, controller, canonical launch bridge and local monitor
 assets. It refuses to replace differing files or an existing runtime. Use a fresh staging
 directory on rebuild. Console-only output does not contain inference engines or models.
 
-The combined worker packager also accepts `-PythonArchive`, `-PythonSha256` and
+Download the psutil 7.2.2 Windows x64 ABI3 wheel from PyPI and verify its published
+SHA-256. The offline packager installs it with its license and validates its import;
+no pip or network access is required on the end-user machine.
+
+The combined worker packager also accepts `-PsutilWheel`, `-PsutilSha256`, `-PythonArchive`, `-PythonSha256` and
 `-LlamaUiDir` (the built llama.cpp chat directory). These add the offline console before
 the package's final checksums are generated. llama.cpp chat files are placed under
 `workers/share/kvmem/ui`, matching the worker's binary-relative lookup; NInfer must be

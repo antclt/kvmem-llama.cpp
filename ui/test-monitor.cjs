@@ -33,7 +33,7 @@ const server = http.createServer((req, res) => {
   if (
     req.url.startsWith("/api/") ||
     req.url === "/props" ||
-    req.url === "/slots"
+    req.url === "/slots" || req.url === "/stats"
   ) {
     if ((requiredKey || fixture.requiredKey) && req.headers.authorization !== "Bearer test-key") {
       res.writeHead(401);
@@ -45,6 +45,22 @@ const server = http.createServer((req, res) => {
     }
     res.setHeader("Content-Type", "application/json");
     res.setHeader("Cache-Control", "no-store");
+    if (req.url === '/stats') return res.end(JSON.stringify(fixture.nativeStats || {queue:{depth:2}}));
+    if (req.url === '/api/launcher/hardware') {
+      if (!fixture.sharedDisk || fixture.diskFailure) {
+        res.statusCode = fixture.diskFailure ? 503 : 404; return res.end('{}');
+      }
+      return res.end(JSON.stringify({schema_version:1, scope:'system',
+        sampled_at_ms:Date.now()-(fixture.staleDisk ? 10000 : 0),
+        system_disk_read_bytes_per_second:fixture.noDisk ? null : 12.5*1048576,
+        system_disk_write_bytes_per_second:fixture.noDisk ? null : 6.25*1048576}));
+    }
+    if (req.url.startsWith('/api/launcher/logs')) {
+      if (fixture.logFailure) { res.statusCode=503; return res.end('{}'); }
+      const now = new Date(), pad = n => String(n).padStart(2,'0');
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.000`;
+      return res.end(JSON.stringify({running:true,backend:'ninfer',session:'test',started_at:Date.now()-10000,revision:String(Date.now()),text:`${stamp}  INFO  throughput | 5.0s | decode 58.4 tok/s (292 tok) | running 1 (decode-ready 1)\n`}));
+    }
     const payload =
       req.url === "/props"
         ? {
@@ -71,9 +87,12 @@ const server = http.createServer((req, res) => {
           : {
               schema_version: 1,
               server_instance: instance,
-              backend: "llamacpp",
+              backend: fixture.backend || "llamacpp",
               sampled_at_ms: Date.now(),
-              active: fixture.idle || fixture.empty ? [] : [record()],
+              active: fixture.idle || fixture.empty ? [] : [{...record(), ...(fixture.nativeRequestMetrics || {}), ...(fixture.liveLlama ? {
+                decode_tps_live:23.5, decode_tps_mean:8, decode_tps_window_ms:3000,
+                decode_tps_sampled_at_ms:Date.now()-(fixture.staleSpeed ? 10000 : 100),
+              } : {})}],
               recent: fixture.empty ? [] : fixture.idle ? [{...record(), status:"completed"}] : recent,
               hardware: {
                 sampled_at_ms: Date.now() - (fixture.stale ? 10000 : 0),
@@ -138,6 +157,77 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     );
     assert.equal(await page.locator("#app").getAttribute("data-theme"), "dark");
     assert.equal(await page.locator('[data-gpu="power"]').textContent(), "—");
+    for (const backend of ['llamacpp', 'ninfer', 'polystrata']) {
+      fixtureScenario = {backend,sharedDisk:true};
+      await page.waitForFunction(() => document.querySelector('[data-value="system-disk"]').textContent === '12.5');
+      assert.equal(await page.locator('[data-value="system-disk-write"]').textContent(),'6.3');
+      fixtureScenario = {backend,sharedDisk:true,staleDisk:true};
+      await page.waitForFunction(() => document.querySelector('[data-value="system-disk"]').textContent === '—');
+      assert.equal(await page.locator('[data-value="system-disk-write"]').textContent(),'—');
+    }
+    fixtureScenario = {sharedDisk:true,noDisk:true};
+    await page.waitForTimeout(1200);
+    assert.equal(await page.locator('[data-value="system-disk"]').textContent(),'—');
+    fixtureScenario = {sharedDisk:true,diskFailure:true};
+    await page.waitForTimeout(1200);
+    assert.equal(await page.locator('[data-value="decode-mean"]').textContent(),'8.0');
+    fixtureScenario = {liveLlama:true};
+    await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '23.5');
+    assert.equal(await page.locator('[data-value="decode-mean"]').textContent(),'8.0');
+    fixtureScenario = {liveLlama:true,staleSpeed:true};
+    await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '—');
+    fixtureScenario = {backend:'ninfer'};
+    await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '58.4');
+    assert.equal(await page.locator('[data-value="decode-mean"]').textContent(),'8.0');
+    assert.equal(await page.locator('[data-value="decode-label"]').textContent(),'实时 · 5s');
+    assert.equal(await page.locator('[data-value="queue"]').textContent(),'活动 1 · 排队 2');
+    fixtureScenario={backend:'ninfer',nativeStats:{queue:{depth:2,entries:[{request_id:'<img onerror=bad()>',prompt:'must-not-render'}]},
+      kvmem:{history_misses:3,disk_errors:2,disk_written_bytes:2097152,statistics_bytes:1048576},
+      throughput_tokens_per_second:{decode:4.5},experts:{hits:10,lookups:20}}};
+    await page.waitForFunction(()=>document.querySelector('[data-cache-metrics]')?.textContent.includes('历史未命中'));
+    assert.match(await page.locator('[data-cache-metrics]').textContent(),/2.00 MiB/);
+    assert.equal(await page.locator('[data-cache-metrics] .s-metric-warning').textContent(),'2');
+    await page.locator('[data-backend-metrics] > details > summary').click();
+    const queueSection=page.locator('[data-metric-group="ninfer/queue"]');
+    await queueSection.locator('summary').click();
+    assert.match(await queueSection.textContent(),/<img onerror=bad\(\)>/);
+    assert.doesNotMatch(await queueSection.textContent(),/must-not-render/);
+    await page.waitForTimeout(1200);
+    assert.equal(await queueSection.getAttribute('open'),'');
+    assert.match(await page.locator('[data-backend-sections]').textContent(),/启动以来平均吞吐/);
+    assert.equal(await page.locator('[data-backend-sections] img').count(),0);
+    fixtureScenario = {backend:'ninfer',nativeRequestMetrics:{
+      native_request_id:'chatcmpl-exact',decode_tps_live:21,decode_tps_window_ms:5000,
+      decode_tps_sampled_at_ms:Date.now(),prefill_ms:250,ttft_ms:250,decode_ms:1000,
+      mtp_drafts_offered:30,mtp_drafts_accepted:20,drafts_offered:40,drafts_accepted:25,
+      speculative:{ngram_drafted_tokens:10,ngram_accepted_tokens:5}}};
+    await page.waitForFunction(()=>document.querySelector('[data-value="decode"]').textContent==='21.0');
+    assert.match(await page.locator('[data-value="prefill-times"]').textContent(),/0.25s/);
+    assert.match(await page.locator('[data-value="speculative-live"]').textContent(),/MTP.*接受 20 \/ 提议 30.*N-gram.*5.*10/);
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',
+      {detail:{state:'ready',active_config:{parameters:{Backend:'ninfer',SpeculativeMode:'mtp',DraftTokens:4}}}})));
+    assert.match(await page.locator('[data-value="mtp"]').textContent(),/提议 30 \/ 接受 20/);
+    assert.doesNotMatch(await page.locator('[data-value="mtp"]').textContent(),/提议 40|接受 25/);
+    delete fixtureScenario.nativeRequestMetrics.mtp_drafts_offered;
+    delete fixtureScenario.nativeRequestMetrics.mtp_drafts_accepted;
+    await page.waitForFunction(()=>!document.querySelector('[data-value="mtp"]').textContent.includes('所选请求'));
+    assert.match(await page.locator('[data-value="speculative-live"]').textContent(),/推测.*接受 25 \/ 提议 40/);
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:{state:'stopped'}})));
+    assert.equal(await page.locator('[data-live-speed]').getAttribute('title'),'');
+    fixtureScenario = {backend:'ninfer',logFailure:true};
+    await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '—');
+    assert.equal(await page.locator('[data-value="decode-mean"]').textContent(),'8.0');
+    fixtureScenario = {backend:'polystrata'};
+    await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '8.0');
+    assert.equal(await page.locator('[data-backend-metrics]').isVisible(),false);
+    recent=[{...record(),id:'expert-history',status:'completed',expert_hit_rate:.75,drafts_offered:40,drafts_accepted:30,decode_ms:2500}];
+    await page.waitForFunction(()=>document.querySelector('[data-requests]')?.textContent.includes('已完成'));
+    await page.locator('[data-requests] button').last().click();
+    assert.match(await page.locator('[data-detail-body]').textContent(),/专家命中率 75.0%/);
+    assert.match(await page.locator('[data-detail-body]').textContent(),/接受 30/);
+    await page.locator('[data-close]').click();recent=[];
+    fixtureScenario = {};
+    await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '—');
     // Definitions are available on demand at readable size, with keyboard dismissal.
     await page.locator('[popovertarget="monitor-note-decode"]').first().click();
     assert.equal(await page.locator('#monitor-note-decode').isVisible(), true);

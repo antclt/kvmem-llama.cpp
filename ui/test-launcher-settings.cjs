@@ -124,16 +124,16 @@ module.exports = async function settingsChecks({browser,base,info}) {
 
   await field('Backend').selectOption('llamacpp');
   await field('Model').fill('C:/models/ui fixture.gguf');await page.locator('[data-gpu-choice]').first().check();
-  await disabled(['Vision','VisionTokens','VisionResidency','ThinkingBudget','DraftTokens','DraftPolicy','StageLayers']);
-  await disabled(['ReasoningEffort','PreserveThinking']);
+  await disabled(['StageLayers','DraftPolicy']);
+  await disabled(['Vision','VisionTokens','VisionResidency','ThinkingBudget','DraftTokens','ReasoningEffort','PreserveThinking'],false);
   await group(0);await field('DiskEnabled').check();await field('DiskPath').fill('C:/cache/llama fixture');await field('DiskMiB').fill('512');
   await group(4);await field('Concurrency').fill('8');await disabled(['DiskEnabled','DiskPath','DiskMiB'],false);
   assert.equal(await field('DiskEnabled').isChecked(),true,'concurrency preserves SSD choice');
   const parallel=await preview();assert.equal(parallel.Concurrency,8);assert.equal(parallel.DiskPath,'C:/cache/llama fixture');assert.equal(parallel.DiskMiB,512);
-  assert.equal(Object.hasOwn(parallel,'ReasoningEffort'),false);assert.equal(Object.hasOwn(parallel,'PreserveThinking'),false);
+  assert.equal(parallel.ReasoningEffort,'xhigh');assert.equal(parallel.PreserveThinking,true);assert.equal(parallel.Vision,true);assert.equal(parallel.ThinkingBudget,16384);
   await field('Concurrency').fill('1');await disabled(['DiskEnabled','DiskPath','DiskMiB'],false);
   const serial=await preview();assert.equal(serial.DiskPath,'C:/cache/llama fixture');assert.equal(serial.DiskMiB,512);assert.equal(Object.hasOwn(serial,'DiskEnabled'),false);
-  await field('Backend').selectOption('ninfer');await disabled(['DiskPath'],false);await disabled(['VisionTokens','ThinkingBudget','DraftPolicy']);
+  await field('Backend').selectOption('ninfer');await disabled(['DiskPath']);await disabled(['VisionTokens','ThinkingBudget','DraftPolicy']);
   await group(0);await field('DiskEnabled').check();await field('KvType').selectOption('int8');
   await group(1);await field('SpeculativeMode').selectOption('mtp');await field('DraftTokens').fill('4');await disabled(['DraftPolicy','NgramDrafts','NgramMinMatch','FastPrefill'],false);
   assert.equal(await field('DraftPolicy').inputValue(),'adaptive');assert.equal(await field('FastPrefill').isChecked(),true);
