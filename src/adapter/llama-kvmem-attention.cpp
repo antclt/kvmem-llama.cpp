@@ -89,8 +89,15 @@ struct llama_memory_kvmem::AttentionSampler {
                 for(auto& value:logits) denominator+=value=std::exp(value-maximum);
                 for(size_t token=0;token<tokens;++token) expected[token/block]+=logits[token]/denominator/heads;
             }
-            for(size_t page=0;page<expected.size();++page) worst=std::max(worst,
-                std::abs(expected[page]-actual[sample][page]));
+            for(size_t page=0;page<expected.size();++page) {
+                if(!std::isfinite(expected[page]) || !std::isfinite(actual[sample][page])) {
+                    kvmem_diag("KVMEM_ATTENTION_ORACLE_INVALID layer=%d row=%u page=%zu expected=%g actual=%g q=%s k=%s\n",
+                        capture.layer,rows[sample],page,expected[page],actual[sample][page],
+                        ggml_type_name(q->type),ggml_type_name(k->type));
+                    throw std::runtime_error("attention oracle found a non-finite probability");
+                }
+                worst=std::max(worst,std::abs(expected[page]-actual[sample][page]));
+            }
         }
         kvmem_diag("KVMEM_ATTENTION_ORACLE layer=%d rows=%zu max_abs=%.8g\n",capture.layer,rows.size(),worst);
         // Quantized ggml matmul may quantize its transient Q. Qualify that public
@@ -108,9 +115,21 @@ struct llama_memory_kvmem::AttentionSampler {
         const size_t batch=std::max<size_t>(1,std::min<size_t>(64,(32u<<20)/
             std::max<size_t>(1,size_t(capture.key->ne[1])*heads*sizeof(float))));
         std::vector<std::vector<float>> result(rows.size(),std::vector<float>(blocks));
-        const auto device=ggml_backend_buft_get_device(ggml_backend_buffer_get_type(capture.query->buffer));
+        // A partially offloaded model can capture Q on CUDA while its persistent
+        // K cache remains on the CPU. Compute beside K and stage only the bounded
+        // current-forward Q, rather than borrowing an inaccessible buffer or
+        // transferring the full history. observe_attention synchronized the
+        // producing scheduler before entering this sampler.
+        const auto key_type=ggml_backend_buffer_get_type(capture.key->buffer);
+        const auto query_type=ggml_backend_buffer_get_type(capture.query->buffer);
+        // Plain CPU allocations need not carry a registered device pointer.
+        const auto device=ggml_backend_buffer_is_host(capture.key->buffer) ?
+            ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU) : ggml_backend_buft_get_device(key_type);
+        if(!device) throw std::runtime_error("KVMem attention K cache has no available backend");
         auto& owner=devices[device];
         if(!owner) owner=std::make_unique<Device>(device);
+        if(!ggml_backend_supports_buft(owner->backend,key_type))
+            throw std::runtime_error("KVMem attention backend cannot access its K cache");
 #ifdef KVMEM_PAGE_SOFTMAX_CUDA
         if(capture.max_bias==0 && owner->cuda.score(capture.query,capture.key,capture.mask,
             capture.scale,capture.softcap,block_tokens,rows,result)) {
@@ -118,13 +137,21 @@ struct llama_memory_kvmem::AttentionSampler {
             return result;
         }
 #endif
+        const bool stage_query=!ggml_backend_supports_buft(owner->backend,query_type);
+        if(stage_query) kvmem_diag("KVMEM_ATTENTION_STAGE layer=%d bytes=%zu source=%s destination=%s\n",
+            capture.layer,ggml_nbytes(capture.query),ggml_backend_buft_name(query_type),
+            ggml_backend_name(owner->backend));
         for(size_t first=0;first<rows.size();first+=batch) {
             const auto count=std::min(batch,rows.size()-first);
             ggml_init_params params{owner->metadata.size(),owner->metadata.data(),true};
             ggml_context_ptr ctx{ggml_init(params)};
             if(!ctx) throw std::bad_alloc();
             auto* graph=ggml_new_graph_custom(ctx.get(),2048,false);
-            auto* q=borrowed(ctx.get(),capture.query);
+            auto* q=stage_query ? ggml_dup_tensor(ctx.get(),capture.query) : borrowed(ctx.get(),capture.query);
+            if(stage_query) {
+                std::memcpy(q->nb,capture.query->nb,sizeof(q->nb));
+                ggml_set_input(q);
+            }
             auto* k=borrowed(ctx.get(),capture.key);
             auto* mask=ggml_new_tensor_2d(ctx.get(),capture.mask->type,k->ne[1],int64_t(count));
             ggml_set_input(mask);
@@ -157,6 +184,7 @@ struct llama_memory_kvmem::AttentionSampler {
             mass=ggml_cont_2d(ctx.get(),mass,int64_t(blocks),int64_t(count));
             ggml_set_output(mass); ggml_build_forward_expand(graph,mass);
             if(!ggml_gallocr_alloc_graph(owner->allocator,graph)) throw std::bad_alloc();
+            if(stage_query) ggml_backend_tensor_copy(capture.query,q);
             ggml_backend_tensor_set(mask,mask_host.data(),0,mask_host.size());
             if(ggml_backend_graph_compute(owner->backend,graph)!=GGML_STATUS_SUCCESS)
                 throw std::runtime_error("KVMem attention sampler execution failed");
@@ -177,6 +205,9 @@ void llama_memory_kvmem::capture_attention(ggml_context* ctx,ggml_cgraph* graph,
     // FA may cast an F32 cache into a temporary F16 K. Keep that operand alive
     // through harvest just like sampled Q; persistent cache views need no copy.
     ggml_set_output(k);
+    // A cast mask is also a graph temporary. Retain it until harvest; partial
+    // offload can otherwise reuse its storage in a later backend split.
+    ggml_set_output(mask);
     ggml_set_output(captured); ggml_build_forward_expand(graph,captured);
     attention_captures_.push_back({captured,k,mask,scale,max_bias,softcap,layer});
 }

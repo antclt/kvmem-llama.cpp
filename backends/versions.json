@@ -6,7 +6,7 @@
     "base_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
     "license_file": "backends/llamacpp/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "1593775ad2ac64b4ad6993ce1e04ca025953be0e",
+    "patched_tree": "22349cd22ad34b933234ee42e4b382c9e3ef0713",
     "patches": [
       {
         "id": "kvmem",
@@ -44,6 +44,15 @@
         ],
         "after_tree": "1593775ad2ac64b4ad6993ce1e04ca025953be0e",
         "source": "Prism PR218 PTQ1 planar matvec with the PDL consumer sync fix; scoped to dense CUDA 2D calls, current upstream fusion API retained"
+      },
+      {
+        "path": "backends/patches/llamacpp-checkpoint-policy.patch",
+        "sha256": "9e8aa403afcecb66150f4e58bf1ad3de9d2d8a4d16481a295f59ea6297d5273b",
+        "after_tree": "22349cd22ad34b933234ee42e4b382c9e3ef0713",
+        "id": "checkpoint-policy",
+        "requires": [
+          "ptq1-performance"
+        ]
       }
     ]
   },
@@ -53,7 +62,7 @@
     "base_commit": "db8c114802a070a7903f84d01142fda0b00fa7df",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "3bb18fca6acf320b93ee0ab3fed2152a95daa2e9",
+    "patched_tree": "7df5078b0879b8622353a250035f333ba9e8ab0b",
     "patches": [
       {
         "id": "kvmem",
@@ -102,6 +111,15 @@
         ],
         "after_tree": "3bb18fca6acf320b93ee0ab3fed2152a95daa2e9",
         "source": "Bounded BF16 Query capture, accepted Mean-Q sums, native Query lifecycle regressions and actual cancellation accounting"
+      },
+      {
+        "path": "backends/patches/ninfer-checkpoint-policy.patch",
+        "sha256": "02426aee6f3d80fc8f5f007608b9deb3438eaebc5442485991ca8e49db9b583d",
+        "after_tree": "7df5078b0879b8622353a250035f333ba9e8ab0b",
+        "id": "checkpoint-policy",
+        "requires": [
+          "query-memory"
+        ]
       }
     ]
   },

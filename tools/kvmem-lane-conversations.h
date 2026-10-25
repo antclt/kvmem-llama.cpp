@@ -65,6 +65,12 @@ public:
             if (disk_) held.native_bytes = llama_kvmem_store_payload_bytes(llama_kvmem_store_current(), false);
             resident_[lane] = id;
         }
+        for(auto* lane:lanes_) lane->mm_checkpoint_reclaim = [this](const auto& account,size_t bytes) {
+            reclaim_checkpoint_host(account,bytes);
+        };
+    }
+    ~kvmem_lane_conversations() {
+        for(auto* lane:lanes_) lane->mm_checkpoint_reclaim = {};
     }
     std::shared_ptr<reference> pin(const std::string & key) {
         auto result = std::shared_ptr<reference>(new reference(*this, key));
@@ -421,9 +427,12 @@ private:
         result.prompt = source.cached_prompt;
         result.match.rows = (int)source.cached_tokens.size();
         result.match.last_n_gen = source.last_n_gen;
+        result.match.allow_bound_edit = source.mm_archive.policy().enabled;
         // The committed native store bounds the live reusable prefix.
         result.match.live_row = (int)stored;
         for (const auto & checkpoint : source.mm_checkpoints) result.match.ckpt_rows.push_back(checkpoint.row);
+        for (const auto & entry : source.mm_archive)
+            if (entry.info.identity) result.match.ckpt_rows.push_back(entry.record.row);
         return result;
     }
     template<class Source> static uint64_t payload_bytes(const Source & source) {
@@ -431,9 +440,11 @@ private:
         bytes += source.mm_checkpoints.capacity()*sizeof(MultimodalCheckpoint);
         std::set<const MultimodalCheckpointData *> unique;
         for (const auto & checkpoint : source.mm_checkpoints) {
-            if (checkpoint.data && unique.insert(checkpoint.data.get()).second) bytes += checkpoint.data->bytes();
+            if (checkpoint.data && unique.insert(checkpoint.data.get()).second) bytes += checkpoint.data->resident_bytes();
         }
-        if (source.mm_live_checkpoint && unique.insert(source.mm_live_checkpoint.get()).second) bytes += source.mm_live_checkpoint->bytes();
+        for (const auto & entry : source.mm_archive) if (entry.info.identity && entry.record.data &&
+                unique.insert(entry.record.data.get()).second) bytes += entry.record.data->resident_bytes();
+        if (source.mm_live_checkpoint && unique.insert(source.mm_live_checkpoint.get()).second) bytes += source.mm_live_checkpoint->resident_bytes();
         if (source.cached_prompt) bytes += source.cached_prompt->index_bytes();
         if (source.mm_query) {
             bytes += sizeof(MultimodalQuery) + source.mm_query->user.capacity();
@@ -515,5 +526,28 @@ private:
         const bool over = bytes_max_ && bytes_locked() > bytes_max_;
         if (over && !warned_bytes_) LOG_WRN("srv    KVMEM retained lane/queued stores exceed soft host byte cap\n");
         warned_bytes_ = over;
+    }
+    void reclaim_checkpoint_host(const std::shared_ptr<MultimodalCheckpointAccounting>& account,size_t bytes) {
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto fits=[&] { const auto used=account->live_bytes.load();
+            return used<=account->limit && bytes<=account->limit-used; };
+        const auto owns=[&](const auto& checkpoint) {
+            return checkpoint && checkpoint->accounting==account && checkpoint->resident_bytes()!=0;
+        };
+        while(!fits()) {
+            auto victim=entries_.end();
+            for(auto it=entries_.begin();it!=entries_.end();++it) {
+                const auto& held=it->second;
+                if(held.lane>=0 || held.busy || held.switching || protected_entry(held)) continue;
+                bool charged=owns(held.payload.mm_live_checkpoint);
+                for(const auto& cp:held.payload.mm_checkpoints) charged|=owns(cp.data);
+                for(const auto& entry:held.payload.mm_archive) if(entry.info.identity) charged|=owns(entry.record.data);
+                if(charged && (victim==entries_.end() || held.used<victim->second.used)) victim=it;
+            }
+            if(victim==entries_.end()) break;
+            kvmem_diag("KVMEM_CHECKPOINT_HOST evict_idle_owner=%d\n",victim->first);
+            entries_.erase(victim);
+            ++evictions_;
+        }
     }
 };

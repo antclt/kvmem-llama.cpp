@@ -11,8 +11,15 @@ add_library(kvmem
     src/host/spill_io.cpp
     src/host/session_memory.cpp
     src/host/prefix_checkpoint.cpp
+    src/host/checkpoint_policy.cpp
     src/host/rope.cpp
 )
+add_executable(checkpoint_policy_test tests/checkpoint_policy_test.cpp)
+target_link_libraries(checkpoint_policy_test PRIVATE kvmem)
+add_test(NAME checkpoint_policy_test COMMAND checkpoint_policy_test)
+add_executable(checkpoint_image_test tests/checkpoint_image_test.cpp)
+target_link_libraries(checkpoint_image_test PRIVATE kvmem)
+add_test(NAME checkpoint_image_test COMMAND checkpoint_image_test)
 set_target_properties(kvmem PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set(KVMEM_CORE_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "KVMem source root")
 
