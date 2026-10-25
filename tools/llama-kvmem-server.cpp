@@ -17,6 +17,7 @@
 #include "kvmem/monitor.hpp"
 #include "kvmem/monitor_hardware.hpp"
 #include "kvmem-lane-pool.h"
+#include "kvmem-http-pool.h"
 #include "kvmem-execution-scope.h"
 #include <atomic>
 #include "kvmem-server-devices.h"
@@ -88,6 +89,7 @@ static void print_usage(const char * argv0) {
             "  --no-kvmem-trace           disable diagnostics, overriding the environment\n"
             "  --host HOST                bind address (default 127.0.0.1)\n"
             "  --port N                   port (default 8080)\n"
+            "  --threads-http N           fixed HTTP workers (auto: 2 per inference lane)\n"
             "  --ui-dir PATH              serve static chat UI from PATH\n"
             "  --no-ui                    disable bundled chat UI\n"
             "  -c, --ctx-size N           context size (default 2048)\n"
@@ -1505,16 +1507,8 @@ int main(int argc, char ** argv) {
     httplib::Server svr;
     svr.set_read_timeout(options.timeout, 0);
     svr.set_write_timeout(options.timeout, 0);
-    const int http_workers = options.threads_http_set ?
-        (options.threads_http > 0 ? options.threads_http :
-            std::max(2 * options.parallel, std::max(5, static_cast<int>(std::thread::hardware_concurrency()) - 1))) :
-        std::max(2 * options.parallel, static_cast<int>(CPPHTTPLIB_THREAD_POOL_COUNT));
-    if (options.threads_http_set || options.parallel > 1) {
-        svr.new_task_queue = [http_workers] {
-            return new httplib::ThreadPool(http_workers, static_cast<size_t>(http_workers) + 1024);
-        };
-        kvmem_diag("KVMEM_HTTP threads=%d timeout=%d\n", http_workers, options.timeout);
-    }
+    const int http_workers = kvmem_configure_http_pool(svr, options.parallel, options.threads_http);
+    kvmem_diag("KVMEM_HTTP threads=%d max_threads=%d timeout=%d\n", http_workers, http_workers, options.timeout);
     svr.set_idle_interval(0, 100000);
     svr.set_default_headers({
         {"Access-Control-Allow-Origin", "*"},
@@ -1548,6 +1542,7 @@ int main(int argc, char ** argv) {
     startup["generation_limit"] = generation_limit;
     startup["default_max_tokens"] = std::min(st.n_predict_default > 0 ? st.n_predict_default : generation_limit, generation_limit);
     startup["http"]["threads"] = http_workers;
+    startup["http"]["max_threads"] = http_workers;
     if (!config_sources.contains("--threads-batch") && options.threads > 0)
         startup["sources"]["--threads-batch"] = "inherited:--threads";
     if (!config_sources.contains("--ubatch-size")) startup["sources"]["--ubatch-size"] = "inherited:--batch-size";
