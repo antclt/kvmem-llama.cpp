@@ -2007,6 +2007,9 @@ int main(int argc, char ** argv) {
         const auto graph_messages=llama_driver_graph_messages(st,inputs,formatted,*parsed_prompt);
         kvmem_diag("KVMEM_TRACE graph_messages spans=%zu structured=%zu\n",graph_messages.size(),inputs.messages.size());
         llama_kvmem_set_graph_messages(graph_messages);
+        st.mm_root_boundary = !inputs.messages.empty() && inputs.messages.front().role == "system" && !graph_messages.empty()
+            ? graph_messages.front().end : 0;
+        st.mm_tail_boundary = graph_messages.size() >= 2 ? graph_messages[graph_messages.size()-2].begin : 0;
         st.history_input_end = uint32_t(toks.size());
         if (st.kparams.lrfu && !formatted.generation_prompt.empty() &&
             prompt.size() >= formatted.generation_prompt.size() &&
