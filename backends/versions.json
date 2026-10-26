@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "0f0e16058ffe1023f87fd29648e6be33d030e5c8",
+    "patched_tree": "2d5f335df7a9ad2bf0727ece037e06782edbba2a",
     "patches": [
       {
         "id": "kvmem",
@@ -170,26 +170,6 @@
         ],
         "after_tree": "2d5f335df7a9ad2bf0727ece037e06782edbba2a",
         "source": "Local Blackwell UE4M3 weight-scale normalization and exhaustive independent FP64 codec oracle"
-      },
-      {
-        "id": "dflash2-gguf-blocks",
-        "path": "backends/patches/ninfer-dflash2-gguf-blocks.patch",
-        "sha256": "a094e026692e486a0e5b1ca6bdf3b7e21e1ca0d7e34f78f30321e81cb18d4754",
-        "requires": [
-          "nvfp4-blackwell-scale"
-        ],
-        "after_tree": "343c4cd264b5303e4960a069d2a6451c33d0317c",
-        "source": "Adapted from melis2023/ninfer-kvmem-actkv@664cb6daa8cba30dfe39b0d10113a72b20587853; current artifact, dispatch and independent validation integration"
-      },
-      {
-        "id": "dflash2-nvfp4",
-        "path": "backends/patches/ninfer-dflash2-nvfp4.patch",
-        "sha256": "39cf5cc32de2fdaa036a09946446429b5f5211bfbf4e4534089bb458c5bf4825",
-        "requires": [
-          "dflash2-gguf-blocks"
-        ],
-        "after_tree": "0f0e16058ffe1023f87fd29648e6be33d030e5c8",
-        "source": "Adapted from melis2023/ninfer-kvmem-actkv@664cb6daa8cba30dfe39b0d10113a72b20587853; current artifact, dispatch and independent validation integration"
       }
     ]
   },
