@@ -19,8 +19,9 @@ The implementation adapts
 [melis2023/ninfer-kvmem-actkv at 664cb6d](https://github.com/melis2023/ninfer-kvmem-actkv/commit/664cb6daa8cba30dfe39b0d10113a72b20587853).
 It retains the current backend's INT8 routing and Blackwell scale handling.
 The two ordered backend patch layers are `dflash2-gguf-blocks` and `dflash2-nvfp4`.
-The restored draft readable-range behavior, CUDA Graph probing and launcher
-defaults are unchanged.
+The restored draft readable-range behavior and launcher defaults are unchanged.
+The subsequent `cuda-graph-probe` layer adds [CUDA Graph startup calibration](cuda-graph-probe.md)
+with a shared 256 MiB floor for MTP, DFlash2 and ordinary decode.
 
 ## Companion sources
 
