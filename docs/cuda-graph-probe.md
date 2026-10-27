@@ -1,3 +1,4 @@
+# Paths and device identities anonymized; measurements unchanged.
 # CUDA Graph 启动探测
 
 自动预留现在先用临时 Program 捕获当前配置的 CUDA Graph，读取驱动显存增量，
@@ -36,7 +37,7 @@ Co-authored-by: melis2023 <zhuangisme@gmail.com>
 `backends/versions.json`，可用 `scripts/prepare-backends.py --backend ninfer --check`
 验证完整补丁序列。
 
-2026-10-27 实测：RTX 5060 Ti（`GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`），
+2026-10-27 实测：RTX 5060 Ti（`GPU-A`），
 Qwen3.8-27B IQ3_S 主模型 + Q4 DFlash2，context 262144、budget 36864、reserve 2048、
 INT8 KV、FP32 GDN、prefill 256、DFlash2 7、n-gram 31、并发 1、CPU vision 1024。
 旧自动规划需要 2,791,748,352 字节，超过当时可用的 2,290,089,984 字节而启动失败。

@@ -2,7 +2,7 @@
   "date": "2026-10-27",
   "purpose": "Startup and functional qualification; timings are diagnostics, not a controlled throughput comparison.",
   "gpu_model": "NVIDIA GeForce RTX 5060 Ti",
-  "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+  "gpu_uuid": "GPU-A",
   "prepared_tree": "eacfd97a2bd32165130ce5886b17cba5abbba7bb",
   "build": "CUDA 13.2, MSVC 19.44, sm_120a; necessary C++ objects rebuilt, existing unchanged CUDA archive reused; CMake-generated link commands.",
   "unit_policy_cases_passed": 9,
@@ -39,7 +39,7 @@
   "cases": [
     {
       "case": "q4-old",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "d1ea3def4ca9a1663c33c82c800b425a525d09794d6e246184a406eeacf50d37",
       "ready": false,
       "exit_code": 1,
@@ -55,7 +55,7 @@
     },
     {
       "case": "q4-control",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "d1ea3def4ca9a1663c33c82c800b425a525d09794d6e246184a406eeacf50d37",
       "ready": true,
       "startup_seconds": 11.985000000000582,
@@ -81,7 +81,7 @@
     },
     {
       "case": "q4-auto",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "54afd15eb0724edbaa2729e018bd1fedb1d3e3f03803d8816dca364723a65a15",
       "ready": true,
       "startup_seconds": 11.843999999997322,
@@ -112,7 +112,7 @@
     },
     {
       "case": "q4-manual",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "54afd15eb0724edbaa2729e018bd1fedb1d3e3f03803d8816dca364723a65a15",
       "ready": true,
       "startup_seconds": 9.952999999994063,
@@ -138,7 +138,7 @@
     },
     {
       "case": "mtp-auto",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "54afd15eb0724edbaa2729e018bd1fedb1d3e3f03803d8816dca364723a65a15",
       "ready": true,
       "startup_seconds": 3.312000000005355,
@@ -168,7 +168,7 @@
     },
     {
       "case": "mtp-manual",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "54afd15eb0724edbaa2729e018bd1fedb1d3e3f03803d8816dca364723a65a15",
       "ready": true,
       "startup_seconds": 3.2819999999992433,
@@ -193,7 +193,7 @@
     },
     {
       "case": "mtp-disabled",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "54afd15eb0724edbaa2729e018bd1fedb1d3e3f03803d8816dca364723a65a15",
       "ready": true,
       "startup_seconds": 3.0940000000045984,
@@ -218,7 +218,7 @@
     },
     {
       "case": "ordinary",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "54afd15eb0724edbaa2729e018bd1fedb1d3e3f03803d8816dca364723a65a15",
       "ready": true,
       "startup_seconds": 3.0789999999979045,
@@ -248,7 +248,7 @@
     },
     {
       "case": "mtp-ngram",
-      "gpu_uuid": "GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c",
+      "gpu_uuid": "GPU-A",
       "worker_sha256": "54afd15eb0724edbaa2729e018bd1fedb1d3e3f03803d8816dca364723a65a15",
       "ready": true,
       "startup_seconds": 3.3280000000013388,
@@ -277,5 +277,10 @@
       "model": "Qwen3.5-4B-MTP-Q4_K_M",
       "gpu_idle_before": true
     }
-  ]
+  ],
+  "_sanitization": {
+    "version": 1,
+    "original_sha256": "b764f9db4aa3dc5c9bdb6094c40e69662f8cdbbfdc49921f2df1bfedde709833",
+    "scope": "Device identities/private paths anonymized, credential fields redacted; measurements unchanged."
+  }
 }
