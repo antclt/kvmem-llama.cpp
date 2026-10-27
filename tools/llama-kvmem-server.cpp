@@ -1543,7 +1543,7 @@ int main(int argc, char ** argv) {
     startup["threads_batch_actual"] = llama_n_threads_batch(st.ctx);
     startup["flash_attn_requested"] = llama_flash_attn_type_name(cparams.flash_attn_type);
     startup["generation_limit"] = generation_limit;
-    startup["default_max_tokens"] = std::min(st.n_predict_default > 0 ? st.n_predict_default : generation_limit, generation_limit);
+    startup["default_max_tokens"] = st.n_predict_default > 0 ? std::min(st.n_predict_default, generation_limit) : -1;
     startup["http"]["threads"] = http_workers;
     startup["http"]["max_threads"] = http_workers;
     if (!config_sources.contains("--threads-batch") && options.threads > 0)
@@ -1554,7 +1554,7 @@ int main(int argc, char ** argv) {
     const auto thinking_params = kvmem_ui_sampling(true, st.sampling_overrides);
     const auto plain_params = kvmem_ui_sampling(false, st.sampling_overrides);
     auto default_params = st.enable_thinking_default ? thinking_params : plain_params;
-    default_params["n_predict"] = std::min(st.n_predict_default > 0 ? st.n_predict_default : generation_limit, generation_limit);
+    default_params["n_predict"] = startup["default_max_tokens"];
     default_params["max_tokens"] = default_params["n_predict"];
     // 1:1 upstream /props extras (server-context.cpp get_res_props).
     // 中文：除 kvmem 扩展字段外，补齐上游 /props 的标准字段（bos/eos token、模板能力等）
@@ -1898,11 +1898,12 @@ int main(int argc, char ** argv) {
             res.set_content("{\"error\":\"empty prompt\"}", "application/json");
             return;
         }
-        if ((int) toks.size() + cr.max_tokens > (int) llama_n_ctx(st.ctx)) {
+        if (!kvmem_resolve_output_limit(generation_limit, toks.size(), cr.max_tokens, err)) {
             res.status = 400;
-            res.set_content("{\"error\":\"prompt + max_tokens exceeds n_ctx\"}", "application/json");
+            res.set_content(json{{"error", err}}.dump(), "application/json");
             return;
         }
+        monitor.update(monitor_id, {{"limit", cr.max_tokens}});
         try {
             llama_driver_validate_capacity(st, *parsed_prompt, (int) toks.size());
         } catch (const std::exception & e) {

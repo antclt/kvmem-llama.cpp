@@ -1,13 +1,16 @@
 """Core API/default/history contracts for the shared UI; mock engine, no GPU."""
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
 import urllib.request
 import urllib.error
+from unittest import mock
 
-sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'backends/polystrata'))
+SOURCE = Path(os.environ.get('POLYSTRATA_SOURCE', Path(__file__).resolve().parents[2]/'backends/polystrata'))
+sys.path.insert(0,str(SOURCE))
 from serve.server import Service, MockEngine, ByteTokenizer, serve, CTX_SLACK
 from serve.frontend import ChatTemplate
 
@@ -21,7 +24,7 @@ class UiContract(unittest.TestCase):
     def setUpClass(cls):
         tok=ByteTokenizer()
         cls.engine=RecordingEngine(tok,'</think>\n'+('xy'*40),max_context=4096)
-        cls.svc=Service(cls.engine,tok,ChatTemplate(Path(__file__).resolve().parents[2]/'backends/polystrata/serve/chat_template.jinja'))
+        cls.svc=Service(cls.engine,tok,ChatTemplate(SOURCE/'serve/chat_template.jinja'))
         cls.svc.kvmem_default_max_tokens=17
         cls.svc.client_reasoning_history=True
         cls.svc.preserve_thinking=True
@@ -66,6 +69,29 @@ class UiContract(unittest.TestCase):
         self.assertEqual(self.request('/props')['default_generation_settings']['params']['n_predict'],17)
         self.assertEqual(self.svc.with_shared({},'openai')['reasoning_effort'],'none')
         self.assertEqual(self.svc.with_shared({'reasoning_effort':'high'},'openai')['reasoning_effort'],'high')
+    def test_unlimited_uses_logical_context_not_resident_window(self):
+        # A 256-token working window must not cap a 4096-token logical conversation.
+        before_info = getattr(self.engine, 'info', {})
+        self.engine.info = {'kvmem':1, 'kvmem_budget':192, 'kvmem_gen_reserve':64}
+        before = self.svc.kvmem_default_max_tokens
+        try:
+            self.svc.kvmem_default_max_tokens = None
+            self.assertLessEqual(self.request('/props')['default_generation_settings']['params']['n_predict'], 0)
+            for prompt in (66, 512, 4096 - CTX_SLACK - 1):
+                for requested in (None, 0, -1):
+                    with self.subTest(prompt=prompt, requested=requested), mock.patch.object(
+                            self.svc, 'encode_prompt', return_value=[ord('x')] * prompt):
+                        ids, _, maximum = self.svc.prepare([], None, {}, requested)
+                        self.assertEqual(len(ids), prompt)
+                        self.assertEqual(maximum, 4096 - CTX_SLACK - prompt)
+            for path,payload in [('/v1/chat/completions',{'messages':[{'role':'user','content':'hi'}]}),
+                                 ('/v1/messages',{'messages':[{'role':'user','content':'hi'}]}),
+                                 ('/v1/responses',{'input':'hi','store':False})]:
+                self.request(path,payload)
+                self.assertGreater(self.engine.last_limit, 256)
+        finally:
+            self.svc.kvmem_default_max_tokens = before
+            self.engine.info = before_info
     def test_history_is_client_owned_and_false_is_explicit(self):
         svc=Service.__new__(Service)
         svc.kvmem_default_max_tokens=17;svc.client_reasoning_history=True;svc.preserve_thinking=True
