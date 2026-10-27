@@ -228,8 +228,8 @@
     "upstream": "https://github.com/VecSzn/PolyStrata.git",
     "base_commit": "bfd8911efbb8c27214d5aabc511907c6149171e7",
     "license_file": "backends/polystrata/LICENSE",
-    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 32); shutdown releases the frontend's shared log handles so Windows removes their temporary directory; ROCm/HIP builds compile the portable KVMem core and its query scorer through hip_compat",
-    "patched_tree": "a3029b723e1dd0fe306d9de6e2b0ad4d8551cdfc",
+    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 32); shutdown releases the frontend's shared log handles so Windows removes their temporary directory; ROCm/HIP builds compile the portable KVMem core and its query scorer through hip_compat; poly.5's Kolibri1 engine is linked into the KVMem regression test targets",
+    "patched_tree": "6d109555492acc61587b33794e0ef0e015f8e5b7",
     "source_tag": "v0.1.45-poly.5",
     "patches": [
       {
@@ -320,6 +320,15 @@
         ],
         "after_tree": "a3029b723e1dd0fe306d9de6e2b0ad4d8551cdfc",
         "source": "Normalize startup token budgets before capacity checks; report effective values"
+      },
+      {
+        "id": "kolibri-test-link",
+        "path": "backends/patches/polystrata-kolibri-test-link.patch",
+        "sha256": "d76562d34d5c17459c2784ff9e57b4939f09b22bff0e0abdcc1bbaeafe620a74",
+        "requires": [
+          "token-alignment"
+        ],
+        "after_tree": "6d109555492acc61587b33794e0ef0e015f8e5b7"
       }
     ]
   }
