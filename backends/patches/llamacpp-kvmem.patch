@@ -1170,6 +1170,18 @@ index 95618df5fd4d505fc1d171dc5e3bc404afac7d58..65d5179cbdc24764116ca0905a4456f1
  
  void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
                                       ggml_tensor *               dst,
+diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
+--- a/ggml/src/ggml-cuda/vendors/hip.h
++++ b/ggml/src/ggml-cuda/vendors/hip.h
+@@ -99,6 +99,7 @@
+ #define cudaMemsetAsync hipMemsetAsync
+ #define cudaMemGetInfo hipMemGetInfo
+ #define cudaOccupancyMaxPotentialBlockSize hipOccupancyMaxPotentialBlockSize
++#define cudaPeekAtLastError hipPeekAtLastError
+ #define cudaSetDevice hipSetDevice
+ #define cuDeviceGet hipDeviceGet
+ #define CUdevice hipDevice_t
+
 diff --git a/ggml/src/ggml-hip/CMakeLists.txt b/ggml/src/ggml-hip/CMakeLists.txt
 index 75d4d60e87989f9d79062f55d4942023807f1459..c34b71a2820d69ef0fb4e044b889303f505a5c61 100644
 --- a/ggml/src/ggml-hip/CMakeLists.txt
