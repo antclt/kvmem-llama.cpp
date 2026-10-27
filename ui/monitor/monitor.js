@@ -103,7 +103,7 @@
     authNeeded = false,
     lastGood = 0,
     stopped = false;
-  let lastError = null, restartNotice = false, consoleRuntime = null;
+  let lastError = null, restartNotice = false, consoleRuntime = null, runtimePropsInstance = null;
   let series = {},
     previousDisk = null,
     speedRequest = null,
@@ -583,22 +583,191 @@
     }
     root.replaceChildren(fragment);
   }
-  function renderMtp(request) {
-    const active = ['starting', 'ready'].includes(consoleRuntime?.state) ? consoleRuntime.active_config?.parameters : null;
-    const config = active?.Backend === state?.backend ? active : null;
-    const enabled = config?.SpeculativeMode !== undefined ? config.SpeculativeMode === 'mtp'
-      : config?.MtpEnabled === false ? false : props?.kvmem?.mtp;
-    if (enabled === undefined) {text('mtp', t('MTP 设置未提供')); return;}
-    if (!enabled) {text('mtp', t('MTP 未开启')); return;}
-    const parts = [t('MTP 已开启')];
-    const drafts = config?.DraftTokens ?? config?.MtpDrafts ?? props?.kvmem?.mtp_drafts;
-    const policy = config?.DraftPolicy ?? (typeof config?.AdaptiveMtp === 'boolean' ? (config.AdaptiveMtp ? 'adaptive' : 'fixed') : null);
-    if (number(drafts)) parts.push(t('草稿上限 {0} token', fmt(drafts)));
-    if (policy === 'adaptive') parts.push(t('自适应'));
-    else if (policy === 'fixed') parts.push(t('固定长度'));
-    if (number(request?.mtp_drafts_offered) && number(request?.mtp_drafts_accepted))
-      parts.push(t('所选请求：提议 {0} / 接受 {1}', fmt(request.mtp_drafts_offered), fmt(request.mtp_drafts_accepted)));
-    text('mtp', parts.join(' · '));
+  function renderRuntimeConfiguration() {
+    const root = $('[data-runtime-config]');
+    if (!root) return;
+    const tr = (zh,en) => i18n.language === 'en' ? en : zh;
+    const running = ['starting','ready'].includes(consoleRuntime?.state);
+    const config = running ? consoleRuntime.active_config?.parameters || {} : {};
+    const backend = config.Backend || state?.backend;
+    // A new launch must never inherit the preceding worker's /props, even on the same backend.
+    const service = !consoleRuntime || (consoleRuntime.state === 'ready' &&
+      runtimePropsInstance === consoleRuntime.instance && state?.backend === backend) ? props || {} : {};
+    const plan = running ? consoleRuntime.token_settings || {} : {};
+    const scoring = running ? consoleRuntime.effective_scoring || {} : {};
+    const k = service.kvmem || {}, caps = k.capabilities || {}, spec = service.speculative || {};
+    const generation = service.default_generation_settings || {}, defaults = service.effective_settings?.effective || {};
+    const present = value => value !== undefined && value !== null && value !== '' &&
+      (typeof value !== 'number' || Number.isFinite(value));
+    const first = (...values) => values.find(present);
+    const boolean = value => typeof value === 'boolean' ? value : undefined;
+    const numeric = value => number(value) ? value : undefined;
+    const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+    const format = value => typeof value === 'boolean' ? tr(value?'开启':'关闭',value?'On':'Off')
+      : number(value) ? value.toLocaleString(i18n.language,{maximumFractionDigits:3}) : String(value);
+    const tokens = value => `${fmt(value)} tokens`;
+    const memory = value => value === 0 ? tr('关闭','Off') : `${fmt(value / MiB)} MiB`;
+    const outputLimit = value => value <= 0 ? tr('随剩余上下文','Remaining context') : tokens(value);
+    const outputValue = value => number(value) && value <= 0 ? -1 : value;
+    const algorithm = value => ({mtp:'MTP',dflash:'DFlash',dflash2:'DFlash2',none:tr('关闭','Off')})[value] || String(value);
+    const policy = value => ({adaptive:tr('自适应','Adaptive'),fixed:tr('固定长度','Fixed length')})[value] || String(value);
+    const canonicalKv = value => typeof value === 'string' ? value.toLowerCase().replace(/^fp16$/,'f16') : undefined;
+    const kvPair = (a,b) => present(a) || present(b) ? [canonicalKv(a),canonicalKv(b)] : undefined;
+    const kvFormat = value => value[0] && value[0] === value[1] ? value[0] : `K ${value[0] || '—'} / V ${value[1] || '—'}`;
+    const rows = [];
+    function row(group,id,labels,reported,requested,options={}) {
+      const planned = options.planned;
+      const value = first(reported,planned,requested);
+      if (options.optional && !present(value)) return;
+      const source = present(reported) ? 'service' : present(planned) ? 'plan' : present(requested) ? 'launch' : 'unknown';
+      const display = options.format || format;
+      const notes = [];
+      const original = first(options.original,requested);
+      if (present(planned) && present(original) && !same(planned,original))
+        notes.push(tr('填写','Entered') + ` ${display(original)} → ` + tr('启动','Launch') + ` ${display(planned)}`);
+      const expected = first(planned,requested);
+      const differs = present(reported) && present(expected) && !same(reported,expected);
+      if (differs) notes.push(tr('启动值','Launch value') + ` ${display(expected)} · ` + tr('服务报告不同','Service differs'));
+      if (options.note) notes.push(options.note);
+      rows.push({group,id,label:tr(...labels),source,value:present(value)?display(value):tr('未报告','Not reported'),
+        note:notes.join(' · '),differs});
+    }
+    function token(group,key,labels,reported) {
+      row(group,key,labels,numeric(reported),numeric(config[key]),{format:tokens,
+        planned:numeric(plan.effective?.[key]),original:numeric(plan.requested?.[key])});
+    }
+    token('primary','Context',['上下文上限','Context limit'],generation.n_ctx);
+    token('primary','Budget',['历史 KV 预算 B','History KV budget B'],first(k.selected_tokens,k.budget_tokens));
+    token('primary','Reserve',['生成预留 R','Generation reserve R'],k.reserve_tokens);
+    row('primary','KvType',['KV 缓存格式','KV cache format'],kvPair(k.kv_type,k.kv_type),
+      kvPair(first(config.KvTypeK,config.KvType),first(config.KvTypeV,config.KvType)),{format:kvFormat});
+    token('primary','Prefill',['预填充块大小','Prefill chunk'],undefined);
+    const reportedAlgorithm = first(spec.algorithm,typeof k.mtp === 'boolean' ? k.mtp ? 'mtp' : 'none' : undefined);
+    const requestedAlgorithm = first(config.SpeculativeMode,typeof config.MtpEnabled === 'boolean' ? config.MtpEnabled ? 'mtp' : 'none' : undefined);
+    row('primary','SpeculativeMode',['推测解码','Speculative decoding'],reportedAlgorithm,requestedAlgorithm,{format:algorithm});
+    row('primary','Concurrency',['并发请求数','Concurrent requests'],first(service.total_slots,k.parallel,k.max_active_requests,caps.max_active_requests),config.Concurrency);
+    row('primary','MaxTokens',['默认输出上限','Default output limit'],outputValue(first(defaults.max_tokens,generation.params?.n_predict,k.generation_limit)),outputValue(config.MaxTokens),{format:outputLimit});
+
+    row('cache','KvmemEnabled',['KVMem','KVMem'],boolean(k.enabled),undefined,{optional:true});
+    row('cache','BlockTokens',['KV 管理块','KV block size'],first(numeric(scoring.block_tokens),numeric(k.block_tokens)),numeric(config.BlockTokens),{format:tokens,planned:numeric(plan.block_tokens)});
+    token('cache','SinkTokens',['保留开头','Retained prefix'],k.sink_tokens);
+    token('cache','RecentTokens',['保留最近','Retained suffix'],k.recent_tokens);
+    row('cache','HostMiB',['RAM 历史预算','RAM history budget'],first(k.host_payload_budget_bytes,number(k.host_mib)?k.host_mib*MiB:undefined),
+      number(config.HostMiB)?config.HostMiB*MiB:undefined,{format:memory});
+    const diskOff = k.ssd === false || caps.ssd_enabled === false;
+    row('cache','DiskMiB',['SSD 历史预算','SSD history budget'],diskOff?0:first(caps.disk_budget_bytes,number(k.disk_mib)?k.disk_mib*MiB:undefined),
+      config.DiskEnabled===false?0:number(config.DiskMiB)?config.DiskMiB*MiB:undefined,{format:memory});
+    if (config.DiskEnabled !== false) row('cache','DiskPath',['SSD 目录','SSD directory'],undefined,config.DiskPath,{optional:true});
+    const retained = backend === 'polystrata' ? number(k.retained_sessions)?Math.max(0,k.retained_sessions-1):undefined
+      : first(k.retained_sessions_limit,caps.retained_sessions_limit);
+    row('cache','RetainedSessions',['额外保留空闲会话','Idle sessions to retain'],retained,
+      backend==='polystrata'&&number(config.RetainedSessions)?Math.max(0,config.RetainedSessions-1):config.RetainedSessions,{optional:true});
+    row('cache','QueryScorer',['召回评分','Recall scorer'],first(scoring.scorer,k.query_scorer),config.QueryScorer);
+    row('cache','ScoreAggregation',['GQA 聚合','GQA aggregation'],scoring.agg,config.ScoreAggregation,{optional:true});
+    row('cache','GraphAlpha',['图传播强度 α','Graph strength α'],first(scoring.graph_alpha,k.graph_alpha),config.GraphAlpha,{optional:true});
+    row('cache','Lrfu',['历史累计 LRFU','LRFU history'],boolean(scoring.lrfu),boolean(config.Lrfu),{optional:true});
+    row('cache','LrfuLambda',['历史衰减系数','History decay'],scoring.lambda,config.LrfuLambda,{optional:true});
+    row('cache','LrfuTopFraction',['正向奖励候选比例','Positive reward fraction'],scoring.top_frac,config.LrfuTopFraction,{optional:true});
+    row('cache','QueryMaxTokens',['问题评分上限','Query scoring limit'],first(scoring.query_max_tokens,k.query_max_tokens),config.QueryMaxTokens,{format:tokens});
+    row('cache','QueryReplayMaxTokens',['完整回放上限','Full replay limit'],first(scoring.query_replay_max_tokens,k.query_replay_max_tokens),config.QueryReplayMaxTokens,{format:tokens});
+
+    const mode = first(reportedAlgorithm,requestedAlgorithm);
+    if (mode && mode !== 'none') {
+      row('engine','DraftTokens',['草稿长度上限','Draft token limit'],first(spec.draft_tokens,k.mtp_drafts),first(config.DraftTokens,config.MtpDrafts),{format:tokens});
+      row('engine','DraftPolicy',['草稿长度策略','Draft length policy'],typeof spec.adaptive==='boolean'?spec.adaptive?'adaptive':'fixed':undefined,
+        first(config.DraftPolicy,typeof config.AdaptiveMtp==='boolean'?config.AdaptiveMtp?'adaptive':'fixed':undefined),{format:policy});
+      if (mode.startsWith('dflash')) row('engine','DraftModel',['草稿模型','Draft model'],undefined,config.DraftModel,{optional:true});
+    }
+    if (backend === 'ninfer') {
+      row('engine','NgramDrafts',['N-gram 草稿上限','N-gram draft limit'],first(spec.ngram_draft_tokens,caps.ngram_drafts),config.NgramDrafts,
+        {format:value=>value===0?tr('关闭','Off'):tokens(value)});
+      row('engine','NgramMinMatch',['N-gram 最短匹配','N-gram minimum match'],caps.ngram_min_match,config.NgramMinMatch,{optional:true,format:tokens});
+      row('engine','FastPrefill',['快速预填充','Fast prefill'],undefined,boolean(config.FastPrefill),{optional:true});
+      row('engine','DeviceProfile',['设备性能配置','Device profile'],undefined,config.DeviceProfile,{optional:true});
+    }
+    row('engine','StageLayers',['多卡层数分配','Layers per device'],service.execution?.stage_layers?.length?service.execution.stage_layers:undefined,
+      config.StageLayers?.length?config.StageLayers:undefined,{optional:true,format:value=>Array.isArray(value)?value.join(' / '):String(value)});
+    row('engine','VramReserveMiB',['显存预留','VRAM reserve'],numeric(k.vram_reserve_mib),numeric(config.VramReserveMiB),{optional:true,format:value=>`${fmt(value)} MiB`});
+    row('engine','Vision',['图像输入','Image input'],first(boolean(service.modalities?.vision),boolean(k.vision?.enabled),boolean(k.vision)),boolean(config.Vision),{optional:true});
+    if (first(service.modalities?.vision,k.vision?.enabled,boolean(k.vision),config.Vision) === true) {
+      row('engine','VisionTokens',['图像 token 上限','Image token limit'],undefined,config.VisionTokens,{optional:true,format:tokens});
+      row('engine','VisionResidency',['图像编码器位置','Vision encoder placement'],typeof k.vision?.gpu==='boolean'?k.vision.gpu?'resident':'cpu':undefined,
+        config.VisionResidency,{optional:true,format:value=>({resident:'GPU',cpu:'CPU'})[value]||String(value)});
+    }
+    row('engine','ListenHost',['监听地址','Listen address'],undefined,config.ListenHost,{optional:true});
+    row('engine','Port',['服务端口','Service port'],undefined,config.Port,{optional:true,format:String});
+    row('engine','Worker',['后端程序','Backend executable'],undefined,config.Worker,{optional:true});
+
+    const thinkingMode = first(boolean(k.defaults?.enable_thinking),present(defaults.reasoning_effort)?defaults.reasoning_effort!=='none':undefined);
+    row('generation','ThinkingMode',['默认思考模式','Default thinking mode'],thinkingMode,
+      config.ThinkingMode==='on'?true:config.ThinkingMode==='off'?false:config.ThinkingMode,{format:value=>value==='default'?tr('跟随模型','Model default'):format(value)});
+    row('generation','ReasoningEffort',['默认思考强度','Default reasoning effort'],defaults.reasoning_effort,config.ReasoningEffort,{optional:true});
+    // Launcher 0 means no separate cap (llama.cpp translates it to -1); PolyStrata uses automatic answer reserve.
+    const thinkingBudget = value => value < 0 || (value===0 && backend!=='polystrata') ? -1 : value;
+    row('generation','ThinkingBudget',['默认思考预算','Default reasoning budget'],
+      first(defaults.reasoning_budget_tokens,k.defaults?.reasoning_budget_tokens),
+      number(config.ThinkingBudget)?thinkingBudget(config.ThinkingBudget):undefined,
+      {format:value=>value<0?tr('不单设上限','No separate cap'):value===0?backend==='polystrata'?tr('自动预留答案空间','Automatic answer reserve'):tr('立即结束思考','End reasoning immediately'):tokens(value)});
+    row('generation','PreserveThinking',['保留历史思考','Preserve previous reasoning'],boolean(defaults.preserve_thinking),
+      backend==='ninfer'&&config.PreserveThinking===false?'default':boolean(config.PreserveThinking),
+      {optional:true,format:value=>value==='default'?tr('跟随模型','Model default'):format(value)});
+    for (const [key,labels] of [['temperature',['温度','Temperature']],['top_p',['Top-p','Top-p']],['top_k',['Top-k','Top-k']],['min_p',['Min-p','Min-p']]])
+      row('generation',key,labels,first(defaults[key],generation.params?.[key]),undefined,{optional:true});
+
+    const compactLabels = {
+      Context:['上下文','Context'],Budget:['历史 KV','History KV'],Reserve:['预留','Reserve'],KvType:['KV','KV'],
+      Prefill:['Prefill','Prefill'],SpeculativeMode:['推测','Speculation'],Concurrency:['并发','Concurrency'],MaxTokens:['输出','Output'],
+    };
+    const toggle = $('[data-runtime-toggle]'), details = $('[data-runtime-config-details]');
+    const updateToggle = () => {
+      toggle.setAttribute('aria-expanded',String(!details.hidden));
+      toggle.textContent = details.hidden ? tr('详情 ▾','Details ▾') : tr('收起 ▴','Collapse ▴');
+    };
+    toggle.onclick = () => {details.hidden=!details.hidden;updateToggle();};
+    updateToggle();
+    const signature = JSON.stringify([i18n.language,consoleRuntime?.state,failures>0,rows]);
+    if (root.dataset.signature === signature) return;
+    root.dataset.signature = signature;
+    function fill(container,items,compact=false) {
+      const fragment = document.createDocumentFragment();
+      for (const item of items) {
+        const cell = document.createElement('div');cell.className='s-runtime-item';cell.dataset.runtimeKey=item.id;cell.dataset.source=item.source;
+        if (item.differs) cell.dataset.differs='true';
+        const dt = document.createElement('dt');dt.textContent=compact?tr(...compactLabels[item.id]):item.label;
+        const dd = document.createElement('dd'), value = document.createElement('span');
+        value.className='s-runtime-value';value.textContent=compact
+          ? item.source==='unknown'?'—':item.value.replace(/ tokens$/,'') : item.value;
+        if(compact) cell.title=`${item.label}: ${item.value}`;
+        dd.append(value);cell.append(dt,dd);
+        if (!compact && item.note) {const note=document.createElement('p');note.className='s-runtime-change';note.textContent=item.note;dd.append(note);}
+        fragment.append(cell);
+      }
+      container.replaceChildren(fragment);
+    }
+    fill($('[data-runtime-primary]'),rows.filter(row=>row.group==='primary'),true);
+    const adjustments=$('[data-runtime-adjustments]');
+    adjustments.replaceChildren();
+    for(const item of rows.filter(row=>row.group==='primary'&&row.note)) {
+      const note=document.createElement('p');note.className='s-runtime-change';note.textContent=`${item.label} · ${item.note}`;
+      adjustments.append(note);
+    }
+    adjustments.hidden=!adjustments.children.length;
+    for (const [id,labels] of [
+      ['cache',['缓存与召回','Cache & retrieval']],
+      ['engine',['推理与服务','Inference & service']],
+      ['generation',['默认生成设置','Generation defaults']],
+    ]) {
+      let section = root.querySelector(`[data-runtime-group="${id}"]`);
+      if (!section) {
+        section = document.createElement('section');section.dataset.runtimeGroup=id;
+        section.append(document.createElement('h3'),document.createElement('dl'));
+        section.querySelector('dl').className='s-runtime-grid';
+        $('[data-runtime-groups]').append(section);
+      }
+      section.querySelector('h3').textContent=tr(...labels);
+      fill(section.querySelector('dl'),rows.filter(row=>row.group===id));
+      section.hidden=!rows.some(row=>row.group===id);
+    }
   }
   function render(append) {
     if (!state || !props) return;
@@ -678,9 +847,7 @@
     const pending=number(queued)?fmt(queued):"—";
     text("queue", t("活动 {0} · 排队 {1}",fmt(state.active.length),pending));
     renderActualSpec(r);
-    renderMtp(r);
-    text("vram-reserve", t("显存预留 {0} MiB",fmt(props.kvmem?.vram_reserve_mib)));
-    text("effective-config", props.effective_settings ? t("服务默认：输出 {0} · 思考 {1} · 思考预算 {2}",fmt(props.effective_settings.effective.max_tokens),props.effective_settings.effective.reasoning_effort,fmt(props.effective_settings.effective.reasoning_budget_tokens)) : "");
+    renderRuntimeConfiguration();
     const hardware = state.hardware || {},
       gpus = hardware.gpus || [];
     const hardwareFresh =
@@ -809,20 +976,15 @@
   window.addEventListener("kvmem-runtime-status", (event) => {
     const old = consoleRuntime?.state;
     consoleRuntime = event.detail;
-    if (state && props) renderMtp(currentRequest());
-    const observed = consoleRuntime.effective_scoring, panel = $("[data-effective-scoring]");
-    if (panel) {
-      const tr = (zh,en) => i18n.language === 'en' ? en : zh;
-      panel.dataset.scoringState = consoleRuntime.scoring_confirmed ? 'confirmed' : consoleRuntime.scoring_mismatch ? 'mismatch' : observed ? 'pending' : 'unavailable';
-      panel.textContent = observed ? `${tr('服务报告','Service reports')}: ${observed.scorer || '—'} · ${observed.agg || '—'} · α ${observed.graph_alpha ?? '—'} · LRFU ${observed.lrfu === undefined ? '—' : observed.lrfu ? tr('开启','on') : tr('关闭','off')} · Query ${observed.query_max_tokens ?? '—'} / replay ${observed.query_replay_max_tokens ?? '—'} · ${consoleRuntime.scoring_confirmed ? tr('已核对','confirmed') : consoleRuntime.scoring_mismatch ? tr('与启动计划不同','differs from launch plan') : tr('等待完整报告','awaiting full report')}` : tr('尚未收到实际检索配置','Actual retrieval configuration not reported yet');
-    }
+    renderRuntimeConfiguration();
     renderConnection();
-    if (old !== consoleRuntime.state && consoleRuntime.state === "ready" && !busy) schedule(0);
+    if (old !== consoleRuntime?.state && consoleRuntime?.state === "ready" && !busy) schedule(0);
   });
   async function poll() {
     if (busy || stopped) return;
     busy = true;
     controller = new AbortController();
+    const launchInstance = consoleRuntime?.instance;
     const abort = setTimeout(() => controller.abort(), 8000);
     try {
       const [snapshot, configuration, lanes, systemHardware] = await Promise.all([
@@ -854,6 +1016,8 @@
           : null;
         throughputLog = log ? {instance:snapshot.server_instance, session:log.session, revision:log.revision, sample} : null;
       } else throughputLog = null;
+      if (consoleRuntime?.instance !== launchInstance) return;
+      runtimePropsInstance = launchInstance;
       const restarted =
         currentInstance !== null &&
         currentInstance !== snapshot.server_instance;
@@ -888,6 +1052,7 @@
       if (authNeeded && !document.querySelector('[data-view="config"]:not([hidden]), [data-view="logs"]:not([hidden])')) page("monitor");
       lastError = error;
       renderConnection();
+      renderRuntimeConfiguration();
       $$(".s-state,.s-metrics,.s-gpus,.s-bottom,.s-cache")
         .filter((e) => e.closest('[data-view="monitor"]'))
         .forEach((e) => (e.dataset.stale = "true"));

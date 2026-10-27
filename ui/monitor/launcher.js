@@ -71,11 +71,17 @@
     SinkTokens:12288,RecentTokens:1024,Concurrency:1,RetainedSessions:1,ThinkingBudget:16384,
     ReasoningEffort:'xhigh',PreserveThinking:true,SpeculativeMode:'mtp',VisionResidency:'cpu',VisionTokens:1024,
     QueryScorer:'page-softmax',GraphAlpha:0.2,Lrfu:false,ScoreAggregation:'mean',QueryMaxTokens:512,QueryReplayMaxTokens:2048};
+  const ninferDefaultPreset={...commonPreset,Backend:'ninfer',ThinkingMode:'default',KvType:'int8',Prefill:256,DraftTokens:4,DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,FastPrefill:true,DeviceProfile:'auto',Vision:true};
   const presets = [
-    {id:'ninfer-v018',title:['NInfer · 默认模板','NInfer · Default template'],parameters:{...commonPreset,Backend:'ninfer',ThinkingMode:'default',KvType:'int8',Prefill:256,DraftTokens:4,DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,FastPrefill:true,DeviceProfile:'auto',Vision:true}},
+    {id:'ninfer-speed',title:['NInfer · 极速档','NInfer · Speed'],
+      parameters:{...ninferDefaultPreset,SpeculativeMode:'dflash2',DraftTokens:5,DraftPolicy:'fixed',Budget:36*1024,Reserve:4*1024,NgramDrafts:0},
+      note:['启用 DFlash2，历史 KV 预算较少，侧重响应速度。','Uses DFlash2 with a smaller history KV budget, prioritizing response speed.']},
+    {id:'ninfer-quality',title:['NInfer · 质量档','NInfer · Quality'],
+      parameters:{...ninferDefaultPreset,SpeculativeMode:'mtp',DraftTokens:3,Budget:48*1024,Reserve:4*1024,NgramDrafts:0},
+      note:['启用 MTP，历史 KV 预算较大，侧重保留更多历史信息。','Uses MTP with a larger history KV budget, retaining more historical context.']},
     {id:'llamacpp-default',title:['llama.cpp · 默认模板','llama.cpp · Default template'],parameters:{...commonPreset,Backend:'llamacpp',ThinkingMode:'on',KvTypeK:'q8_0',KvTypeV:'q8_0',Prefill:256,DraftTokens:3,DraftPolicy:'fixed',Vision:true}},
     {id:'polystrata-default',title:['PolyStrata · 默认模板','PolyStrata · Default template'],parameters:{...commonPreset,Backend:'polystrata',ThinkingMode:'on',KvType:'q8_0',Prefill:512,DraftTokens:2,DraftPolicy:'adaptive',Vision:false,RetainedSessions:2,VramReserveMiB:256,WorkerArgs:['--elastic-experts-headroom','--elastic-headroom-mib','128','--elastic-physical-reserve-mib','512']}},
-  ].map(p=>({...p,note:['256K 上下文 · 46K 驻留 · 2K 生成预留','256K context · 46K resident · 2K reserve']}));
+  ].map(p=>({...p,note:p.note||['256K 上下文 · 46K 驻留 · 2K 生成预留','256K context · 46K resident · 2K reserve']}));
   const enginePreset=backend=>structuredClone(presets.find(p=>p.parameters.Backend===backend).parameters);
   const BACKENDS_KEY='kvmem-launch-backends-v1';
   const defaults={Backend:'ninfer',Model:'',Worker:'',Gpu:'',Context:262144,Budget:32768,HostMiB:16384,Reserve:1024,Prefill:128,MaxTokens:1024,Port:18200,ListenHost:'127.0.0.1',SinkTokens:12288,RecentTokens:1024};

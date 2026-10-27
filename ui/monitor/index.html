@@ -12,7 +12,7 @@
 <div class="s-card-head"><h1 class="s-title">模型状态</h1><span class="s-badge" data-service-state>等待服务数据</span></div>
 <div class="s-model" data-value="model">正在读取模型信息</div>
 <div class="s-state-row s-overview-row"><div class="s-overview-chips"><span data-value="execution">正在读取推理设备</span><span data-value="queue"></span><span data-value="speculative-live" hidden></span></div><label>查看请求 <select data-request-select aria-label="查看请求"><option value="">暂无请求</option></select></label></div>
-<details class="s-runtime-details"><summary>运行参数</summary><div class="s-runtime-facts"><div data-value="effective-config"></div><div data-value="mtp"></div><div data-value="vram-reserve"></div><div data-effective-scoring aria-live="polite"></div></div></details>
+<section class="s-runtime-config" aria-label="本次运行配置" data-runtime-config><div class="s-runtime-strip"><dl data-runtime-primary></dl><button class="s-runtime-toggle" type="button" data-runtime-toggle aria-expanded="false" aria-controls="runtime-config-details">详情 ▾</button></div><div id="runtime-config-details" data-runtime-config-details hidden><div data-runtime-adjustments hidden></div><div class="s-runtime-groups" data-runtime-groups></div></div></section>
 <div class="s-state-row"><span data-value="request-scope">暂无请求</span><span class="s-muted" data-value="output">等待服务数据</span></div>
 <div class="s-track" role="meter" aria-label="输出 token 预算使用，非完成百分比" aria-valuemin="0" aria-valuemax="100"><div class="s-bar" data-bar="output" style="width:0"></div></div>
 </section>

@@ -144,11 +144,11 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.getByRole('tab',{name:'服务与并发'}).click();
  await page.locator('[data-param=Port]').fill('18321');
  const originalDraft=(await api('info')).body.draft;
- await page.locator('[data-preset=ninfer-v018]').click();
+ await page.locator('[data-preset=ninfer-quality]').click();
  assert.equal(await page.locator('[data-param=Context]').inputValue(),'262144');
  assert.equal(await page.locator('[data-param=Model]').inputValue(),'C:/models/my-existing-model.ninfer');
  assert.equal(await page.locator('[data-param=Port]').inputValue(),'18321');
- assert.equal(await page.locator('[data-preset=ninfer-v018]').getAttribute('aria-pressed'),'true');
+ assert.equal(await page.locator('[data-preset=ninfer-quality]').getAttribute('aria-pressed'),'true');
  assert.deepEqual((await api('info')).body.draft,originalDraft,'preset must not save');
  assert.equal((await api('status')).body.state,'stopped','preset must not launch');
  await page.getByRole('tab',{name:'缓存与历史'}).click();
@@ -157,7 +157,7 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.equal(await page.locator('[data-param=QueryScorer]').inputValue(),'page-softmax');
  assert.equal(await page.locator('[data-param=GraphAlpha]').inputValue(),'0.2');
  assert.equal(await page.locator('[data-param=Lrfu]').isChecked(),false);
- const expected={Context:262144,Budget:47104,Reserve:2048,HostMiB:12288,Prefill:256,MaxTokens:0,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,DraftTokens:4,SpeculativeMode:'mtp',DraftPolicy:'adaptive',NgramDrafts:31,NgramMinMatch:12,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:16384,DeviceProfile:'auto',ReasoningEffort:'xhigh'};
+ const expected={Context:262144,Budget:49152,Reserve:4096,HostMiB:12288,Prefill:256,MaxTokens:0,SinkTokens:12288,RecentTokens:1024,KvType:'int8',Concurrency:1,RetainedSessions:1,DraftTokens:3,SpeculativeMode:'mtp',DraftPolicy:'adaptive',NgramDrafts:0,NgramMinMatch:12,VisionResidency:'cpu',VisionTokens:1024,ThinkingBudget:16384,DeviceProfile:'auto',ReasoningEffort:'xhigh'};
  for(const [key,value] of Object.entries(expected))assert.equal(await page.locator('[data-param='+key+']').inputValue(),String(value),key);
  for(const key of ['Vision','FastPrefill'])assert.equal(await page.locator('[data-param='+key+']').isChecked(),true,key);
  assert.equal(await page.locator('[data-param=PreserveThinking]').inputValue(),'true');
@@ -173,8 +173,8 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  assert.equal(await page.locator('[data-param=Model]').inputValue(),'C:/models/my-existing-model.ninfer');
  assert.ok(mutations.every(url=>new URL(url).pathname==='/api/launcher/inspect-model'),
   'select/undo may inspect the draft but must not mutate the server');
- assert.equal(await page.locator('[data-preset]').count(),1,'only the selected engine default template');
- await page.locator('[data-preset=ninfer-v018]').click();
+ assert.equal(await page.locator('[data-preset]').count(),2,'only the two NInfer templates');
+ await page.locator('[data-preset=ninfer-quality]').click();
  await page.getByRole('tab',{name:'服务与并发'}).click();
  assert.equal(await page.locator('[data-param=ListenHost]').isEnabled(),true);
  await page.locator('[data-param=ListenHost]').selectOption('0.0.0.0');

@@ -109,6 +109,7 @@
   Object.assign(en, {"启动配置": "Launch configuration", "推理未启动": "Inference stopped", "模型加载中": "Loading model", "推理进程已退出": "Inference process exited", "推理进程已退出，请在启动配置中查看日志。": "Inference process exited. Check logs in Launch configuration."});
   Object.assign(en, {"运行参数": "Runtime settings", "关闭说明": "Close notes", "生成速度说明": "Decode speed notes", "预填充说明": "Prefill notes", "上下文说明": "Context notes", "输入复用说明": "Input reuse notes", "显卡指标说明": "GPU metric notes", "请求记录说明": "Request history notes", "系统与缓存说明": "System and cache notes", "输入 token 复用不等于历史缓存命中。": "Input token reuse differs from history cache hits.", "已用 {0}%": "{0}% used"});
   Object.assign(en, {"MTP 设置未提供": "MTP settings unavailable", "MTP 未开启": "MTP disabled", "MTP 已开启": "MTP enabled", "草稿上限 {0} token": "Draft limit: {0} token(s)", "自适应": "Adaptive", "固定长度": "Fixed length", "所选请求：提议 {0} / 接受 {1}": "Selected request: proposed {0} / accepted {1}"});
+  Object.assign(en, {"本次运行配置":"Current runtime configuration","详情 ▾":"Details ▾","收起 ▴":"Collapse ▴"});
   let language = "zh-CN";
   try { if (localStorage.getItem("kvmem-monitor-language") === "en") language = "en"; } catch {}
   // A language-specific launcher overrides a saved preference for this opening.
