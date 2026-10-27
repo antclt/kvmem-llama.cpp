@@ -50,6 +50,20 @@ discarding unrelated flags. Switching engines preserves their individual setting
 The monitor displays configured MTP draft limits and policy, with request-level
 draft counts only when the backend reports them.
 
+An output limit of **0 / unlimited** in the launcher removes the service's fixed
+output cap for all three backends. Requests that omit a limit inherit that setting;
+Chat Completions `max_tokens: -1` explicitly removes a fixed service default.
+The effective budget is resolved after tokenizing the prompt, against the remaining
+logical context. KVMem's resident Budget + Reserve window does not cap total output;
+Pressure can recycle it during generation. Explicit positive request limits still
+apply, and logical context and RAM/SSD history capacity checks remain in force.
+NInfer also bounds an automatic output budget by the complete history that fits in
+its configured RAM/SSD capacity; a shorter history budget does not reject an otherwise
+valid short request merely because the maximum context is larger. Explicit positive
+caps and prompts that cannot fit retain their capacity errors.
+Thinking tokens count toward total output. Native API zero-value conventions remain
+backend-specific; the launcher's zero is translated into each backend's no-cap setting.
+
 ## Backend logs
 
 The **Backend logs** tab (`/monitor/#logs`) reads the controller's shared stdout /
