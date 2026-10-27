@@ -30,7 +30,11 @@ Recognized filenames are `ninfer-kvmem-server.exe`, `ninfer-serve.exe`, and
 `llama-kvmem-server.exe`. The console also checks `bin/` and `workers/<backend>/`.
 It checks the selected backend root first, then its own installation when different;
 within each root the order is root, bin, workers, with the canonical NInfer name preferred
-within a directory. Manual paths override registrations, which override discovery.
+within a directory. When either BAT entry finds a worker inside its own extracted
+installation, that bundled worker takes priority over browser drafts, saved templates and
+`worker-paths.json`. This prevents the same browser origin from silently selecting an older
+package. Direct source launches without a bundled worker retain the previous order: manual
+paths override registrations, which override discovery.
 Missing manual/registered paths remain errors. Discovery does not load a model or certify
 the worker's version/dependencies. It does not search other build trees recursively.
 

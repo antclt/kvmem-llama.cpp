@@ -70,6 +70,13 @@ try {
     }
     if (!$StateDir) { $StateDir = Join-Path $root 'build/local-console' }
     $arguments = @('-X', 'utf8', '-I', (Join-Path $root 'scripts/local-console.py'), '--port', "$Port", '--state-dir', $StateDir, '--prompt-port', '--language', $Language)
+    $bundledWorkers = @(
+        'ninfer-kvmem-server.exe', 'ninfer-serve.exe', 'llama-kvmem-server.exe',
+        'bin/ninfer-kvmem-server.exe', 'bin/ninfer-serve.exe', 'bin/llama-kvmem-server.exe',
+        'workers/ninfer/ninfer-kvmem-server.exe', 'workers/ninfer/ninfer-serve.exe',
+        'workers/llamacpp/llama-kvmem-server.exe', 'workers/polystrata/strata-poly.exe'
+    ) | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+    if ($bundledWorkers) { $arguments += '--prefer-bundled-worker' }
     if (!$NoBrowser) { $arguments += '--open-browser' }
     Write-Output 'KVMem - local launch console'
     & $python @arguments

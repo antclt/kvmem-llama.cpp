@@ -216,6 +216,11 @@
     return {version:2,parameters,raw};
   }
   function usableDraft(value){return value&&value.version===2&&value.parameters&&typeof value.parameters==='object'&&info.backends.includes(value.parameters.Backend)&&Array.isArray(value.parameters.StageLayers||[])&&(!value.raw||typeof value.raw==='object');}
+  function preferBundledWorker(draft){
+    const worker=info?.prefer_bundled_worker&&info.workers?.[draft.parameters.Backend];
+    if(!worker?.available||draft.parameters.Worker===worker.path)return draft;
+    const migrated=structuredClone(draft);migrated.parameters.Worker=worker.path;return migrated;
+  }
   function draftStatus(){
     const el=root.querySelector('[data-draft-state]');if(!el)return;
     if(configurationLocked()){el.textContent=configUncertain?tr('正在确认服务状态，暂不可修改参数','Checking service state; settings remain locked'):tr('本次启动参数 · 停止服务后可修改','Parameters for this run · Stop the service to edit');el.classList.remove('l-error');el.disabled=true;return;}
@@ -230,6 +235,7 @@
   }
   function scheduleSave(){if(configurationLocked())return;dirty=true;saveError=false;draftStatus();clearTimeout(saveTimer);saveTimer=setTimeout(saveEditing,400);}
   function restoreDraft(draft){
+    draft=preferBundledWorker(draft);
     if(configurationLocked()){render(runningParameters||pendingParameters||draft.parameters);return;}
     render(draft.parameters);
     if(draft.raw){const layers=root.querySelector('[data-param=StageLayers]');if(layers&&typeof draft.raw.StageLayers==='string'){layers.value=draft.raw.StageLayers;layers.dispatchEvent(new Event('input'));}const native=root.querySelector('[data-native]');if(native&&typeof draft.raw.WorkerArgs==='string'){native.value=draft.raw.WorkerArgs;native.dispatchEvent(new Event('input'));}}
