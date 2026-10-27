@@ -6,23 +6,23 @@
     "base_commit": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
     "license_file": "backends/llamacpp/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "22349cd22ad34b933234ee42e4b382c9e3ef0713",
+    "patched_tree": "923086f011e015fef9515124ef64a189e940c0b1",
     "patches": [
       {
         "id": "kvmem",
         "path": "backends/patches/llamacpp-kvmem.patch",
-        "sha256": "8f2b3a6da6c86866c2a0f0a17cdb8eb344d7b3e66a197a050b4121ad544a1555",
+        "sha256": "1b93bc8fcec2fe5147ffe82ae70b028622eed49be2a748c1bc6e75d4b314dcef",
         "requires": [],
-        "after_tree": "82ba95255615c2537ca2caae1364658d6216aa7f"
+        "after_tree": "f00933594b3eda083bbb943c7537e56f71df2d41"
       },
       {
         "id": "pq2",
         "path": "backends/patches/llamacpp-pq2.patch",
-        "sha256": "4a02193d548a3f3a6f28780420abd6957fb7561bab72f749a19601e2e8c58396",
+        "sha256": "7fe5443fe79fd45710a11a7b1c45f7fd9f3221ee1c34f0af3228dd762388f71c",
         "requires": [
           "kvmem"
         ],
-        "after_tree": "7c84746653b0c3c3e4e70b3c721e5ab1dd9b89c7",
+        "after_tree": "6dc34740905f0fb295f287d568f5cda867710597",
         "source": "Prism llama.cpp 9a9394a895b96003ca842a6041cb28ac49a108f7: isolated PQ2 format/CPU/CUDA support"
       },
       {
@@ -32,7 +32,7 @@
         "requires": [
           "pq2"
         ],
-        "after_tree": "265fd71110156dcb91c065914baf0ec92e140b20",
+        "after_tree": "d1d50faf2da2c36a88ac2e7535368c92b4cdcebd",
         "source": "Prism llama.cpp 9a9394a895b96003ca842a6041cb28ac49a108f7: isolated PTQ1 format/CPU/CUDA support"
       },
       {
@@ -42,13 +42,13 @@
         "requires": [
           "ptq1"
         ],
-        "after_tree": "1593775ad2ac64b4ad6993ce1e04ca025953be0e",
+        "after_tree": "d56a4c6f6a040e98b010130ea72872a915d74106",
         "source": "Prism PR218 PTQ1 planar matvec with the PDL consumer sync fix; scoped to dense CUDA 2D calls, current upstream fusion API retained"
       },
       {
         "path": "backends/patches/llamacpp-checkpoint-policy.patch",
         "sha256": "9e8aa403afcecb66150f4e58bf1ad3de9d2d8a4d16481a295f59ea6297d5273b",
-        "after_tree": "22349cd22ad34b933234ee42e4b382c9e3ef0713",
+        "after_tree": "923086f011e015fef9515124ef64a189e940c0b1",
         "id": "checkpoint-policy",
         "requires": [
           "ptq1-performance"

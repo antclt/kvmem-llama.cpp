@@ -255,6 +255,7 @@ if (KVMEM_BUILD_LLAMA)
         endif()
         target_include_directories(kvmem-stagein-hip PRIVATE
             src/adapter
+            kvmem/include
             backends/llamacpp/include
             backends/llamacpp/ggml/include)
         target_compile_definitions(kvmem-stagein-hip PRIVATE
