@@ -284,7 +284,7 @@ def main():
                     help='override the recipe V cache type')
     ap.add_argument('--budget', type=int, required=True)
     ap.add_argument('--reserve', type=int, required=True)
-    ap.add_argument('--kvmem-block-tokens', type=int, help='override retrieval block size (server default 128)')
+    ap.add_argument('--kvmem-block-tokens', type=int, help='override retrieval block size (server default 32)')
     ap.add_argument('--kvmem-query-scorer', choices=('meanq-cosine', 'page-softmax'))
     ap.add_argument('--kvmem-score-agg', choices=('mean', 'max'))
     ap.add_argument('--kvmem-graph-alpha', type=float)

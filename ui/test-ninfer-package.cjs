@@ -14,10 +14,13 @@ fs.mkdirSync(scripts, {recursive:true});
 fs.copyFileSync(path.join(root, 'scripts/windows/start-backend.ps1'), path.join(scripts, 'start-backend.ps1'));
 fs.copyFileSync(path.join(root, 'scripts/speculative-capabilities.json'), path.join(backendRoot, 'scripts/speculative-capabilities.json'));
 fs.writeFileSync(path.join(backendRoot, 'console-build.json'), JSON.stringify({supported_backends:['ninfer']}));
+const bundledWorker=path.join(backendRoot,'workers','ninfer','ninfer-kvmem-server.exe');
+fs.mkdirSync(path.dirname(bundledWorker),{recursive:true});fs.writeFileSync(bundledWorker,'fixture');
 const port = Number(process.env.CONSOLE_TEST_PORT || 18447);
 const base = `http://127.0.0.1:${port}`;
 const child = spawn(process.env.PYTHON || 'python', ['-B', path.join(root, 'scripts/local-console.py'),
-    '--backend-root', backendRoot, '--state-dir', path.join(temporary, 'state'), '--port', String(port)],
+    '--backend-root', backendRoot, '--state-dir', path.join(temporary, 'state'), '--port', String(port),
+    '--prefer-bundled-worker'],
     {windowsHide:true});
 let output = '', browser;
 child.stderr.on('data', data => output += data);
@@ -39,6 +42,8 @@ async function ready() {
 (async () => {
     const info = await ready();
     assert.deepEqual(info.backends, ['ninfer']);
+    assert.equal(info.prefer_bundled_worker, true);
+    assert.equal(info.workers.ninfer.path, bundledWorker);
     assert.equal(info.draft.parameters.Backend, 'ninfer');
     const refused = await fetch(base + '/api/launcher/preview', {method:'POST',
         headers:{'Content-Type':'application/json', 'X-KVMem-Token':info.token},
@@ -56,6 +61,14 @@ async function ready() {
     assert.deepEqual(await page.locator('[data-param=Backend] option').evaluateAll(options => options.map(o => o.value)), ['ninfer']);
     assert.equal(await page.locator('[data-param=Backend]').inputValue(), 'ninfer');
     assert.notEqual(await page.locator('[data-param=Model]').inputValue(), 'old.gguf');
+    const staleContext = await browser.newContext({viewport:{width:1440,height:900}});
+    await staleContext.addInitScript(() => localStorage.setItem('kvmem-launch-draft-v2', JSON.stringify({
+        version:2,parameters:{Backend:'ninfer',Model:'old.ninfer',Worker:'C:/old/package/bin/ninfer-serve.exe',StageLayers:[]},raw:{}})));
+    const stalePage=await staleContext.newPage();
+    await stalePage.goto(base+'/monitor/#config');await stalePage.locator('[data-param=Worker]').waitFor({state:'attached'});
+    assert.equal(await stalePage.locator('[data-param=Worker]').inputValue(),bundledWorker);
+    assert.equal(await stalePage.locator('[data-param=Model]').inputValue(),'old.ninfer');
+    await staleContext.close();
     for (const language of ['zh-CN','en']) {
         await page.locator('[data-language-select]').selectOption(language);
         assert.deepEqual(await page.locator('[data-param=Backend] option').evaluateAll(options => options.map(o => o.value)), ['ninfer']);

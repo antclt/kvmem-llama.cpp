@@ -40,7 +40,7 @@ class ConsoleTests(unittest.TestCase):
         def normalize(**values):
             return console.normalize({'schema_version':1,'parameters':{'Backend':'polystrata',**values}},
                                      ['polystrata','ninfer','llamacpp'])['parameters']
-        self.assertEqual(normalize()['BlockTokens'],64)
+        self.assertEqual(normalize()['BlockTokens'],32)
         for size in (32,64):
             self.assertEqual(normalize(BlockTokens=size)['BlockTokens'],size)
         for value in (16,128,True,32.0,'32',None):
@@ -387,6 +387,23 @@ class ConsoleTests(unittest.TestCase):
             self.assertEqual(self.controller.worker_defaults()['ninfer'],
                              {'path': str(registered), 'available': False})
 
+    def test_packaged_launch_prefers_bundled_worker_over_stale_paths(self):
+        installation = Path(self.tmp.name) / 'installation'
+        packaged = installation / 'workers/ninfer/ninfer-kvmem-server.exe'
+        packaged.parent.mkdir(parents=True); packaged.touch()
+        old = Path(self.tmp.name) / 'old-package/bin/ninfer-serve.exe'
+        old.parent.mkdir(parents=True); old.touch()
+        state = Path(self.tmp.name) / 'packaged-state'; state.mkdir()
+        (state / 'worker-paths.json').write_text(json.dumps({'ninfer': str(old)}))
+        controller = console.Controller(console.ROOT, state, 18197, prefer_bundled_worker=True)
+        controller.backend_root = installation
+        with patch.object(console, 'ROOT', installation):
+            self.assertEqual(controller.worker_defaults()['ninfer']['path'], str(packaged))
+            data = {'schema_version': 1, 'parameters': dict(console.DEFAULTS, Worker=str(old))}
+            saved = controller.save(data)
+            self.assertEqual(saved['parameters']['Worker'], str(packaged))
+            self.assertEqual(controller.draft()['parameters']['Worker'], str(packaged))
+
     def test_worker_discovery_separate_console_root_and_bounded_scope(self):
         installation = Path(self.tmp.name) / 'console'
         installation.mkdir()
@@ -716,6 +733,7 @@ class ConsoleTests(unittest.TestCase):
             self.assertTrue(console.matching_console(port, console.ROOT, self.tmp.name))
             self.assertFalse(console.matching_console(port, console.ROOT, Path(self.tmp.name) / 'other-state'))
             self.assertFalse(console.matching_console(port, Path(self.tmp.name) / 'other-install', self.tmp.name))
+            self.assertFalse(console.matching_console(port, console.ROOT, self.tmp.name, True))
             with patch.object(console.sys, 'argv', ['local-console.py', '--port', str(port),
                               '--state-dir', self.tmp.name, '--open-browser']), \
                  patch.object(console, 'open_console_browser') as browser, \

@@ -127,6 +127,7 @@ class OneClickTests(unittest.TestCase):
                             time.sleep(0.1)
                     self.assertEqual(info['console_root'], str(package.resolve()))
                     self.assertEqual(info['status']['state'], 'stopped')
+                    self.assertTrue(info['prefer_bundled_worker'])
                     self.assertEqual(info['workers']['ninfer'],
                                      {'path': str(colocated_worker), 'available': True})
                     text = log.read_text(encoding='utf-8', errors='replace')

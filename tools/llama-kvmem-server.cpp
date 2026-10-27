@@ -5,6 +5,7 @@
 #include "llama-kvmem-execution.h"
 #include "kvmem/retrieval_options.hpp"
 #include "kvmem/launch_contract.hpp"
+#include "kvmem/token_options.hpp"
 #include "kvmem-spec.h"
 #include "kvmem-chat-sampling.h"
 #include "kvmem-chat-template.h"
@@ -132,7 +133,7 @@ static void print_usage(const char * argv0) {
             "                            request fields override these process defaults\n"
             "  --kvmem / --no-kvmem       enable/disable KVMem (default off; positive B enables)\n"
             "  --kvmem-budget N           positive selected-history budget B (default 32768)\n"
-            "  --kvmem-block-tokens N     block size (default 128)\n"
+            "  --kvmem-block-tokens N     block size (default 32)\n"
             "  --kvmem-sink-tokens N      always-kept prefix; default 0 = one block; rounds down, minimum one block\n"
             "  --kvmem-gen-reserve N      positive append workspace R (default 1024; not an output limit)\n"
             "  --kvmem-recent-tokens N    always-kept newest suffix in B (default 64; rounds down to blocks)\n"
@@ -851,7 +852,7 @@ int main(int argc, char ** argv) {
     kvmem_server_options options;
     int requested_conversations = 1;
     st.kparams.mtp_state = 2; // ReplaySSM by default when MTP is enabled.
-    st.kparams.block_tokens = 128;
+    st.kparams.block_tokens = 32;
     st.kparams.recent_tokens = 0;
     st.kparams.method = 1;
     st.kparams.query_begin = -1;
@@ -1098,6 +1099,8 @@ int main(int argc, char ** argv) {
         }
     }
     options.resolve();
+    if (options.enabled) kvmem::normalize_memory_tokens(options.budget, options.gen_reserve,
+        options.sink_tokens, options.recent_tokens, st.kparams.block_tokens, true, false);
     st.kparams.enabled = options.enabled;
     st.kparams.budget = options.budget;
     st.kparams.gen_reserve = options.gen_reserve;

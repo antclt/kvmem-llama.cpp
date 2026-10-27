@@ -4,6 +4,7 @@
 #include "llama-kvmem-hooks.h"
 #include "kvmem/retrieval_options.hpp"
 #include "kvmem/cli_options.h"
+#include "kvmem/token_options.hpp"
 #include "kvmem-spec.h"
 #include "kvmem-server-devices.h"
 #include "kvmem-execution-scope.h"
@@ -337,6 +338,9 @@ int main(int argc, char ** argv) {
     try {
         if (!kparams.enabled && (scoring_options.auxiliary_set || scoring_options.lrfu))
             throw std::invalid_argument("KVMem scoring settings require --kvmem");
+        if (!kparams.gen_reserve) kparams.gen_reserve = 256;
+        if (kparams.enabled && kparams.budget) kvmem::normalize_memory_tokens(kparams.budget, kparams.gen_reserve,
+            kparams.sink_tokens, kparams.recent_tokens, kparams.block_tokens, true, false);
         scoring_options.resolve_query_scoring();
         kparams.query_meanq_cosine = scoring_options.query_scorer == kvmem::QueryScorer::MeanQCosine;
         kparams.graph_alpha = scoring_options.graph_alpha;

@@ -38,7 +38,7 @@ if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $PythonSha2
 $files = @('START-HERE-CN.bat', 'START-HERE-EN.bat', 'scripts/local-console.py', 'scripts/console_chat.py', 'scripts/windows/start-ui.ps1',
            'scripts/windows/describe-launch-json.ps1', 'scripts/windows/start-backend.ps1',
            'scripts/windows/start-ninfer.ps1', 'scripts/windows/start-dflash2.ps1','scripts/windows/start-polystrata.ps1','tools/polystrata/server.py','tools/polystrata/assets.py',
-           'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/select-model.ps1', 'scripts/speculative-capabilities.json')
+           'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/token-settings.ps1', 'scripts/windows/select-model.ps1', 'scripts/speculative-capabilities.json')
 $files += 'scripts/model_health.py', 'scripts/console_hardware.py', 'scripts/requirements-console.txt'
 foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'formats.py', 'framing.py', 'file_io.py', 'LICENSE', 'PROVENANCE.json') {
     $files += 'scripts/model_health_ninfer/' + $name

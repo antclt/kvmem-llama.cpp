@@ -17,10 +17,10 @@ llama.cpp 与 ninfer 共用 KVMem 策略和内存契约，并共用 KVMem 公共
 
 | 概念 | llama.cpp KVMem | ninfer KVMem |
 |---|---|---|
-| 检索块 block | `--kvmem-block-tokens N` 可配置，默认 128 tokens | 当前固定 64 tokens，未开放对应启动参数 |
+| 检索块 block | `--kvmem-block-tokens N` 可配置，服务端与 CLI 默认 32 tokens | 当前固定 64 tokens，未开放对应启动参数 |
 | 原生物理页 page | 本项目的 KV 搬运按适配器 block 和原生布局处理，不要求与 ninfer 页大小相同 | 原生页池要求每页 64 tokens |
 | block 与 page 的关系 | 依据本后端的 block 与 KV 布局执行 | 当前一块对应一页；统计、选择、搬运和冷快照都按此关系实现 |
-| recent 保留量 | `--kvmem-recent-tokens N`，转换为 `N / block_tokens` 个完整块；公共输入默认 64，block=128 时有效值为 0 | `--kvmem-recent-tokens N`，按 64-token 页向下取整；N 必须至少 64。省略时为 64，即最新一页 |
+| recent 保留量 | `--kvmem-recent-tokens N`，转换为 `N / block_tokens` 个完整块；公共输入默认 64，默认 block=32 时为两块；显式 block=128 时为 0 | `--kvmem-recent-tokens N`，按 64-token 页向下取整；N 必须至少 64。省略时为 64，即最新一页 |
 | sink 保留量 | `--kvmem-sink-tokens N`；默认 0 表示一块，正数向下取完整块且至少一块 | `--kvmem-sink-tokens N`，规则相同。默认 0 表示首个 64-token 页；正数向下取整且至少一页 |
 
 block 是检索统计和选中历史的单位，page 是原生 KV 分配和搬运的单位，两者概念不同。保留 ninfer 的 block=64。`--kvmem-recent-tokens 1024` 在这个粒度下保留最新 16 页；不足一页的余数被舍去。ninfer 必须保留至少一页 recent，以维护尚未写满的追加页；0–63 会被启动脚本、服务参数和 Engine 校验拒绝。

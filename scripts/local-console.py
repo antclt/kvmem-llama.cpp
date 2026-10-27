@@ -166,7 +166,7 @@ def normalize(data, backends):
     if p.get('Backend') not in NATIVE or p.get('Backend') not in backends:
         raise ValueError('This backend is not installed in the selected backend checkout')
     if p['Backend'] == 'polystrata':
-        p.setdefault('BlockTokens', 64)
+        p.setdefault('BlockTokens', 32)
         if type(p['BlockTokens']) is not int or p['BlockTokens'] not in (32, 64):
             raise ValueError('PolyStrata BlockTokens must be 32 or 64')
     elif 'BlockTokens' in p:
@@ -344,9 +344,10 @@ class WindowsJob:
 
 
 class Controller:
-    def __init__(self, backend_root, state_dir, port):
+    def __init__(self, backend_root, state_dir, port, prefer_bundled_worker=False):
         self.backend_root = Path(backend_root).resolve()
         self.state_dir = Path(state_dir).resolve(); self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.prefer_bundled_worker = bool(prefer_bundled_worker)
         source = (self.backend_root / 'scripts/windows/start-backend.ps1').read_text(encoding='utf-8-sig')
         match = re.search(r"\[ValidateSet\(([^\n]+)\)\]\[string\]\$Backend", source)
         if not match:
@@ -465,7 +466,9 @@ class Controller:
 
     def worker_defaults(self):
         # A source checkout and a runnable installation need not share a directory.
-        # Explicit registrations remain authoritative, including missing paths.
+        # A packaged BAT launch prefers its own complete worker set so a stale
+        # registration or browser draft cannot silently select another package.
+        # Direct/source launches retain the explicit-registration precedence.
         registration = self.state_dir / 'worker-paths.json'
         paths = json.loads(registration.read_text(encoding='utf-8-sig')) if registration.exists() else {}
         if (not isinstance(paths, dict) or set(paths) - set(self.backends)
@@ -476,31 +479,44 @@ class Controller:
                  'llamacpp': ('llama-kvmem-server.exe',), 'polystrata':('strata-poly.exe',)}
         result = {}
         for backend in self.backends:
-            if backend in paths:
+            # Search only known names in bounded installation locations; never
+            # execute discovered files, search PATH, or recurse into other builds.
+            roots = dict.fromkeys((self.backend_root, ROOT.resolve()))
+            candidates = [directory / name
+                          for root in roots
+                          for directory in (root, root / 'bin', root / 'workers' / backend)
+                          for name in names[backend]]
+            fallback = self.backend_root / 'workers' / backend / names[backend][0]
+            discovered = next((candidate for candidate in candidates if candidate.is_file()), None)
+            if self.prefer_bundled_worker and discovered is not None:
+                path = discovered
+            elif backend in paths:
                 path = Path(paths[backend])
             else:
-                # Search only known names in bounded installation locations; never
-                # execute discovered files, search PATH, or recurse into other builds.
-                roots = dict.fromkeys((self.backend_root, ROOT.resolve()))
-                candidates = [directory / name
-                              for root in roots
-                              for directory in (root, root / 'bin', root / 'workers' / backend)
-                              for name in names[backend]]
-                fallback = self.backend_root / 'workers' / backend / names[backend][0]
-                path = next((candidate for candidate in candidates if candidate.is_file()), fallback)
+                path = discovered or fallback
             result[backend] = {'path': str(path), 'available': path.is_file()}
         return result
+
+    def prefer_packaged_worker(self, parameters):
+        parameters = copy.deepcopy(parameters)
+        if self.prefer_bundled_worker:
+            worker = self.worker_defaults().get(parameters.get('Backend'))
+            if worker and worker['available']:
+                parameters['Worker'] = worker['path']
+        return parameters
 
     def draft(self):
         if self.draft_path.exists():
             saved = without_secrets(json.loads(self.draft_path.read_text(encoding='utf-8')))
             if saved.get('parameters', {}).get('Backend') in self.backends:
+                saved['parameters'] = self.prefer_packaged_worker(saved['parameters'])
                 return saved
         backend = DEFAULTS['Backend'] if DEFAULTS['Backend'] in self.backends else self.backends[0]
         return {'schema_version': 1, 'parameters': {**DEFAULTS, **copy.deepcopy(ENGINE_DEFAULTS[backend])}}
 
     def save(self, data):
         clean = without_secrets(normalize(data, self.backends))
+        clean['parameters'] = self.prefer_packaged_worker(clean['parameters'])
         with self.lock:
             temp = self.draft_path.with_suffix('.tmp')
             temp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -521,7 +537,7 @@ class Controller:
             self.redactions.add(api_key)
         if os.name != 'nt':
             raise ValueError('Service launch currently requires Windows PowerShell')
-        params = clean['parameters']
+        params = self.prefer_packaged_worker(clean['parameters'])
         if params.get('Port', 18200) == self.port:
             raise ValueError('Inference service and console must use different ports')
         params = copy.deepcopy(params)
@@ -564,7 +580,7 @@ class Controller:
             result['worker'] = self.worker_capabilities(native_argv[0], params['Backend'])
             result['resolved_scoring'] = self.scoring_from_argv(native_argv)
             if params['Backend'] == 'polystrata':
-                block = params.get('BlockTokens', 64)
+                block = params.get('BlockTokens', 32)
                 if block not in result['worker'].get('block_tokens', {}).get('supported', []):
                     raise ValueError('PolyStrata worker does not support BlockTokens; update the backend')
                 if '--kvmem-block-tokens' not in native_argv or int(native_argv[native_argv.index('--kvmem-block-tokens') + 1]) != block:
@@ -841,6 +857,7 @@ class Controller:
             result['planned_scoring'] = copy.deepcopy(self.active_plan.get('resolved_scoring')) if self.active_plan else None
             result['effective_scoring'] = dict(self.observed_scoring) or None
             result['worker'] = copy.deepcopy(self.active_plan.get('worker')) if self.active_plan else None
+            result['token_settings'] = copy.deepcopy(self.active_plan.get('token_settings')) if self.active_plan else None
             planned = result['planned_scoring']
             result['scoring_confirmed'] = bool(planned and all(
                 key in self.observed_scoring and self.observed_scoring[key] == value for key, value in planned.items()))
@@ -871,7 +888,7 @@ class Controller:
         self.process = None
 
     def inspect_model(self, data, *, for_launch=False):
-        parameters = request_parameters(data)
+        parameters = self.prefer_packaged_worker(request_parameters(data))
         if parameters['Backend'] not in self.backends:
             raise ValueError('Backend is not installed')
         if not parameters.get('Worker'):
@@ -900,6 +917,7 @@ class Controller:
 
     def start(self, data):
         clean = normalize(data, self.backends)
+        clean['parameters'] = self.prefer_packaged_worker(clean['parameters'])
         # Never trust a cached browser report. Inspect this exact launch request.
         health = self.inspect_model(clean, for_launch=True)
         if not health['can_start']:
@@ -921,9 +939,12 @@ class Controller:
                     raise ValueError(f'端口 {port} 无法使用，可能已有服务占用。请在“服务与并发”中更换端口，'
                                      '或先停止原服务。此控制台不会停止外部服务。') from error
             env = dict(os.environ); env.update(result.get('environment', {}))
-            plan_summary = {'resolved_scoring': result.get('resolved_scoring'), 'worker': result.get('worker')}
+            plan_summary = {'resolved_scoring': result.get('resolved_scoring'), 'worker': result.get('worker'), 'token_settings': result.get('token_settings')}
             self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
             self.log = self.log_path.open('wb')
+            for change in (result.get('token_settings') or {}).get('adjustments', []):
+                self.log.write((f"KVMEM_CONFIG {change['parameter']}: {change['requested']} -> {change['effective']} tokens ({change['reason']})\n").encode('utf-8'))
+            self.log.flush()
             self.log_session = secrets.token_hex(12)
             self.log_metadata = {'backend': clean['parameters']['Backend'],
                                  'model': Path(clean['parameters'].get('Model', '')).name,
@@ -1093,6 +1114,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/launcher/info':
                 self.reply(200, {'token': self.control.token, 'backends': self.control.backends,
                                 'console_protocol': 1, 'console_root': str(ROOT.resolve()),
+                                'prefer_bundled_worker': self.control.prefer_bundled_worker,
                                 'model_library_version': 1,
                                 'model_inspection_version': 1,
                                 'kv_cache_version': 1,
@@ -1205,7 +1227,7 @@ def open_console_browser(url):
     print(f'Open this address in your browser: {url}', flush=True)
 
 
-def matching_console(port, backend_root, state_dir):
+def matching_console(port, backend_root, state_dir, prefer_bundled_worker=False):
     """Only reuse a controller from this installation and the same state directory."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -1219,7 +1241,8 @@ def matching_console(port, backend_root, state_dir):
         return (data.get('console_protocol') == 1
                 and Path(data['console_root']).resolve() == ROOT.resolve()
                 and Path(data['backend_root']).resolve() == Path(backend_root).resolve()
-                and Path(data['state_dir']).resolve() == Path(state_dir).resolve())
+                and Path(data['state_dir']).resolve() == Path(state_dir).resolve()
+                and bool(data.get('prefer_bundled_worker')) == bool(prefer_bundled_worker))
     except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
         return False
 
@@ -1262,18 +1285,22 @@ def main():
     parser.add_argument('--backend-root', type=Path, default=ROOT)
     parser.add_argument('--state-dir', type=Path, default=ROOT / 'build/local-console')
     parser.add_argument('--open-browser', action='store_true', help='open the UI; reuse an identical running console')
+    parser.add_argument('--prefer-bundled-worker', action='store_true',
+                        help='prefer a worker shipped inside this installation over saved external paths')
     parser.add_argument('--prompt-port', action='store_true', help='ask for another console port when unavailable')
     parser.add_argument('--language', choices=('zh-CN', 'en'), default='zh-CN',
                         help='startup message language; en also opens the UI in English')
     args = parser.parse_args()
-    control = Controller(args.backend_root, args.state_dir, args.port)
+    control = Controller(args.backend_root, args.state_dir, args.port, args.prefer_bundled_worker)
     while True:
         url = f'http://127.0.0.1:{args.port}/monitor/' + ('?lang=en' if args.language == 'en' else '')
         try:
             server = Server(('127.0.0.1', args.port), Handler)
             break
         except OSError as error:
-            if (args.open_browser or args.prompt_port) and matching_console(args.port, args.backend_root, args.state_dir):
+            if ((args.open_browser or args.prompt_port)
+                    and matching_console(args.port, args.backend_root, args.state_dir,
+                                         args.prefer_bundled_worker)):
                 print(f'KVMem console is already running: {url}', flush=True)
                 if args.open_browser:
                     open_console_browser(url)

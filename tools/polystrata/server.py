@@ -14,6 +14,32 @@ import sys
 import tempfile
 
 
+def normalize_tokens(args, parser):
+    block = args.kvmem_block_tokens
+    changes = []
+    for key, label, minimum in (('budget', 'Budget', 128), ('reserve', 'Reserve', block),
+                                ('sink', 'SinkTokens', 0), ('recent', 'RecentTokens', block)):
+        requested = getattr(args, key)
+        if not minimum <= requested <= 2147483647:
+            parser.error(f'{label} must be between {minimum} and 2147483647')
+        effective = requested // block * block
+        if effective < minimum:
+            parser.error(f'{label} must retain at least {minimum} tokens after alignment')
+        setattr(args, key, effective)
+        if effective != requested:
+            changes.append(dict(parameter=label, requested=requested, effective=effective,
+                                reason=f'alignment to {block} tokens'))
+    if not 1 <= args.prefill <= 2147483647:
+        parser.error('Prefill must be positive and <= 2147483647')
+    if args.prefill > args.reserve:
+        changes.append(dict(parameter='Prefill', requested=args.prefill, effective=args.reserve,
+                            reason='Reserve limit'))
+        args.prefill = args.reserve
+    for change in changes:
+        print(f"KVMEM_CONFIG {change['parameter']}: {change['requested']} -> {change['effective']} tokens ({change['reason']})", file=sys.stderr)
+    return changes
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "worker", "model"):
@@ -27,8 +53,8 @@ def main():
     parser.add_argument("--port", type=int, default=18200)
     parser.add_argument("--context", type=int, default=262144)
     parser.add_argument("--budget", type=int, default=32768)
-    parser.add_argument("--kvmem-block-tokens", type=int, choices=(32, 64), default=64,
-                        help="KVMem block size in tokens; fixed for this worker (default: 64)")
+    parser.add_argument("--kvmem-block-tokens", type=int, choices=(32, 64), default=32,
+                        help="KVMem block size in tokens; fixed for this worker (default: 32)")
     parser.add_argument("--reserve", type=int, default=1024)
     parser.add_argument("--host-mib", type=int, default=4096)
     parser.add_argument("--disk-path", type=Path)
@@ -82,6 +108,7 @@ def main():
     if not 1 <= args.vision_tokens <= 16384 or not 1 <= args.vision_threads <= 1024:
         parser.error("invalid vision token or thread limit")
     block = args.kvmem_block_tokens
+    token_adjustments = normalize_tokens(args, parser)
     checks = [
         (128 <= args.budget <= 2147483647 and args.budget % block == 0, f"Budget must be >=128 and a multiple of {block}"),
         (block <= args.reserve <= 2147483647 and args.reserve % block == 0, f"Reserve must be >={block} and a multiple of {block}"),
@@ -178,6 +205,7 @@ def main():
             parser.error("one or more GPU UUIDs were not found")
         indices = [found[uuid] for uuid in gpu_uuids]
     config = {
+        "token_adjustments": token_adjustments,
         "exe": str(args.worker), "args": worker_args, "cwd": str(args.source),
         "tokenizer": str(args.tokenizer), "model_name": args.model_alias,
         "backend": "cuda", "gpu": indices[0],

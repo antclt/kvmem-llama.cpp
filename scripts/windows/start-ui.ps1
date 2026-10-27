@@ -16,7 +16,7 @@ try {
                           'scripts/model_health_ninfer/schema.py', 'scripts/model_health_ninfer/layouts.py',
                           'scripts/model_health_ninfer/formats.py', 'scripts/model_health_ninfer/framing.py',
                           'scripts/model_health_ninfer/file_io.py', 'scripts/windows/start-backend.ps1',
-                          'scripts/windows/describe-launch-json.ps1', 'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1',
+                          'scripts/windows/describe-launch-json.ps1', 'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/token-settings.ps1',
                           'scripts/windows/select-model.ps1',
                           'ui/monitor/index.html', 'ui/monitor/launcher.js', 'ui/monitor/monitor.js',
                           'ui/monitor/console-shell.js', 'ui/monitor/console-shell.css') {
@@ -70,6 +70,13 @@ try {
     }
     if (!$StateDir) { $StateDir = Join-Path $root 'build/local-console' }
     $arguments = @('-X', 'utf8', '-I', (Join-Path $root 'scripts/local-console.py'), '--port', "$Port", '--state-dir', $StateDir, '--prompt-port', '--language', $Language)
+    $bundledWorkers = @(
+        'ninfer-kvmem-server.exe', 'ninfer-serve.exe', 'llama-kvmem-server.exe',
+        'bin/ninfer-kvmem-server.exe', 'bin/ninfer-serve.exe', 'bin/llama-kvmem-server.exe',
+        'workers/ninfer/ninfer-kvmem-server.exe', 'workers/ninfer/ninfer-serve.exe',
+        'workers/llamacpp/llama-kvmem-server.exe', 'workers/polystrata/strata-poly.exe'
+    ) | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+    if ($bundledWorkers) { $arguments += '--prefer-bundled-worker' }
     if (!$NoBrowser) { $arguments += '--open-browser' }
     Write-Output 'KVMem - local launch console'
     & $python @arguments

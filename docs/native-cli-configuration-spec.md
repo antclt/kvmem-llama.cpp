@@ -1,5 +1,27 @@
 # KVMem 原生命令行与公共配置规范
 
+## 启动参数对齐（2026-10-27）
+
+llama.cpp 服务端与独立 CLI、PolyStrata 的默认 KV 管理块大小为 32；ninfer 仍为 64。
+显式选择的块大小不因默认值改变而覆盖。PolyStrata 继续支持 32/64。
+
+Budget、Reserve、SinkTokens、RecentTokens 在容量计算前按后端实际块大小向下取整。
+ninfer 的 Prefill 按 128 向下取整；ninfer 和 PolyStrata 的 Prefill 同时限制在生效 Reserve 内。
+每个改变的参数输出一次 `KVMEM_CONFIG 参数: 请求值 -> 生效值 tokens (原因)`。
+Windows 启动预览返回 `token_settings` 的 requested、effective、block_tokens 和 adjustments；
+控制台检查页面展示这些值，启动日志记录同一调整。配置草稿保留用户输入。
+
+最低容量与保护语义不变：ninfer/PolyStrata 的 Budget 至少 128；Reserve 至少一块；
+ninfer 的 Prefill/Reserve 必须容纳至少 128 个预填充 tokens。llama.cpp 保留已有的不足一块
+Budget/Reserve 补至一块规则。llama.cpp/ninfer 的 Sink=0 仍表示至少一块，PolyStrata 的
+Sink=0 仍为不额外保护前缀。llama.cpp 的 Recent 可向下取成 0；其他两个后端至少一块。
+取整后的 Sink+Recent 必须不超过 Budget，Budget+Reserve 必须不超过 Context。
+这些组合冲突继续返回具体错误，不擅自削减历史或保护区来容纳它们。
+
+Context、输出/思考上限、Query/replay 上限和 RAM/SSD MiB 配额不套用 KV 块取整。
+llama.cpp 的内部 Context 补齐和 batch/ubatch 限制仍由原生运行时负责；启动预览中的
+token_settings 表示规范化后的启动参数，不代表模型加载后的显存可用容量。
+
 ## 当前源码修订：图召回 C
 
 当前实现以 [图召回 C 规范及验证](graph-recall.md) 覆盖本文件早期设计/验收记录中的以下部分：
@@ -241,7 +263,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--kvmem-block-tokens` | 开启 KVMem 时必须为正；默认 128 |
 | `--kvmem-sink-tokens` | 默认 0 表示一块；正数向下取整且至少一块 |
 | `--kvmem-gen-reserve` | 正整数 tokens，启用后默认 1024；R 是可复用追加空间；持续输出按 DecodePressure 腾空间 |
-| `--kvmem-recent-tokens` | 非负 tokens，默认 64；按 block 向下取整，占用 B；默认 block=128 时有效后缀为 0 |
+| `--kvmem-recent-tokens` | 非负 tokens，默认 64；按 block 向下取整，占用 B；默认 block=32 时保留两个块 |
 | `--kvmem-method` | 文档化选项 recency/retrieval；默认 retrieval；解析还接受 retrieve |
 | `--kvmem-lrfu` / `--no-kvmem-lrfu` | 开启/关闭历史衰减排序；默认关，后出现的开关覆盖前者 |
 | `--kvmem-lrfu-lambda` | [0,1]，默认 0.5 |
@@ -323,7 +345,7 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 | `--chat-template` | 模板文件路径，不是模板正文 |
 | `--max-context` | 正整数 tokens，默认 8192 |
 | `--max-concurrency` | 1–8，默认 1 |
-| `--prefill-chunk` | 正的 128 整数倍，默认 1024；KVMem 下不超过 R |
+| `--prefill-chunk` | 向下对齐到 128 的倍数，KVMem 下限制到 R；0/省略由引擎自动选择（KVMem 使用 1024 再应用上述限制） |
 | `--decode-rounds-per-prefill` | 每个 prefill chunk 之间的 decode 轮次，0–4096；默认 0 按 chunk/64 自动计算；1 为交替执行 |
 | `--default-max-tokens` | 显式正整数；省略按上下文和并发准入预算计算；0 被当前解析器拒绝 |
 | `--device` | CUDA 可见设备索引，默认 0；与 devices 互斥 |
@@ -546,9 +568,13 @@ KVMem 新公共配置的默认策略由一份版本化定义提供，模板可�
 
 ### 当前实现约束与待统一项
 
+Windows 启动器先按原生参数顺序解析 `WorkerArgs` 中的 Context、Prefill（llama.cpp 的逻辑 batch）及 llama.cpp 块大小覆盖，再做对齐和容量检查。支持短/长别名及 `--flag=value`，重复项以最后一次指定为准；这些参数只输出一份最终值，`token_settings` 与启动命令一致。llama.cpp 的物理 batch 仍独立设置；ninfer 原生 `--prefill-chunk 0` 先按 KVMem 默认值 1024 解析，再受 R 和 128 对齐限制。
+
+解析时保留原生选项和值的边界：模型名称、模板或其他选项的值即使形如 `--max-context=524288`，也作为原值传递，不参与 token 参数覆盖。无值开关按锁定后端的 CLI 规则识别，后端新增此类开关时需同步更新启动器。
+
 | 条件 | 当前规则 | UI 与命令生成要求 |
 |---|---|---|
-| NInfer KVMem 开启 | B>=128、R>=64，均为 64 的倍数；B+R>=256 且不超过 max-context；H>0；prefill 为 128 的倍数且 <=R | 联动校验，显示具体哪一项不合法 |
+| NInfer KVMem 开启 | 归一化后 B>=128、R>=64，均为 64 的倍数；B+R>=256 且不超过 max-context；H>0；prefill 为 128 的倍数且 <=R | 先自动取整并显示生效值，再校验最低容量及组合约束 |
 | NInfer KV 总容量 | KVMem 按 (B+R)×并发生成；显式 kv-capacity 必须与之相等，不能为 auto | 展示推导值；不再提供一个相互独立的自动容量开关 |
 | sink/recent | 占用 B；NInfer 按 64 向下取整，sink 至少一页，recent 至少一页，二者不能超过 B | 同时展示输入值和有效值；媒体等其他必选区域还受运行时准入校验 |
 | 默认输出 | llama 接受 -1 或正数；NInfer 只接受正数，省略为动态预算；两边显式 0 均不可作为公共关闭值 | 公共 UI 使用“后端默认”与“固定上限” |
