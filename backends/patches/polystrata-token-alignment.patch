@@ -1,8 +1,8 @@
 diff --git a/src/poly/engine.cpp b/src/poly/engine.cpp
-index 2b7e9e5ac405689b8c3dad0c3c8636f05a7826b9..2aa1c3494395358a630e6dcd7334f5d78707e7e6 100644
+index 22f88793..bdb62cca 100644
 --- a/src/poly/engine.cpp
 +++ b/src/poly/engine.cpp
-@@ -1960,6 +1960,9 @@ void Engine::follow(int written) {
+@@ -1963,6 +1963,9 @@ void Engine::follow(int written) {
  
  void Engine::load(const Options& o) {
      opt_ = o;
@@ -13,7 +13,7 @@ index 2b7e9e5ac405689b8c3dad0c3c8636f05a7826b9..2aa1c3494395358a630e6dcd7334f5d7
      if (opt_.max_context < 16) throw std::runtime_error("the context must be at least 16 tokens");
      if (opt_.prompt_batch < 1 || opt_.prompt_batch > 4096)
 diff --git a/src/poly/kvmem.cpp b/src/poly/kvmem.cpp
-index fed083c63123bea44cc14b57b9ad798235cc741d..5919ed52dcbf0e54e009306084977bd2f2239532 100644
+index fed083c6..5919ed52 100644
 --- a/src/poly/kvmem.cpp
 +++ b/src/poly/kvmem.cpp
 @@ -1,6 +1,7 @@
@@ -40,7 +40,7 @@ index fed083c63123bea44cc14b57b9ad798235cc741d..5919ed52dcbf0e54e009306084977bd2
      require(block_tokens == 32 || block_tokens == 64, "KVMem block tokens must be 32 or 64");
      require(sessions >= 1 && sessions <= 16 && (sessions == 1 || (history_reuse && budget)),
 diff --git a/src/poly/kvmem.hpp b/src/poly/kvmem.hpp
-index f3d526cf5030a78a13f9cd69b369eef6f71ba0b6..e1a4f12f1344c604af9237b60c8b01d3cb98f0be 100644
+index f3d526cf..e1a4f12f 100644
 --- a/src/poly/kvmem.hpp
 +++ b/src/poly/kvmem.hpp
 @@ -22,7 +22,7 @@ namespace strata::poly {
@@ -61,10 +61,10 @@ index f3d526cf5030a78a13f9cd69b369eef6f71ba0b6..e1a4f12f1344c604af9237b60c8b01d3
  };
  
 diff --git a/src/poly/main.cpp b/src/poly/main.cpp
-index f332191f3dc78c7a46780d2b7c66d02875a11a13..35b05ec880d0d72c4b8c14d5780159ec0af31df8 100644
+index 735a1e86..a4920151 100644
 --- a/src/poly/main.cpp
 +++ b/src/poly/main.cpp
-@@ -1326,7 +1326,7 @@ void usage() {
+@@ -1337,7 +1337,7 @@ void usage() {
          "KVMem (opt-in, qwen35moe, single CUDA GPU, F16/Q8 KV, native batch 1..8):\n"
          "  --kvmem-budget B --kvmem-gen-reserve R --kvmem-host-mib H\n"
          "  --kvmem-sink-tokens N --kvmem-recent-tokens N (alignment to --kvmem-block-tokens)\n"

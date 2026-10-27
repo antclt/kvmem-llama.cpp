@@ -18,10 +18,10 @@ index bd62fa4d..caaf8e8a 100644
          """Keep the newest keep_files PNGs of response_format url (the oldest go)."""
          files = sorted((p for p in self.dir.glob("*.png") if FILE_NAME.match(p.name)), key=lambda p: p.stat().st_mtime)
 diff --git a/serve/server.py b/serve/server.py
-index 738d53d8..a651762b 100644
+index 22bd4750..241ac7c2 100644
 --- a/serve/server.py
 +++ b/serve/server.py
-@@ -2607,6 +2607,10 @@ class Vision:
+@@ -2611,6 +2611,10 @@ class Vision:
          """#914: close() for good: the server ends, so the encoder's directory (one ~10 MB .sve per image, on a tmpfs
          /tmp that is RAM) goes with it instead of piling up with every start.  unload() keeps it for the restart."""
          self.close()
@@ -32,7 +32,7 @@ index 738d53d8..a651762b 100644
          shutil.rmtree(self.dir, ignore_errors=True)
  
  
-@@ -7685,7 +7689,7 @@ def shutdown(svc: Service, httpd, hub=None) -> None:
+@@ -7689,7 +7693,7 @@ def shutdown(svc: Service, httpd, hub=None) -> None:
      ones the server started with (#37) - and the MCP servers PolyStrata started."""
      engine, vision = svc.engine, svc.vision
      closers = [httpd.shutdown, getattr(engine, "close", None), vision.shutdown if vision else None,

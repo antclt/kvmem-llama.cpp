@@ -226,90 +226,99 @@
   "polystrata": {
     "path": "backends/polystrata",
     "upstream": "https://github.com/VecSzn/PolyStrata.git",
-    "base_commit": "145493e66580c80bba09b0130f667a2b1789da69",
+    "base_commit": "bfd8911efbb8c27214d5aabc511907c6149171e7",
     "license_file": "backends/polystrata/LICENSE",
-    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 32); shutdown releases the frontend's shared log handles so Windows removes their temporary directory",
-    "patched_tree": "f4cbbcb99f4ba312188005ffa7163eaeedbd51d3",
-    "source_tag": "v0.1.45-poly.4",
+    "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 32); shutdown releases the frontend's shared log handles so Windows removes their temporary directory; ROCm/HIP builds compile the portable KVMem core and its query scorer through hip_compat",
+    "patched_tree": "a3029b723e1dd0fe306d9de6e2b0ad4d8551cdfc",
+    "source_tag": "v0.1.45-poly.5",
     "patches": [
       {
         "id": "kvmem",
         "path": "backends/patches/polystrata-kvmem.patch",
-        "sha256": "40cf4a53c595cb1f208468d90cbb1f1596ffb58319ba37d1b8b1a7998bb281eb",
+        "sha256": "d2b1f4801b5d972c8bf298fe079eecbef3bc08f79daab718633cfd250dd3ae71",
         "requires": [],
-        "after_tree": "2f0cad79a1a673466707d09c8247c2cead4e0b30"
+        "after_tree": "4b502212e936522f1cb6917fb34e8ea00df1b876"
       },
       {
         "id": "attention-feedback-performance",
         "path": "backends/patches/polystrata-attention-feedback-performance.patch",
-        "sha256": "cc20630d5ef879158fb0b7108fdaeb3be2688c70ac60f2c267604b24e1d48f8c",
+        "sha256": "82674ebaf7862d1e77008799afe2c1756c4ea0922a3eefa91d0c13c73f310f9c",
         "requires": [
           "kvmem"
         ],
-        "after_tree": "2f8b7a269ec4f1b57415f46dd57bcba9bb1f6cbc"
+        "after_tree": "fe6fbb1214c2760284e407ead3180691625ceb55"
       },
       {
         "id": "elastic-workspace",
         "path": "backends/patches/polystrata-elastic-workspace.patch",
-        "sha256": "100c7c5758a231fb62b5b3c04a5c6e0dd63ac1c3ecffa79cb909e3e32fb276de",
+        "sha256": "75617931e5eacd83dc2a73ba416427e1ac6f62f9c45a9002fc15c99041eda713",
         "requires": [
           "attention-feedback-performance"
         ],
-        "after_tree": "d144aafe7af61b0943dc2364ac94502fe92ae24f"
+        "after_tree": "68d0a7fd8913ab68a2051761be019e85a060281a"
       },
       {
         "id": "elastic-kv-reclaim",
         "path": "backends/patches/polystrata-elastic-kv-reclaim.patch",
-        "sha256": "81f758c117a06104cd809143bd3a6e99cdd125768db83fc021986b3d6fefa932",
+        "sha256": "5c92dfd0fff687cfa9b17cb68e7b749fa811cfa9029aaf4397b19f741150d69f",
         "requires": [
           "elastic-workspace"
         ],
-        "after_tree": "cbd7abd75c08b01a62ad07645377c38518934e53"
+        "after_tree": "c572871ff7a927ae24e7e8fafa7f759ba0260a18"
       },
       {
         "id": "elastic-headroom",
         "path": "backends/patches/polystrata-elastic-headroom.patch",
-        "sha256": "0bffce1d3d185d345794b5384086801ad6ce1317b45154a9dae2dac79191c95e",
+        "sha256": "af77035551336dc16aeefb37f73ee0a15eec459fa6dac45001924cd654280cd8",
         "requires": [
           "elastic-kv-reclaim"
         ],
-        "after_tree": "72f3c1125b28e24b9e1a9dab7077f2c1d2de39d8"
+        "after_tree": "cb8bb6b6180af946861647b1c741fdfeb6f3e426"
       },
       {
         "id": "elastic-mtp",
         "path": "backends/patches/polystrata-elastic-mtp.patch",
-        "sha256": "94122ad2f25bcbdffbbf77d3e531128777edbc615d2d1b59dde651703a35f957",
+        "sha256": "638bb375b158288677a87ea77fc5dbab3ae1e03cc08dd17ba041c31b82f8c768",
         "requires": [
           "elastic-headroom"
         ],
-        "after_tree": "26c8b98f96d09bb2f9a0c6bdaf687c03ee374fe4"
+        "after_tree": "fd6ff1c7c8c9f1f7052be8b86c2a795a9bfd54bc"
       },
       {
         "id": "block-tokens",
         "path": "backends/patches/polystrata-block-tokens.patch",
-        "sha256": "46183d6987e5530229ff38806db21b7f2ea2d7fbea482015f83739b7ca89a813",
+        "sha256": "e8abaa77c267682d340d29b3a1a2f9b59e5622f8f17e5b46cc9f1cb22c571f63",
         "requires": [
           "elastic-mtp"
         ],
-        "after_tree": "51266e7969b708c020c3de508384aa584e535c10"
+        "after_tree": "f20cef6c6da7fe77c5225c4cb836421a28f7bcde"
+      },
+      {
+        "id": "hip-kvmem",
+        "path": "backends/patches/polystrata-hip-kvmem.patch",
+        "sha256": "21c45bda056b5b1da8f6cd1136c7a3785a42cc8cf8ed256f4fe1f3496661f0d2",
+        "requires": [
+          "block-tokens"
+        ],
+        "after_tree": "9e94e300b4611fe2f1b852cdb7a04072c7fac1b2"
       },
       {
         "id": "serve-log-close",
         "path": "backends/patches/polystrata-serve-log-close.patch",
-        "sha256": "ab64ed2c85429dfa252ef423c18557a10a780fdf7bb2ab3f2cefc901e89a47f8",
+        "sha256": "9330f247af2c2c8943796e478f77bc1a3f83513c1647b73aeb29a1da9a88e5e4",
         "requires": [
           "block-tokens"
         ],
-        "after_tree": "8bee3407b3cbb245f2d2d8b454258218a0c3e01a"
+        "after_tree": "a368a17b3a2af759a9c7cef0ee7d153bfe080708"
       },
       {
         "id": "token-alignment",
         "path": "backends/patches/polystrata-token-alignment.patch",
-        "sha256": "e198e06df655433ca556b0d9e6141ccd6242187c382922460c9c70de5be32fd4",
+        "sha256": "54161d107290377dc50d8ff19bad816ab6622174107be88fb7b3a661bcd342c0",
         "requires": [
           "serve-log-close"
         ],
-        "after_tree": "f4cbbcb99f4ba312188005ffa7163eaeedbd51d3",
+        "after_tree": "a3029b723e1dd0fe306d9de6e2b0ad4d8551cdfc",
         "source": "Normalize startup token budgets before capacity checks; report effective values"
       }
     ]
