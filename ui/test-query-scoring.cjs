@@ -30,11 +30,15 @@ module.exports=async({browser,base,info})=>{
   // Deliver the observed report through the controller boundary so polling and
   // asynchronous inspection both see the same runtime state.
   runtime={state:'ready',active_config:{schema_version:1,parameters:sent},effective_scoring:{scorer:'page-softmax',agg:'max',graph_alpha:.7,lrfu:true,query_max_tokens:64,query_replay_max_tokens:256},scoring_confirmed:true};
-  await page.waitForFunction(()=>document.querySelector('[data-effective-scoring]')?.textContent.includes('0.7'));
-  assert.match(await page.locator('[data-effective-scoring]').textContent(),/page-softmax.*max.*0.7.*64.*256/);
+  await page.waitForFunction(()=>document.querySelector('[data-runtime-key="GraphAlpha"] .s-runtime-value')?.textContent==='0.7');
+  for(const [key,value] of [['QueryScorer','page-softmax'],['ScoreAggregation','max'],['GraphAlpha','0.7'],['QueryMaxTokens','64 tokens'],['QueryReplayMaxTokens','256 tokens']]){
+    const row=page.locator(`[data-runtime-key="${key}"]`);
+    assert.equal(await row.locator('.s-runtime-value').textContent(),value);
+    assert.equal(await row.getAttribute('data-source'),'service');
+  }
   await openAdvanced();assert.equal(await field('GraphAlpha').isDisabled(),true);
   assert.equal(await field('GraphAlpha').inputValue(),'0.2','locked launch settings retain the submitted value');
-  assert.match(await page.locator('[data-effective-scoring]').textContent(),/0.7/,'the observed report remains distinct from launch settings');
+  assert.equal(await page.locator('[data-runtime-key="GraphAlpha"] .s-runtime-value').textContent(),'0.7','the observed report remains distinct from launch settings');
   if(process.env.SCREENSHOT_DIR)await page.screenshot({path:process.env.SCREENSHOT_DIR+'/query-scoring.png',fullPage:true});
   assert.deepEqual(errors,[]);
  }finally{await context.close();}

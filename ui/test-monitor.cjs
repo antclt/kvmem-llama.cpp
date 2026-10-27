@@ -68,6 +68,7 @@ const server = http.createServer((req, res) => {
             default_generation_settings: { n_ctx: 1024 },
             kvmem: fixture.kvmem || {},
             execution: fixture.unknown ? {} : {mode:fixture.dual ? "layer" : "single", monitor_devices: fixture.cpu ? [] : devices},
+            ...fixture.props,
           }
         : req.url === "/slots"
           ? [
@@ -206,11 +207,11 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     assert.match(await page.locator('[data-value="speculative-live"]').textContent(),/MTP.*接受 20 \/ 提议 30.*N-gram.*5.*10/);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',
       {detail:{state:'ready',active_config:{parameters:{Backend:'ninfer',SpeculativeMode:'mtp',DraftTokens:4}}}})));
-    assert.match(await page.locator('[data-value="mtp"]').textContent(),/提议 30 \/ 接受 20/);
-    assert.doesNotMatch(await page.locator('[data-value="mtp"]').textContent(),/提议 40|接受 25/);
+    assert.match(await page.locator('[data-runtime-key="SpeculativeMode"]').textContent(),/MTP/);
+    assert.doesNotMatch(await page.locator('[data-runtime-config]').textContent(),/提议 40|接受 25/);
     delete fixtureScenario.nativeRequestMetrics.mtp_drafts_offered;
     delete fixtureScenario.nativeRequestMetrics.mtp_drafts_accepted;
-    await page.waitForFunction(()=>!document.querySelector('[data-value="mtp"]').textContent.includes('所选请求'));
+    await page.waitForTimeout(1200);
     assert.match(await page.locator('[data-value="speculative-live"]').textContent(),/推测.*接受 25 \/ 提议 40/);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:{state:'stopped'}})));
     assert.equal(await page.locator('[data-live-speed]').getAttribute('title'),'');
@@ -234,18 +235,119 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     assert.equal(await page.locator('#monitor-note-decode p').evaluate(el=>getComputedStyle(el).fontSize), '14px');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#monitor-note-decode').isVisible(), false);
-    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 设置未提供');
-    fixtureScenario = {kvmem:{mtp:true,mtp_drafts:2}};
-    await page.waitForFunction(()=>document.querySelector('[data-value="mtp"]').textContent.includes('草稿上限 2'));
-    const runtime = parameters => page.evaluate(parameters=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',
-      {detail:{state:'ready',instance:'mtp-fixture',active_config:{parameters}}})), parameters);
-    await runtime({Backend:'llamacpp',SpeculativeMode:'mtp',DraftTokens:3,DraftPolicy:'adaptive'});
-    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 已开启 · 草稿上限 3 token · 自适应');
-    await runtime({Backend:'llamacpp',SpeculativeMode:'none'});
-    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 未开启');
-    await runtime({Backend:'polystrata',SpeculativeMode:'mtp',DraftTokens:1});
-    assert.equal(await page.locator('[data-value="mtp"]').textContent(), 'MTP 已开启 · 草稿上限 2 token');
-    await runtime({});fixtureScenario = {};
+    // Run configuration sources are distinct from per-request counters and editable drafts.
+    const runtime = detail => page.evaluate(detail=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail})),detail);
+    const setting = key => page.locator(`[data-runtime-key="${key}"]`);
+    const value = key => setting(key).locator('.s-runtime-value').textContent();
+    await runtime({state:'ready',instance:'config-a',active_config:{parameters:{Backend:'llamacpp',Budget:10001,Reserve:1001,
+      KvTypeK:'q8_0',KvTypeV:'q4_0',SpeculativeMode:'dflash2',DraftTokens:5,DraftPolicy:'fixed',Concurrency:2,ThinkingBudget:0,
+      MaxTokens:0,FastPrefill:false,DiskEnabled:false,DiskMiB:4096,ApiKey:'secret-never-render',WorkerArgs:['--secret','not-a-setting'] }},
+      token_settings:{block_tokens:32,requested:{Budget:10001,Reserve:1001},effective:{Budget:9984,Reserve:992,Prefill:512}},
+      effective_scoring:{scorer:'page-softmax',agg:'mean',graph_alpha:0,lrfu:false,lambda:0.5,top_frac:0.9,block_tokens:32}});
+    assert.equal(await value('SpeculativeMode'),'DFlash2');
+    assert.equal(await value('KvType'),'K q8_0 / V q4_0');
+    assert.equal(await value('Budget'),'9,984');
+    assert.equal(await setting('Budget').getAttribute('data-source'),'plan');
+    assert.match(await page.locator('[data-runtime-adjustments]').textContent(),/10,001 tokens → 启动 9,984 tokens/);
+    assert.equal(await page.locator('[data-runtime-config-details]').isVisible(),false);
+    assert.equal(await page.locator('.s-runtime-source').count(),0);
+    assert.doesNotMatch(await page.locator('[data-runtime-primary]').innerText(),/tokens|启动计划|服务报告|启动配置/);
+    assert.equal(await value('DiskMiB'),'关闭');
+    assert.equal(await value('ThinkingBudget'),'不单设上限');
+    assert.equal(await value('Lrfu'),'关闭');
+    assert.equal(await value('GraphAlpha'),'0');
+    assert.equal(await setting('BlockTokens').getAttribute('data-source'),'service');
+    assert.doesNotMatch(await page.locator('[data-runtime-config]').textContent(),/secret-never-render|not-a-setting|MTP 未开启/);
+    await page.locator('[data-runtime-toggle]').click();
+    await page.waitForTimeout(1200);
+    assert.equal(await page.locator('[data-runtime-toggle]').getAttribute('aria-expanded'),'true');
+
+    // Native algorithm/length win over launch intent, and expose a difference without inventing activity.
+    fixtureScenario={props:{speculative:{algorithm:'dflash2',draft_tokens:3,adaptive:false,ngram_draft_tokens:0},
+      kvmem:{enabled:true,defaults:{enable_thinking:false,reasoning_budget_tokens:0}},
+      total_slots:2,default_generation_settings:{n_ctx:32768,params:{n_predict:-1}}}};
+    await page.waitForFunction(()=>document.querySelector('[data-runtime-key="DraftTokens"] .s-runtime-value')?.textContent==='3 tokens');
+    assert.equal(await setting('DraftTokens').getAttribute('data-source'),'service');
+    assert.equal(await setting('DraftTokens').getAttribute('data-differs'),'true');
+    assert.equal(await value('ThinkingMode'),'关闭');
+    assert.equal(await value('ThinkingBudget'),'立即结束思考');
+    assert.equal(await value('MaxTokens'),'随剩余上下文');
+    assert.equal(await setting('MaxTokens').getAttribute('data-differs'),null,'0 at launch and native -1 both mean remaining context');
+    // A changed launcher instance invalidates old service values immediately, including same-backend restart.
+    await runtime({state:'starting',instance:'config-b',active_config:{parameters:{Backend:'llamacpp',Context:65536,SpeculativeMode:'none'}}});
+    assert.equal(await value('Context'),'65,536');
+    assert.equal(await setting('Context').getAttribute('data-source'),'launch');
+    assert.equal(await value('SpeculativeMode'),'关闭');
+    assert.equal(await value('Budget'),'—');
+    await runtime({state:'stopped',instance:'config-c'});
+    assert.equal(await value('Context'),'—');
+    assert.equal(await value('SpeculativeMode'),'—');
+
+    fixtureScenario={backend:'polystrata',props:{kvmem:{budget_tokens:8192,reserve_tokens:512,kv_type:'fp16',block_tokens:32,
+      host_mib:2048,disk_mib:0,ssd:false,retained_sessions:3,mtp:true,mtp_drafts:2,vram_reserve_mib:256},
+      effective_settings:{effective:{max_tokens:4096,reasoning_effort:'none',reasoning_budget_tokens:0,preserve_thinking:false}},total_slots:1}};
+    await runtime({state:'ready',instance:'config-poly',active_config:{parameters:{Backend:'polystrata',Budget:8192,RetainedSessions:3}}});
+    await page.waitForFunction(()=>document.querySelector('[data-runtime-key="KvType"] .s-runtime-value')?.textContent==='f16');
+    assert.equal(await value('SpeculativeMode'),'MTP');
+    assert.equal(await setting('Budget').getAttribute('data-source'),'service');
+    assert.equal(await value('RetainedSessions'),'2');
+    assert.equal(await value('HostMiB'),'2,048 MiB');
+    assert.equal(await value('ThinkingBudget'),'自动预留答案空间');
+    assert.equal(await value('ThinkingMode'),'关闭');
+    assert.equal(await value('PreserveThinking'),'关闭');
+    assert.equal(await value('VramReserveMiB'),'256 MiB');
+
+    fixtureScenario={backend:'ninfer',props:{kvmem:{selected_tokens:16384,reserve_tokens:1024,sink_tokens:64,recent_tokens:128,
+      host_payload_budget_bytes:4*1024**3,capabilities:{disk_budget_bytes:8*1024**3,ssd_enabled:true,max_active_requests:2,ngram_min_match:12}},
+      speculative:{algorithm:'dflash2',draft_tokens:5,adaptive:false,ngram_draft_tokens:16},
+      execution:{monitor_devices:[],stage_layers:[20,20]},total_slots:2}};
+    await runtime({state:'ready',instance:'config-ninfer',active_config:{parameters:{Backend:'ninfer',Budget:16384,Reserve:1024,
+      Prefill:512,Context:32768,KvType:'int8',SpeculativeMode:'dflash2',DraftTokens:5,NgramDrafts:16,FastPrefill:false,
+      Concurrency:2,MaxTokens:4096,ThinkingMode:'default',ThinkingBudget:0,PreserveThinking:false,
+      DiskEnabled:true,DiskPath:'C:/cache/<img src=x onerror=bad()>',ListenHost:'127.0.0.1',Port:18200}},
+      token_settings:{block_tokens:64,effective:{Prefill:512}},effective_scoring:{scorer:'page-softmax',agg:'mean',graph_alpha:0.1,lrfu:true,query_max_tokens:512,query_replay_max_tokens:2048}});
+    await page.waitForFunction(()=>document.querySelector('[data-runtime-key="NgramDrafts"] .s-runtime-value')?.textContent==='16 tokens');
+    assert.equal(await value('Budget'),'16,384');
+    assert.equal(await value('Reserve'),'1,024');
+    assert.equal(await value('FastPrefill'),'关闭');
+    assert.equal(await setting('FastPrefill').getAttribute('data-source'),'launch');
+    assert.equal(await value('StageLayers'),'20 / 20');
+    assert.equal(await page.locator('[data-runtime-config] img').count(),0);
+    assert.match(await value('DiskPath'),/<img/);
+    await page.selectOption('[data-language-select]','en');
+    assert.equal(await page.locator('[data-runtime-toggle]').getAttribute('aria-expanded'),'true');
+    assert.equal(await value('FastPrefill'),'Off');
+    assert.equal(await page.locator('.s-runtime-source').count(),0);
+    assert.equal(await page.locator('[data-runtime-config]').getAttribute('aria-label'),'Current runtime configuration');
+    await page.selectOption('[data-language-select]','zh-CN');
+    if(process.env.MONITOR_SCREENSHOT_DIR){
+      // The screenshots are explicitly labelled fixture previews, not benchmark evidence.
+      fixtureScenario={...fixtureScenario,model:'Qwen3.5-27B · 界面预览（模拟数据）',props:{...fixtureScenario.props,
+        default_generation_settings:{n_ctx:32768,params:{n_predict:4096}},
+        execution:{mode:'single',monitor_devices:[{uuid:'GPU-test-a',name:'NVIDIA GeForce RTX 5060 Ti'}]}}};
+      await page.waitForFunction(()=>document.querySelector('[data-value="model"]').textContent.includes('界面预览'));
+      fs.mkdirSync(process.env.MONITOR_SCREENSHOT_DIR,{recursive:true});
+      await page.screenshot({path:path.join(process.env.MONITOR_SCREENSHOT_DIR,'runtime-details.png'),fullPage:true});
+      await page.locator('[data-runtime-toggle]').click();
+      await page.screenshot({path:path.join(process.env.MONITOR_SCREENSHOT_DIR,'runtime-overview.png'),fullPage:true});
+      await page.setViewportSize({width:390,height:844});
+      await page.screenshot({path:path.join(process.env.MONITOR_SCREENSHOT_DIR,'runtime-mobile.png'),fullPage:true});
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'runtime mobile overflow');
+      await page.setViewportSize({width:1440,height:1100});
+    }
+    if(await page.locator('[data-runtime-config-details]').isVisible())await page.locator('[data-runtime-toggle]').click();
+    for(const lang of ['zh-CN','en']){
+      await page.selectOption('[data-language-select]',lang);
+      await page.setViewportSize({width:1366,height:768});
+      const geometry=await page.locator('[data-runtime-config]').evaluate(el=>({height:el.getBoundingClientRect().height,
+        tops:[...el.querySelectorAll('[data-runtime-primary] .s-runtime-item')].map(x=>Math.round(x.getBoundingClientRect().top))}));
+      assert.equal(new Set(geometry.tops).size,1,'key parameters fit on one laptop-width line: '+lang);
+      assert.ok(geometry.height<45,'runtime summary leaves space for live monitoring: '+lang);
+    }
+    await page.selectOption('[data-language-select]','zh-CN');
+    await page.setViewportSize({width:1440,height:1100});
+    await runtime(null);fixtureScenario = {};
+    await page.waitForFunction(()=>document.querySelector('[data-runtime-key="SpeculativeMode"] .s-runtime-value')?.textContent==='—');
     assert.equal(await page.locator("[data-gpus] article").count(), 1);
     assert.equal(await page.locator("[data-service-state]").textContent(), "生成中");
     fixtureScenario = {dual: true, idle: true, missing: true};
