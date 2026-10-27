@@ -40,7 +40,7 @@ class ConsoleTests(unittest.TestCase):
         def normalize(**values):
             return console.normalize({'schema_version':1,'parameters':{'Backend':'polystrata',**values}},
                                      ['polystrata','ninfer','llamacpp'])['parameters']
-        self.assertEqual(normalize()['BlockTokens'],64)
+        self.assertEqual(normalize()['BlockTokens'],32)
         for size in (32,64):
             self.assertEqual(normalize(BlockTokens=size)['BlockTokens'],size)
         for value in (16,128,True,32.0,'32',None):

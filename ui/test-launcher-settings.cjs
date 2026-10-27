@@ -23,7 +23,9 @@ module.exports = async function settingsChecks({browser,base,info}) {
  await page.route('**/api/launcher/browse-template',route=>route.fulfill({json:{path:'C:/templates/ui fixture.jinja'}}));
  await page.route('**/api/launcher/preview',async route=>{
   previews.push(route.request().postDataJSON().parameters);
-  await route.fulfill({json:{argv:['fixture-worker','--kvmem-gen-reserve','1024'],environment:{}}});
+  await route.fulfill({json:{argv:['fixture-worker','--kvmem-gen-reserve','1024'],environment:{},token_settings:{block_tokens:64,
+    requested:{Budget:10001,Reserve:1001,Prefill:999,SinkTokens:101,RecentTokens:101},
+    effective:{Budget:9984,Reserve:960,Prefill:896,SinkTokens:64,RecentTokens:64}}}});
  });
  const field=key=>page.locator(`[data-param=${key}]`);
  const group=index=>page.locator(`#launch-tab-${index}`).click();
@@ -34,6 +36,8 @@ module.exports = async function settingsChecks({browser,base,info}) {
   await page.locator('[data-action=preview]').click();
   await page.waitForFunction(()=>{const text=document.querySelector('[data-check-summary]')?.textContent;return text&&text!=='正在检查…';});
   assert.ok((await page.locator('[data-check-summary]').textContent()).includes('检查通过'),await page.locator('[data-dialog=check]').textContent());
+  assert.ok((await page.locator('[data-dialog=check]').textContent()).includes('10001 → 9984 tokens'),'preview shows requested and effective Budget');
+  assert.ok((await page.locator('[data-dialog=check]').textContent()).includes('999 → 896 tokens'),'preview shows capped and aligned Prefill');
   assert.equal(previews.length,before+1,'preview reaches controller boundary');
   const result=previews.at(-1);await page.locator('[data-dialog=check] [data-dialog-close]').click();return result;
  };
@@ -168,7 +172,7 @@ module.exports = async function settingsChecks({browser,base,info}) {
   await field('Concurrency').fill('9');
   assert.equal(await field('SpeculativeMode').evaluate(el=>el.validity.valid),false,'llama.cpp concurrency above eight is blocked');
   await field('Backend').selectOption('polystrata');await group(0);
-  assert.equal(await field('BlockTokens').inputValue(),'64');
+  assert.equal(await field('BlockTokens').inputValue(),'32');
   await field('BlockTokens').selectOption('32');await saved();
   const blockDraft=await page.evaluate(()=>JSON.parse(localStorage.getItem('kvmem-launch-draft-v2')));
   assert.equal(blockDraft.parameters.BlockTokens,32,'numeric select saves a number');

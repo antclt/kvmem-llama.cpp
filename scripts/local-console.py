@@ -166,7 +166,7 @@ def normalize(data, backends):
     if p.get('Backend') not in NATIVE or p.get('Backend') not in backends:
         raise ValueError('This backend is not installed in the selected backend checkout')
     if p['Backend'] == 'polystrata':
-        p.setdefault('BlockTokens', 64)
+        p.setdefault('BlockTokens', 32)
         if type(p['BlockTokens']) is not int or p['BlockTokens'] not in (32, 64):
             raise ValueError('PolyStrata BlockTokens must be 32 or 64')
     elif 'BlockTokens' in p:
@@ -580,7 +580,7 @@ class Controller:
             result['worker'] = self.worker_capabilities(native_argv[0], params['Backend'])
             result['resolved_scoring'] = self.scoring_from_argv(native_argv)
             if params['Backend'] == 'polystrata':
-                block = params.get('BlockTokens', 64)
+                block = params.get('BlockTokens', 32)
                 if block not in result['worker'].get('block_tokens', {}).get('supported', []):
                     raise ValueError('PolyStrata worker does not support BlockTokens; update the backend')
                 if '--kvmem-block-tokens' not in native_argv or int(native_argv[native_argv.index('--kvmem-block-tokens') + 1]) != block:
@@ -857,6 +857,7 @@ class Controller:
             result['planned_scoring'] = copy.deepcopy(self.active_plan.get('resolved_scoring')) if self.active_plan else None
             result['effective_scoring'] = dict(self.observed_scoring) or None
             result['worker'] = copy.deepcopy(self.active_plan.get('worker')) if self.active_plan else None
+            result['token_settings'] = copy.deepcopy(self.active_plan.get('token_settings')) if self.active_plan else None
             planned = result['planned_scoring']
             result['scoring_confirmed'] = bool(planned and all(
                 key in self.observed_scoring and self.observed_scoring[key] == value for key, value in planned.items()))
@@ -916,8 +917,8 @@ class Controller:
 
     def start(self, data):
         clean = normalize(data, self.backends)
-        # Never trust a cached browser report. Inspect this exact launch request.
         clean['parameters'] = self.prefer_packaged_worker(clean['parameters'])
+        # Never trust a cached browser report. Inspect this exact launch request.
         health = self.inspect_model(clean, for_launch=True)
         if not health['can_start']:
             errors = [c['zh'] + ' / ' + c['en'] + ': ' + c.get('detail', '')
@@ -938,9 +939,12 @@ class Controller:
                     raise ValueError(f'端口 {port} 无法使用，可能已有服务占用。请在“服务与并发”中更换端口，'
                                      '或先停止原服务。此控制台不会停止外部服务。') from error
             env = dict(os.environ); env.update(result.get('environment', {}))
-            plan_summary = {'resolved_scoring': result.get('resolved_scoring'), 'worker': result.get('worker')}
+            plan_summary = {'resolved_scoring': result.get('resolved_scoring'), 'worker': result.get('worker'), 'token_settings': result.get('token_settings')}
             self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
             self.log = self.log_path.open('wb')
+            for change in (result.get('token_settings') or {}).get('adjustments', []):
+                self.log.write((f"KVMEM_CONFIG {change['parameter']}: {change['requested']} -> {change['effective']} tokens ({change['reason']})\n").encode('utf-8'))
+            self.log.flush()
             self.log_session = secrets.token_hex(12)
             self.log_metadata = {'backend': clean['parameters']['Backend'],
                                  'model': Path(clean['parameters'].get('Model', '')).name,
@@ -1110,11 +1114,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/launcher/info':
                 self.reply(200, {'token': self.control.token, 'backends': self.control.backends,
                                 'console_protocol': 1, 'console_root': str(ROOT.resolve()),
+                                'prefer_bundled_worker': self.control.prefer_bundled_worker,
                                 'model_library_version': 1,
                                 'model_inspection_version': 1,
                                 'kv_cache_version': 1,
                                 'query_scoring_version': 2,
-                                'prefer_bundled_worker': self.control.prefer_bundled_worker,
                                 'speculative_capabilities': self.control.speculative_profiles,
                                 'state_dir': str(self.control.state_dir),
                                 'backend_root': str(self.control.backend_root), 'gpus': self.server.gpus,
@@ -1281,12 +1285,12 @@ def main():
     parser.add_argument('--backend-root', type=Path, default=ROOT)
     parser.add_argument('--state-dir', type=Path, default=ROOT / 'build/local-console')
     parser.add_argument('--open-browser', action='store_true', help='open the UI; reuse an identical running console')
+    parser.add_argument('--prefer-bundled-worker', action='store_true',
+                        help='prefer a worker shipped inside this installation over saved external paths')
     parser.add_argument('--prompt-port', action='store_true', help='ask for another console port when unavailable')
     parser.add_argument('--language', choices=('zh-CN', 'en'), default='zh-CN',
                         help='startup message language; en also opens the UI in English')
     args = parser.parse_args()
-    parser.add_argument('--prefer-bundled-worker', action='store_true',
-                        help='prefer a worker shipped inside this installation over saved external paths')
     control = Controller(args.backend_root, args.state_dir, args.port, args.prefer_bundled_worker)
     while True:
         url = f'http://127.0.0.1:{args.port}/monitor/' + ('?lang=en' if args.language == 'en' else '')

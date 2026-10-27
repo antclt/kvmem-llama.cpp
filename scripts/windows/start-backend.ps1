@@ -24,7 +24,7 @@ param(
     [switch]$PreserveThinking,
     [ValidateRange(256, 2147483647)][int]$Context = 262144,
     [ValidateRange(128, 2147483647)][int]$Budget = 32768,
-    [ValidateSet(32,64)][int]$BlockTokens = 64,
+    [ValidateSet(32,64)][int]$BlockTokens = 32,
     [ValidateRange(32, 2147483647)][int]$Reserve = 1024,
     [ValidateRange(1, 1048576)][int]$HostMiB = 16384,
     [ValidateRange(1, 2147483647)][int]$Prefill = 128,
@@ -72,6 +72,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'native-process.ps1')
 . (Join-Path $PSScriptRoot 'query-scoring.ps1')
+. (Join-Path $PSScriptRoot 'token-settings.ps1')
 $WorkerArgs = Resolve-KVMemWorkerArgs $PSBoundParameters $WorkerArgsTail
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $specProfiles = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../speculative-capabilities.json') -Raw | ConvertFrom-Json
@@ -104,7 +105,7 @@ if ($Backend -eq 'ninfer') {
     }
 }
 if ($Backend -eq 'polystrata') {
-    $capabilities.block_tokens = @{default=64;supported=@(32,64);startup_fixed=$true}
+    $capabilities.block_tokens = @{default=32;supported=@(32,64);startup_fixed=$true}
     $capabilities.supported_combinations=@{
         text=@{architectures=@('qwen35moe');kv=@('f16','q8_0');max_concurrency=8;max_devices=1}
         mtp=@{drafts=@(0..3);solo=$true;batch=$false;batch_fallback='ordinary_decode'}
@@ -116,11 +117,22 @@ if ($Describe) { $capabilities | ConvertTo-Json -Depth 4; return }
 if ($Backend -ne 'polystrata' -and $PSBoundParameters.ContainsKey('BlockTokens')) {
     throw '-BlockTokens configures PolyStrata in this launcher'
 }
-if ($Backend -ne 'polystrata' -and ($Reserve -lt 64 -or $Prefill -lt 128)) {
-    throw 'This backend requires Reserve >=64 and Prefill >=128 in the shared launcher'
+if ($Backend -eq 'polystrata' -and !$PSBoundParameters.ContainsKey('Prefill')) { $Prefill=512 }
+$resolvedBlock = if ($Backend -eq 'llamacpp') { 32 } else { $BlockTokens }
+# A native logical-batch override must not change the independently emitted ubatch.
+$llamaPhysicalPrefill=$Prefill
+$tokenInputs = Resolve-KVMemTokenOverrides $Backend $WorkerArgs $Context $Prefill $resolvedBlock
+$WorkerArgs = @($tokenInputs.WorkerArgs)
+$resolvedBlock = $tokenInputs.BlockTokens
+$resolvedContext = $tokenInputs.Context
+$tokenPlan = Resolve-KVMemTokenSettings $Backend $resolvedBlock $Budget $Reserve $tokenInputs.Prefill $SinkTokens $RecentTokens $resolvedContext
+$Budget=[int]$tokenPlan.effective.Budget; $Reserve=[int]$tokenPlan.effective.Reserve
+$Prefill=[int]$tokenPlan.effective.Prefill; $SinkTokens=[int]$tokenPlan.effective.SinkTokens; $RecentTokens=[int]$tokenPlan.effective.RecentTokens
+foreach ($change in $tokenPlan.adjustments) {
+    Write-Warning "KVMEM_CONFIG $($change.parameter): $($change.requested) -> $($change.effective) tokens ($($change.reason))"
 }
 if ($Backend -eq 'polystrata') {
-    & (Join-Path $PSScriptRoot 'start-polystrata.ps1') -Parameters $PSBoundParameters -Root $root -WorkerArgs $WorkerArgs
+    & (Join-Path $PSScriptRoot 'start-polystrata.ps1') -Parameters $PSBoundParameters -Root $root -WorkerArgs $WorkerArgs -TokenPlan $tokenPlan
     return
 }
 # Canonical settings take precedence over defaults, while conflicting explicit
@@ -237,9 +249,8 @@ if ($Backend -eq 'ninfer') {
     }
     $requestedNgramDrafts = $NgramDrafts
     if ($Concurrency -gt 1 -and $NgramDrafts -gt 15) { $NgramDrafts = 15 }
-    if ($Budget % 64 -or $Reserve % 64 -or $Prefill % 128 -or $Prefill -gt $Reserve -or
-        ([long]$Budget + $Reserve) -gt $Context -or $KvType -notin @('bf16', 'int8', 'fp8', 'nvfp4', 'k8v4', 'rk8v4', 'rk4v4', 'rk4v4-e8', 'rk2v4-e8')) {
-        throw 'ninfer requires B/R aligned to 64, prefill aligned to 128 and <= R, B+R <= Context, bf16/int8/fp8/nvfp4/k8v4/rk8v4/rk4v4/rk4v4-e8/rk2v4-e8'
+    if ($KvType -notin @('bf16', 'int8', 'fp8', 'nvfp4', 'k8v4', 'rk8v4', 'rk4v4', 'rk4v4-e8', 'rk2v4-e8')) {
+        throw 'ninfer KvType must be bf16/int8/fp8/nvfp4/k8v4/rk8v4/rk4v4/rk4v4-e8/rk2v4-e8'
     }
     if ($AdaptiveMtp -and !$MtpDrafts) {
         throw 'Adaptive MTP requires MTP; image, ngram and disk limits still apply'
@@ -261,7 +272,7 @@ if ($Backend -eq 'ninfer') {
     if ($requestedNgramDrafts -ne $NgramDrafts) {
         Write-Warning "NgramDrafts reduced from $requestedNgramDrafts to $NgramDrafts for Concurrency $Concurrency"
     }
-    $nativeArgs = @($Model, '--host', $ListenHost, '--port', "$Port", '--max-context', "$Context",
+    $nativeArgs = @($Model, '--host', $ListenHost, '--port', "$Port", '--max-context', "$resolvedContext",
         '--max-concurrency', "$Concurrency", '--prefill-chunk', "$Prefill",
         '--kvmem-budget', "$Budget", '--kvmem-gen-reserve', "$Reserve", '--kvmem-host-mib', "$HostMiB",
         '--kvmem-sink-tokens', "$SinkTokens", '--kvmem-recent-tokens', "$RecentTokens",
@@ -303,9 +314,9 @@ if ($Backend -eq 'ninfer') {
         $nativeArgsSpec = @('--spec-type', $(if ($SpeculativeMode -eq 'mtp') { 'draft-mtp' } else { 'draft-dflash' }), '--spec-draft-n-max', "$MtpDrafts")
         if ($DraftModel) { $nativeArgsSpec += @('--spec-draft-model', $DraftModel) }
     } else { $nativeArgsSpec = @() }
-    $nativeArgs = @('-m', $Model, '--host', $ListenHost, '--port', "$Port", '-c', "$Context",
+    $nativeArgs = @('-m', $Model, '--host', $ListenHost, '--port', "$Port", '-c', "$resolvedContext",
         '-n', $(if ($MaxTokens -eq 0) { '-1' } else { "$MaxTokens" }), '--kvmem-budget', "$Budget", '--kvmem-gen-reserve', "$Reserve",
-        '-b', "$Prefill", '-ub', "$Prefill",
+        '-b', "$Prefill", '-ub', "$llamaPhysicalPrefill",
         '--kvmem-sink-tokens', "$SinkTokens", '--kvmem-recent-tokens', "$RecentTokens")
     if ($separateKv) { $nativeArgs += @('--cache-type-k', $effectiveK, '--cache-type-v', $effectiveV) }
     else { $nativeArgs += @('--kv-dtype', $KvType) }
@@ -342,6 +353,7 @@ if ($LogLevel) {
 if ($ThinkingMode -eq 'off') { $nativeArgs += $(if ($Backend -eq 'ninfer') { '--no-thinking' } else { '--no-think' }) }
 if ($ThinkingMode -eq 'on') { $nativeArgs += '--enable-thinking' }
 $nativeArgs += '--kvmem'
+if ($Backend -eq 'llamacpp') { $nativeArgs += @('--kvmem-block-tokens', "$resolvedBlock") }
 if ($Backend -eq 'llamacpp') { $nativeArgs += $nativeArgsSpec }
 if ($DiskPath) { $nativeArgs += @('--kvmem-disk-path', $DiskPath, '--kvmem-disk-mib', "$DiskMiB") }
 $nativeArgs += @(Get-KVMemQueryScoringArgs $PSBoundParameters)
@@ -354,6 +366,7 @@ if ($DryRun) {
         } elseif ($displayArgs[$i] -match '^--api-key=') { $displayArgs[$i] = '--api-key=<redacted>' }
     }
     @{ backend = $Backend; argv = @($Worker) + $displayArgs; capabilities = $capabilities
+       token_settings = $tokenPlan
        environment = @{ CUDA_VISIBLE_DEVICES = $Gpu; CUDA_DEVICE_ORDER = 'PCI_BUS_ID' } } |
         ConvertTo-Json -Depth 6
     return

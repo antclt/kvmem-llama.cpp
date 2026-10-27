@@ -62,11 +62,42 @@ class WrapperTest(unittest.TestCase):
                 self.assertEqual(argv[argv.index('--kvmem-block-tokens')+1],str(size))
             for invalid in (['--kvmem-block-tokens','16'],['--kvmem-block-tokens','32','--budget','96'],
                             ['--kvmem-block-tokens','64','--reserve','32'],
-                            ['--kvmem-block-tokens','32','--sink','16'],
+                            ['--kvmem-block-tokens','32','--recent','16'],
                             ['--','--kvmem-block-tokens','32']):
                 self.assertEqual(run(invalid).returncode,2,invalid)
+            rounded = run(['--budget','10001','--reserve','1001','--prefill','999','--sink','101','--recent','101'])
+            self.assertEqual(rounded.returncode,0,rounded.stderr)
+            plan = json.loads(rounded.stdout)
+            expected = {'--kvmem-block-tokens':'32','--kvmem-budget':'9984','--kvmem-gen-reserve':'992',
+                        '--prompt-batch':'992','--kvmem-sink-tokens':'96','--kvmem-recent-tokens':'96'}
+            for flag, value in expected.items():
+                self.assertEqual(plan['args'][plan['args'].index(flag)+1],value)
+            self.assertEqual(len(plan['token_adjustments']),5)
+            self.assertEqual(rounded.stderr.count('KVMEM_CONFIG'),5)
+            if os.name == 'nt':
+                launcher = Path(__file__).resolve().parents[2] / 'scripts/windows/start-backend.ps1'
+                powershell = str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe')
+                launched = subprocess.run([powershell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(launcher),
+                    '-Backend','polystrata','-Worker',str(root/'worker.exe'),'-Model',str(root/'model with spaces.gguf'),
+                    '-PolystrataSource',str(source),'-Tokenizer',str(tokenizer),'-Python',sys.executable,
+                    '-Gpu','GPU-12345678','-Budget','10001','-Reserve','1001','-Prefill','999',
+                    '-SinkTokens','101','-RecentTokens','101','-DryRun'],
+                    capture_output=True,encoding='oem',env=env,creationflags=0x08000000)
+                self.assertEqual(launched.returncode,0,launched.stderr)
+                shared = json.loads(launched.stdout[launched.stdout.index('{'):])
+                self.assertEqual(shared['token_settings']['block_tokens'],32)
+                self.assertEqual(shared['token_settings']['effective'],dict(Budget=9984,Reserve=992,Prefill=992,SinkTokens=96,RecentTokens=96,Context=262144))
+                self.assertEqual(len(shared['token_settings']['adjustments']),5)
+                for flag,value in expected.items():
+                    self.assertEqual(shared['native_argv'][shared['native_argv'].index(flag)+1],value)
+            aligned = run(['--budget','9984','--reserve','992','--prefill','992','--sink','96','--recent','96'])
+            self.assertEqual(aligned.returncode,0,aligned.stderr)
+            self.assertEqual(json.loads(aligned.stdout)['token_adjustments'],[])
+            # The original sum exceeds Context by two; the effective capacities fit.
+            boundary = run(['--context','256','--budget','129','--reserve','129','--prefill','128','--max-tokens','0'])
+            self.assertEqual(boundary.returncode,0,boundary.stderr)
             cfg = json.loads(valid.stdout)
-            self.assertEqual(cfg['args'][cfg['args'].index('--kvmem-block-tokens')+1],'64')
+            self.assertEqual(cfg['args'][cfg['args'].index('--kvmem-block-tokens')+1],'32')
             self.assertEqual(cfg["args"][1], str(root/"model with spaces.gguf"))
             self.assertEqual(cfg["gpu"], 0)
             self.assertEqual(cfg["env"]["CUDA_DEVICE_ORDER"], "PCI_BUS_ID")
@@ -127,8 +158,8 @@ class WrapperTest(unittest.TestCase):
             unlimited = run(["--max-tokens","0"])
             self.assertEqual(unlimited.returncode,0,unlimited.stderr)
             self.assertIsNone(json.loads(unlimited.stdout)["kvmem_default_max_tokens"])
-            for extra in (["--budget","0"], ["--budget","129"], ["--reserve","65"], ["--context","2147483648"],
-                          ["--prefill","8193"], ["--max-tokens","-1"], ["--recent","0"], ["--sink","4096"],
+            for extra in (["--budget","0"], ["--budget","127"], ["--reserve","31"], ["--context","2147483648"],
+                          ["--prefill","0"], ["--max-tokens","-1"], ["--recent","0"], ["--sink","4096"],
                           ["--host-mib","0"], ["--port","65536"], ["--lrfu-lambda","nan"], ["--lrfu-top-frac","0"],
                           ["--host","0.0.0.0"], ["--gpu","GPU-a,GPU-b"], ["--concurrency","9"],
                           ["--gpu","GPU-a,GPU-a","--concurrency","2"], ["--concurrency","9"],

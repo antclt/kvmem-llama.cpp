@@ -56,15 +56,15 @@ Linux/HIP/SYCL build is claimed by this Windows CUDA validation.
 
 PolyStrata accepts `--kvmem-block-tokens 32|64` in the native worker and
 `tools/polystrata/server.py`. The Windows launcher exposes `-BlockTokens 32|64`,
-and the console JSON field is the integer `BlockTokens`. Omission preserves 64.
+and the console JSON field is the integer `BlockTokens`. Omission selects 32.
 The console's PolyStrata resource settings provide the same choice and verify
 the worker capability before launch. Native `KVMEM_BLOCKS` and `/props` report
 the effective value. Changing the value requires a service restart; all native
 slots, MTP state and retained histories in that process share it.
 
 B, R, sink and recent remain token counts. B must be at least 128; B/R/sink/recent
-must align to the selected block size, R/recent must contain at least one block,
-sink + recent must fit B, B + R must fit context, and prefill must not exceed R.
+round down to the selected block size with a configuration notice. R/recent must contain at least one block,
+sink + recent must fit B, B + R must fit context, and prefill is capped at the effective R with a configuration notice.
 For example, B=160, R=32, sink=32, recent=32, prefill=32 is valid with 32-token
 blocks. Native Q8 channel groups and the attention sampling cadence stay at 32;
 they are independent of KV management blocks.

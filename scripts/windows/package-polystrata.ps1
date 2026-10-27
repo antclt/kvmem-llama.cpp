@@ -68,7 +68,7 @@ foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'format
 }
 foreach($relative in (@('tools/polystrata/server.py','tools/polystrata/assets.py','scripts/local-console.py','scripts/console_chat.py','scripts/speculative-capabilities.json',
  'scripts/windows/start-backend.ps1','scripts/windows/start-polystrata.ps1','scripts/windows/native-process.ps1',
- 'scripts/windows/query-scoring.ps1','scripts/windows/start-ui.ps1','scripts/windows/describe-launch-json.ps1',
+ 'scripts/windows/query-scoring.ps1', 'scripts/windows/token-settings.ps1','scripts/windows/start-ui.ps1','scripts/windows/describe-launch-json.ps1',
  'scripts/windows/select-model.ps1','START-HERE-CN.bat','START-HERE-EN.bat','backends/versions.json') + $consoleInspection)) {
     $dest=Join-Path $out $relative;New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     if((Test-Path -LiteralPath $dest) -and (Get-FileHash -LiteralPath $dest).Hash -ne (Get-FileHash -LiteralPath (Join-Path $root $relative)).Hash) {throw "Conflicting common package file: $relative"}

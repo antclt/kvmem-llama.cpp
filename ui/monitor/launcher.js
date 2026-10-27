@@ -317,6 +317,11 @@
       if(errors.length){summary.textContent=tr('需要补全或修改配置','Some settings need attention');return;}
       const result=await api('preview',data);if(!el.isConnected)return;
       row(tr('后端程序','Backend executable'),result.argv[0],'Worker');
+      if(result.token_settings){
+        const plan=result.token_settings,labels={Budget:tr('历史 KV 预算','History KV budget'),Reserve:tr('生成预留空间','Generation reserve'),Prefill:tr('预填充块大小','Prefill chunk'),SinkTokens:tr('保留前缀','Retained prefix'),RecentTokens:tr('保留后缀','Retained suffix')};
+        row(tr('实际 KV 块大小','Effective KV block size'),`${plan.block_tokens} tokens`,p.Backend==='polystrata'?'BlockTokens':null);
+        for(const [key,label] of Object.entries(labels)){const before=plan.requested[key],after=plan.effective[key];row(label,`${before===after?after:`${before} → ${after}`} tokens`+(before===after?'':tr(' · 已自动调整',' · Adjusted automatically')),key);}
+      }
       row(tr('对外模型名','Served model name'),result.effective_settings?.model_alias||p.ModelAlias||tr('沿用模型名称','Use model name'),'ModelAlias');
       row(tr('API 访问密钥','API access key'),p.ApiKey?tr('已设置 · 预览隐藏密钥','Configured · Hidden in preview'):tr('未设置','Not configured'),'ApiKey');
       const reserveAt=result.argv.indexOf(p.Backend==='polystrata'?'--reserve':'--kvmem-gen-reserve'),outputAt=result.argv.indexOf(p.Backend==='polystrata'?'--max-tokens':p.Backend==='ninfer'?'--default-max-tokens':'-n');
@@ -746,7 +751,7 @@
     if(poly&&p.ReasoningEffort==='high')p.ReasoningEffort='xhigh';
     if(poly&&p.SpeculativeMode==='mtp')p.DraftPolicy='adaptive';
     if(poly&&p.PreserveThinking===undefined)p.PreserveThinking=true;
-    if(poly&&p.BlockTokens===undefined)p.BlockTokens=64;
+    if(poly&&p.BlockTokens===undefined)p.BlockTokens=32;
     if(poly&&p.VramReserveMiB===undefined)p.VramReserveMiB=256;
     closeHelp();root.replaceChildren();
     const heading=make('div',{class:'l-heading l-page-heading'}),intro=make('div',{class:'l-intro'}),savedState=make('button',{type:'button',class:'l-save-state l-muted','data-draft-state':'','aria-live':'polite'});savedState.onclick=saveEditing;intro.append(make('h1',{},tr('启动配置','Launch configuration')),savedState);heading.append(intro);root.append(heading);

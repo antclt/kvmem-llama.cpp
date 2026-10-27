@@ -254,7 +254,7 @@ try {
     $windows = & $launcher @common -Backend ninfer -Model (Join-Path $testDir 'model with spaces.ninfer') `
         -SinkTokens 128 -RecentTokens 127 | ConvertFrom-Json
     if ($windows.argv[[array]::IndexOf($windows.argv, '--kvmem-sink-tokens') + 1] -ne '128' -or
-        $windows.argv[[array]::IndexOf($windows.argv, '--kvmem-recent-tokens') + 1] -ne '127') {
+        $windows.argv[[array]::IndexOf($windows.argv, '--kvmem-recent-tokens') + 1] -ne '64') {
         throw 'sink/recent mapping failed'
     }
     foreach ($recent in @(0, 1, 63)) {
@@ -278,7 +278,7 @@ try {
         $null = & $launcher @common -Backend ninfer -Model (Join-Path $testDir 'model with spaces.ninfer') `
             -Budget 128 -RecentTokens 128
     } catch {
-        $windowsFit = $_.Exception.Message -match 'exceed -Budget'
+        $windowsFit = $_.Exception.Message -match 'SinkTokens \+ RecentTokens must fit Budget'
     }
     if (!$windowsFit) { throw 'sink plus recent larger than the budget was accepted' }
     $llama = & $launcher @common -Backend llamacpp -Model (Join-Path $testDir 'model.gguf') `
@@ -367,6 +367,108 @@ try {
         $normalizationWarnings.Count -ne 1 -or
         "$($normalizationWarnings[0])" -notmatch '31 to 15.*Concurrency 8') {
         throw 'Concurrent ngram clamp must report the requested and effective widths once'
+    }
+    foreach ($backend in 'ninfer','llamacpp') {
+        $model = Join-Path $testDir $(if ($backend -eq 'ninfer') { 'model with spaces.ninfer' } else { 'model.gguf' })
+        $rounded = & $launcher @common -Backend $backend -Model $model -Budget 10001 -Reserve 1001 -Prefill 999 `
+            -SinkTokens 101 -RecentTokens 101 -WarningVariable alignmentWarnings | ConvertFrom-Json
+        $effective=$rounded.token_settings.effective
+        $expectedReserve=if ($backend -eq 'ninfer') { 960 } else { 992 }
+        if ($effective.Budget -ne 9984 -or $effective.Reserve -ne $expectedReserve) { throw 'budget/reserve alignment failed' }
+        if ($effective.Prefill -ne $(if ($backend -eq 'ninfer') { 896 } else { 999 })) { throw 'prefill policy mismatch' }
+        if ($backend -eq 'llamacpp' -and $rounded.argv[[Array]::IndexOf($rounded.argv,'--kvmem-block-tokens')+1] -ne '32') { throw 'llama default block size must be explicit in the launch plan' }
+        if ($alignmentWarnings.Count -ne $rounded.token_settings.adjustments.Count) { throw 'adjustments must be logged once' }
+        foreach ($item in $rounded.token_settings.adjustments) {
+            if ($item.effective -gt $item.requested) { throw 'ordinary rounding increased a requested budget' }
+        }
+    }
+    # Values that look like token options must remain opaque to the launcher.
+    foreach ($backend in 'ninfer','llamacpp') {
+        $model=Join-Path $testDir $(if ($backend -eq 'ninfer') { 'model with spaces.ninfer' } else { 'model.gguf' })
+        $nameFlag=if ($backend -eq 'ninfer') { '--model-id' } else { '--alias' }
+        $messageFlag=if ($backend -eq 'ninfer') { '--thinking-budget-message' } else { '--reasoning-budget-message' }
+        $optionValues=if ($backend -eq 'ninfer') { @('--max-context=524288','--prefill-chunk') } else { @('--ctx-size=524288','-b','--kvmem-block-tokens=128') }
+        foreach ($value in $optionValues) {
+            $opaqueArgs=@($nameFlag,$value,'--chat-template',$value,$messageFlag,$value)
+            $opaque = & $launcher @common -Backend $backend -Model $model -WorkerArgs $opaqueArgs | ConvertFrom-Json
+            if ($opaque.token_settings.effective.Context -ne 262144 -or
+                $opaque.token_settings.effective.Prefill -ne 128 -or
+                $opaque.token_settings.block_tokens -ne $(if ($backend -eq 'ninfer') { 64 } else { 32 })) {
+                throw 'An opaque native string value changed token settings'
+            }
+            for ($at=0; $at -lt $opaqueArgs.Count; $at++) {
+                if ($opaque.argv[$opaque.argv.Count-$opaqueArgs.Count+$at] -cne $opaqueArgs[$at]) {
+                    throw 'Native option/value boundaries were lost'
+                }
+            }
+        }
+        # Real overrides after both string values and zero-value switches still apply.
+        $mixedArgs=if ($backend -eq 'ninfer') {
+            @('--model-id','--max-context=256','--no-thinking','--max-context','524288','--greedy','--prefill-chunk','999')
+        } else {
+            @('-a','--ctx-size=256','--metrics','--ctx-size','524288','--no-mmap','--batch-size','777')
+        }
+        $mixed = & $launcher @common -Backend $backend -Model $model -WorkerArgs $mixedArgs | ConvertFrom-Json
+        $expectedPrefill=if ($backend -eq 'ninfer') { 896 } else { 777 }
+        if ($mixed.token_settings.effective.Context -ne 524288 -or
+            $mixed.token_settings.effective.Prefill -ne $expectedPrefill -or
+            $mixed.argv[-3] -cne $mixedArgs[1] -or $mixed.argv[-2] -cne $mixedArgs[2] -or $mixed.argv[-1] -cne $mixedArgs[5]) {
+            throw 'String values or switches hid a subsequent real token override'
+        }
+    }
+    foreach ($rawPrefill in 256,999,0) {
+        $override = & $launcher @common -Backend ninfer -Model (Join-Path $testDir 'model with spaces.ninfer') `
+            -Budget 10001 -Reserve 1001 -Prefill 999 -SinkTokens 101 -RecentTokens 101 `
+            -WorkerArgs @('--prefill-chunk','128',"--prefill-chunk=$rawPrefill",'--chat-template','template with spaces.jinja') `
+            -WarningVariable overrideWarnings | ConvertFrom-Json
+        $expected=if ($rawPrefill -eq 256) { 256 } else { 896 }
+        if ($override.token_settings.requested.Prefill -ne $rawPrefill -or
+            $override.token_settings.effective.Prefill -ne $expected -or
+            @($override.argv | Where-Object { $_ -match '^--prefill-chunk(=|$)' }).Count -ne 1 -or
+            $override.argv[[Array]::IndexOf($override.argv,'--prefill-chunk')+1] -ne "$expected" -or
+            $override.argv[-1] -ne 'template with spaces.jinja' -or
+            $overrideWarnings.Count -ne $override.token_settings.adjustments.Count) {
+            throw 'Native prefill override must be normalized once and match preview, warnings and argv'
+        }
+    }
+    foreach ($backend in 'ninfer','llamacpp') {
+        $model=Join-Path $testDir $(if ($backend -eq 'ninfer') { 'model with spaces.ninfer' } else { 'model.gguf' })
+        $flag=if ($backend -eq 'ninfer') { '--max-context' } else { '-c' }
+        $alias=if ($backend -eq 'ninfer') { '--max-context' } else { '--ctx-size' }
+        $expanded = & $launcher @common -Backend $backend -Model $model -Context 256 -Budget 300000 `
+            -WorkerArgs @($flag,'1024',"$alias=524288") | ConvertFrom-Json
+        if ($expanded.token_settings.effective.Context -ne 524288 -or
+            $expanded.argv[[Array]::IndexOf($expanded.argv,$flag)+1] -ne '524288' -or
+            @($expanded.argv | Where-Object { $_ -match '^(--max-context|--ctx-size|-c)(=|$)' }).Count -ne 1) {
+            throw 'Context overrides must be resolved before capacity validation and emitted once'
+        }
+        $rejected=$false
+        try { $null = & $launcher @common -Backend $backend -Model $model -WorkerArgs @($alias,'256') }
+        catch { $rejected=$_.Exception.Message -match 'Budget \+ Reserve must fit Context' }
+        if (!$rejected) { throw 'Capacity validation ignored the smaller native context override' }
+    }
+    $batchOverride = & $launcher @common -Backend llamacpp -Model (Join-Path $testDir 'model.gguf') -Prefill 999 `
+        -WorkerArgs @('-b','256','--batch-size=777') | ConvertFrom-Json
+    if ($batchOverride.token_settings.effective.Prefill -ne 777 -or
+        $batchOverride.argv[[Array]::IndexOf($batchOverride.argv,'-b')+1] -ne '777' -or
+        $batchOverride.argv[[Array]::IndexOf($batchOverride.argv,'-ub')+1] -ne '999' -or
+        @($batchOverride.argv | Where-Object { $_ -match '^(-b|--batch-size)(=|$)' }).Count -ne 1) {
+        throw 'Logical batch override changed physical batch or disagreed with preview'
+    }
+    foreach ($invalid in @(@('--prefill-chunk'), @('--prefill-chunk','bad'), @('--prefill-chunk','-1'),
+        @('--prefill-chunk=2147483648'), @('--max-context=0'))) {
+        $rejected=$false
+        try { $null = & $launcher @common -Backend ninfer -Model (Join-Path $testDir 'model with spaces.ninfer') -WorkerArgs $invalid }
+        catch { $rejected=$_.Exception.Message -match 'requires an integer' }
+        if (!$rejected) { throw 'Invalid native token override accepted' }
+    }
+    $customBlock = & $launcher @common -Backend llamacpp -Model (Join-Path $testDir 'model.gguf') `
+        -Budget 10001 -Reserve 1001 -SinkTokens 101 -RecentTokens 101 `
+        -WorkerArgs @('--kvmem-block-tokens','64','--kvmem-block-tokens=128') | ConvertFrom-Json
+    if ($customBlock.token_settings.block_tokens -ne 128 -or $customBlock.token_settings.effective.Reserve -ne 896 -or
+        $customBlock.token_settings.effective.SinkTokens -ne 128 -or $customBlock.token_settings.effective.RecentTokens -ne 0 -or
+        @($customBlock.argv | Where-Object { $_ -match '^--kvmem-block-tokens(=|$)' }).Count -ne 1) {
+        throw 'explicit block size must use the native last-value rule and preserve minimum sink protection'
     }
     $bad = @(
         @{Backend='ninfer'; Model=(Join-Path $testDir 'model with spaces.ninfer'); MtpDrafts=16},

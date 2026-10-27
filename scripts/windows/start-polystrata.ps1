@@ -1,7 +1,12 @@
 # Data-only adapter from the shared launcher to PolyStrata's Python frontend.
 param([Parameter(Mandatory)][System.Collections.IDictionary]$Parameters,
-      [Parameter(Mandatory)][string]$Root,[string[]]$WorkerArgs=@())
+      [Parameter(Mandatory)][string]$Root,[string[]]$WorkerArgs=@(), [hashtable]$TokenPlan)
 $ErrorActionPreference='Stop'
+if ($TokenPlan) {
+    $copy=@{}; foreach ($key in $Parameters.Keys) { $copy[$key]=$Parameters[$key] }
+    foreach ($key in $TokenPlan.effective.Keys) { $copy[$key]=$TokenPlan.effective[$key] }
+    $Parameters=$copy
+}
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'query-scoring.ps1')
 if($Parameters.ContainsKey('ReplayMaxTokens')) {
@@ -37,7 +42,7 @@ if(!(Test-Path -LiteralPath $python -PathType Leaf)) {
 }
 $worker=(Resolve-Path -LiteralPath $worker).Path;$model=(Resolve-Path -LiteralPath $model).Path;$python=(Resolve-Path -LiteralPath $python).Path
 $arguments=@((Join-Path $Root 'tools/polystrata/server.py'),'--source',$tree,'--worker',$worker,'--model',$model,'--gpu',$gpu)
-$arguments+=@('--kvmem-block-tokens',[string](Setting 'BlockTokens' 64))
+$arguments+=@('--kvmem-block-tokens',[string](Setting 'BlockTokens' 32))
 $arguments+=@('--thinking-mode',[string](Setting 'ThinkingMode' 'default'))
 if($Parameters.ContainsKey('ThinkingBudget')) { $arguments+=@('--thinking-budget',[string]$Parameters.ThinkingBudget) }
 if(Setting 'ReasoningEffort' '') { $arguments+=@('--reasoning-effort',$(if($Parameters.ReasoningEffort -eq 'xhigh'){'high'}else{[string]$Parameters.ReasoningEffort})) }
@@ -94,7 +99,7 @@ if(Setting 'DryRun' $false) {
         $safeEnv.STRATA_FATTN=$resolved.env.STRATA_FATTN
         $safeEnv.STRATA_FDEC=$resolved.env.STRATA_FDEC
     } finally { $check.Dispose() }
-    @{effective_settings=@{block_tokens=[int](Setting 'BlockTokens' 64);draft_policy=$(if($count){'adaptive'}else{'fixed'});draft_tokens=$count;model_alias=$resolved.model_name;max_tokens=$resolved.kvmem_default_max_tokens;preserve_thinking=$resolved.preserve_thinking;vram_reserve_mib=$resolved.kvmem_vram_reserve_mib};backend='polystrata';native_argv=@($resolved.exe)+@($resolved.args);argv=@($python)+$arguments;environment=$safeEnv;capabilities=@{architecture='qwen35moe';gpu_count=1;batch_mtp=$false;solo_mtp=($count -gt 0);concurrency=(Setting 'Concurrency' 1);kv_type=$kv;storage_quota='process'}} | ConvertTo-Json -Depth 8
+    @{token_settings=$TokenPlan;effective_settings=@{block_tokens=[int](Setting 'BlockTokens' 32);draft_policy=$(if($count){'adaptive'}else{'fixed'});draft_tokens=$count;model_alias=$resolved.model_name;max_tokens=$resolved.kvmem_default_max_tokens;preserve_thinking=$resolved.preserve_thinking;vram_reserve_mib=$resolved.kvmem_vram_reserve_mib};backend='polystrata';native_argv=@($resolved.exe)+@($resolved.args);argv=@($python)+$arguments;environment=$safeEnv;capabilities=@{architecture='qwen35moe';gpu_count=1;batch_mtp=$false;solo_mtp=($count -gt 0);concurrency=(Setting 'Concurrency' 1);kv_type=$kv;storage_quota='process'}} | ConvertTo-Json -Depth 8
     return
 }
 $info=New-KVMemProcessInfo $python $arguments

@@ -16,7 +16,7 @@ try {
                           'scripts/model_health_ninfer/schema.py', 'scripts/model_health_ninfer/layouts.py',
                           'scripts/model_health_ninfer/formats.py', 'scripts/model_health_ninfer/framing.py',
                           'scripts/model_health_ninfer/file_io.py', 'scripts/windows/start-backend.ps1',
-                          'scripts/windows/describe-launch-json.ps1', 'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1',
+                          'scripts/windows/describe-launch-json.ps1', 'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/token-settings.ps1',
                           'scripts/windows/select-model.ps1',
                           'ui/monitor/index.html', 'ui/monitor/launcher.js', 'ui/monitor/monitor.js',
                           'ui/monitor/console-shell.js', 'ui/monitor/console-shell.css') {

@@ -131,7 +131,7 @@ foreach ($entry in $workerEntries) {
     $workerInfo[$workerBackend] = @{ sha256=(Get-FileHash -LiteralPath $executable).Hash.ToLowerInvariant();
         path="workers/$workerBackend/$($entry[2])"; clean_path_help_passed=$true; launch_contract=$contract }
 }
-$packageScripts = @('start-backend.ps1', 'start-ninfer.ps1', 'native-process.ps1', 'query-scoring.ps1')
+$packageScripts = @('start-backend.ps1', 'start-ninfer.ps1', 'native-process.ps1', 'query-scoring.ps1', 'token-settings.ps1')
 if ($Backend -eq 'all') { $packageScripts += @('start-dflash2.ps1','start-polystrata.ps1') }
 foreach ($script in $packageScripts) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination (Join-Path $OutputDir 'scripts/windows')
