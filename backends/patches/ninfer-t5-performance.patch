@@ -312,7 +312,7 @@ index c15b251dfa772ee245d17462f418cb04ce29efb5..781748f202da38a88345d00cddaa64ab
  
  bool keeps_permission(const artifact::Binder& binder, const artifact::ParameterReference& reference,
                        ops::LinearPolicy policy) {
-+    if (ops::allows_a8(policy) && stored_as(reader, reference, QType::T5_G128_FP16)) {
++    if (ops::allows_a8(policy) && stored_as(binder, reference, QType::T5_G128_FP16)) {
 +        return true; // Integer tensor cores; independent of FP8/FP4 architecture support.
 +    }
      switch (policy) {
