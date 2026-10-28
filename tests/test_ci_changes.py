@@ -32,6 +32,16 @@ class DocumentationChangesTest(unittest.TestCase):
         self.assertTrue(changes.classify('push', {'before': '0' * 40, 'after': '1' * 40})[0])
         self.assertTrue(changes.classify('workflow_dispatch', {})[1])
 
+    def test_console_changes_run_host_scripts_without_engine_builds(self):
+        paths = ['scripts/local-console.py', 'scripts/launcher/plan.py', 'scripts/linux/start-ui.sh',
+                 'ui/monitor/launcher.js', 'tests/test_launcher_services.py', 'docs/linux-launcher.md']
+        self.assertTrue(changes.requires_ci(paths))
+        self.assertFalse(changes.requires_native(paths))
+        self.assertFalse(changes.requires_cuda(paths, 'a', 'b'))
+        for extra in ('kvmem/src/host/memory_contract.cpp', 'backends/ninfer', '.github/workflows/server-compat.yml',
+                      'scripts/linux/build-engine.sh', 'scripts/launcher/../../CMakeLists.txt'):
+            self.assertTrue(changes.requires_native(paths + [extra]))
+
     def test_launchers_do_not_recompile_unchanged_cuda(self):
         paths = ['scripts/windows/start-ninfer.ps1', 'scripts/windows/test-backend-launcher.ps1', 'README.md']
         self.assertTrue(changes.requires_ci(paths))

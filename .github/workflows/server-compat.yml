@@ -20,6 +20,7 @@ jobs:
     outputs:
       run_ci: ${{ steps.classify.outputs.run_ci }}
       run_cuda: ${{ steps.classify.outputs.run_cuda }}
+      run_native: ${{ steps.classify.outputs.run_native }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,9 +38,44 @@ jobs:
           python3 tests/test_public_evidence.py
           python3 tests/test_multi_needle.py
           python3 -m unittest discover -s scripts -p test_native_stats.py
-  host-linux:
+  console:
     needs: changes
     if: needs.changes.outputs.run_ci == 'true'
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: python -m pip install -r scripts/requirements-console.txt
+      - name: Test launcher and console without compiling an engine
+        run: |
+          python -m unittest discover -s tests -p "test_launcher_plan.py"
+          python -m unittest discover -s tests -p "test_launcher_export.py"
+          python -m unittest discover -s tests -p "test_launcher_process.py"
+          python -m unittest discover -s tests -p "test_launcher_services.py"
+          python -m unittest discover -s tests -p "test_launcher_package.py"
+          python tests/test_local_console.py
+          python tests/test_console_logs.py
+          python tests/test_console_chat.py
+          python tests/test_model_health.py
+          python tests/test_one_click.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Browser and launcher syntax checks
+        run: |
+          node --check ui/monitor/launcher.js
+          npm ci --prefix ui
+          npx --prefix ui playwright install --with-deps chromium
+          npm test --prefix ui
+  host-linux:
+    needs: changes
+    if: needs.changes.outputs.run_native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -86,7 +122,7 @@ jobs:
       - run: bash scripts/test_server_portable.sh build/portable
   host-windows:
     needs: changes
-    if: needs.changes.outputs.run_ci == 'true'
+    if: needs.changes.outputs.run_native == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -319,7 +355,7 @@ jobs:
   # Keep required status names; only verified documentation changes may skip builds.
   host-and-server-units-linux:
     if: ${{ always() }}
-    needs: [changes, host-linux, host-windows, cuda-build-linux, polystrata-cuda-build-linux, ninfer-pinned-sources]
+    needs: [changes, console, host-linux, host-windows, cuda-build-linux, polystrata-cuda-build-linux, ninfer-pinned-sources]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -328,6 +364,8 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           RUN_CI: ${{ needs.changes.outputs.run_ci }}
           RUN_CUDA: ${{ needs.changes.outputs.run_cuda }}
+          RUN_NATIVE: ${{ needs.changes.outputs.run_native }}
+          CONSOLE_RESULT: ${{ needs.console.result }}
           LINUX_RESULT: ${{ needs.host-linux.result }}
           WINDOWS_RESULT: ${{ needs.host-windows.result }}
           CUDA_RESULT: ${{ needs.cuda-build-linux.result }}
@@ -340,8 +378,15 @@ jobs:
             exit 0
           fi
           test "$RUN_CI" = true
-          test "$LINUX_RESULT" = success
-          test "$WINDOWS_RESULT" = success
+          test "$CONSOLE_RESULT" = success
+          if [ "$RUN_NATIVE" = true ]; then
+            test "$LINUX_RESULT" = success
+            test "$WINDOWS_RESULT" = success
+          else
+            test "$RUN_NATIVE" = false
+            test "$LINUX_RESULT" = skipped
+            test "$WINDOWS_RESULT" = skipped
+          fi
           if [ "$RUN_CUDA" = true ]; then
             test "$CUDA_RESULT" = success
             test "$POLYSTRATA_CUDA_RESULT" = success

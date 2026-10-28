@@ -511,6 +511,7 @@
     const row=inputActions(input),browse=make('button',{type:'button',class:'s-button','data-browse-template':''},tr('选择…','Choose…')),reset=make('button',{type:'button',class:'s-button','data-reset-template':''},tr('恢复默认','Use default'));
     browse.onclick=async()=>{if(pickingModel)return;pickingModel=true;browse.disabled=true;try{const result=await api('browse-template',{backend:p.Backend,current_path:input.value||p.Model||''},315000);if(result.path&&input.isConnected){input.value=result.path;input.dispatchEvent(new Event('input',{bubbles:true}));}}catch(error){showError(error);}finally{pickingModel=false;browse.disabled=false;}};
     reset.onclick=()=>{input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));};row.append(browse,reset);
+    if(info.native_picker===false)browse.hidden=true;
   }
 
   function modelPicker(parent, p) {
@@ -524,6 +525,7 @@
     input.addEventListener('input',()=>{input.title=input.value;});
     const browse = make('button', {type:'button', class:'s-button', 'data-browse-model':''}, tr('选择模型…','Choose model…'));
     browse.disabled = pickingModel;
+    if(info.native_picker===false){browse.hidden=true;input.placeholder=tr('输入此 Linux 主机上的模型完整路径','Enter the full model path on this Linux host');}
     row.append(input, browse);box.append(label, row);
     const recent = make('select', {'aria-label':tr('最近选择的模型','Recently selected models'),'data-recent-model':''});
     function refreshRecent() {
@@ -550,6 +552,7 @@
     const submit=make('button',{type:'button',class:'s-button l-primary','data-scan-submit':''},tr('扫描此目录并记住','Scan and remember folder'));
     const rescan=make('button',{type:'button',class:'s-button','data-scan-all':'','aria-describedby':'model-scan-locations-help'},tr('扫描常用位置','Scan known locations'));
     folderActions.append(other,submit,rescan);
+    if(info.native_picker===false){other.hidden=true;directory.placeholder=tr('输入此 Linux 主机上的文件夹路径','Enter a folder path on this Linux host');}
     const locationHelp=make('p',{id:'model-scan-locations-help',class:'l-muted l-scan-help'},tr('常用位置：已记住的模型目录、当前模型所在文件夹、程序所在文件夹，以及附近名为 models 或 model 的文件夹。不会扫描整个硬盘；其他位置请在上方选择或粘贴目录。本次具体位置见“扫描范围”。','Known locations include remembered model folders, the current model’s folder, the program folders, and nearby folders named models or model. This does not scan entire drives. For other locations, choose or paste a folder above. Expand Search locations to see the actual folders searched.'));
     const savedRow=make('div',{class:'l-scan-saved-row'});
     const saved=make('select',{'data-scan-saved':'','aria-label':tr('已记住的模型目录','Remembered model folders')});
@@ -918,7 +921,7 @@
     ],['自动调整仅在后端和所选草稿方式支持时生效。','Adaptive mode applies only when supported by the backend and draft method.']);
     const draftModel=field(panels[1],p,'DraftModel','草稿模型 GGUF','Draft model GGUF','text',null,
       ['llama.cpp 的 DFlash2 需要与主模型匹配的独立草稿文件；NInfer 使用模型内置草稿组件。','DFlash2 on llama.cpp requires a separate draft matching the target. NInfer uses an embedded draft component.'],n||poly);
-    if(!n&&!poly){const row=inputActions(draftModel),choose=make('button',{type:'button',class:'s-button l-secondary'},tr('选择文件','Choose file'));row.append(choose);choose.onclick=async()=>{try{const result=await api('browse-model',{backend:'llamacpp',current_path:draftModel.value});if(result.path){draftModel.value=result.path;draftModel.dispatchEvent(new Event('change',{bubbles:true}));}}catch(e){message(e.message,true);}};}
+    if(!n&&!poly&&info.native_picker!==false){const row=inputActions(draftModel),choose=make('button',{type:'button',class:'s-button l-secondary'},tr('选择文件','Choose file'));row.append(choose);choose.onclick=async()=>{try{const result=await api('browse-model',{backend:'llamacpp',current_path:draftModel.value});if(result.path){draftModel.value=result.path;draftModel.dispatchEvent(new Event('change',{bubbles:true}));}}catch(e){message(e.message,true);}};}
     if(n)field(panels[1],p,'FastPrefill','启用快速预填充','Enable fast prefill','checkbox',null,['支持 int8、rk8v4、rk4v4、rk4v4-e8、rk2v4-e8；还需模型支持。与 MTP、普通预填充块大小分别设置。','Supports int8, rk8v4, rk4v4, rk4v4-e8 and rk2v4-e8; model support is also required. Independent of MTP and the standard prefill chunk size.'],!n);
     const thinking=field(panels[2],p,'ThinkingMode','默认思考模式','Default thinking mode','text',[[n?'default':'on',n?tr('跟随模型','Model default'):tr('开启','On')],['off',tr('关闭','Off')]],['需要模型与模板支持。聊天请求中的显式设置优先。','Requires model/template support. Explicit chat settings take priority.']);
     const thinkingBudget=field(panels[2],p,'ThinkingBudget','默认思考预算 · tokens','Default thinking budget · tokens','number',null,poly?['0：根据输出上限自动给答案留空间；正数：思考 token 上限，也受总输出预算约束。','0: automatically reserve answer space within the output limit. Positive values cap reasoning tokens, subject to the total output budget.']:['0：不设置单独的思考限额，仍受总输出预算约束。正数：思考 token 上限。','0: no separate reasoning cap; the total output budget still applies. Positive values cap reasoning tokens.']);
@@ -996,6 +999,8 @@
     argumentsPanel.grid.append(nativeLabel);form.append(native);
     if(poly)elasticControls(panels[6],p,raw);
     const actions=make('div',{class:'l-actions l-draft-actions'});const save=make('button',{type:'button',class:'s-button','data-action':'template'},tr('另存为模板','Save as template'));const preview=make('button',{type:'button',class:'s-button','data-action':'preview'},tr('检查配置','Check configuration'));actions.append(preview,save);heading.append(actions);const output=make('pre',{class:'l-result l-notice','data-launch-message':'','aria-live':'polite'});heading.after(output);
+    if(info.script_export_version){const generate=make('button',{type:'button',class:'s-button','data-action':'export'},tr('生成启动脚本','Generate launch script'));generate.onclick=exportDialog;actions.append(generate);}
+    if(info.script_export_version){const services=make('button',{type:'button',class:'s-button','data-services-open':''},tr('后台服务管理','Background services'));services.onclick=servicesDialog;actions.append(services);}
     const status=make('section',{class:'s-card l-runtime'}),statusTitle=make('h2',{class:'s-title'},tr('当前运行服务','Running service'));status.append(statusTitle,make('p',{class:'l-status s-badge','data-runtime-state':''},tr('读取中','Loading')));help(statusTitle,tr('当前运行服务','Running service'),tr('只管理此控制台启动的服务。停止会卸载模型并清空其内存缓存。','Only services started here are managed. Stopping unloads the model and its in-memory cache.'));const progress=make('div',{class:'l-launch-progress','data-launch-progress':'',hidden:''});progress.append(make('p',{'data-launch-phase':'',role:'status'}),make('div',{class:'l-launch-track',role:'progressbar','data-launch-track':''}),make('small',{class:'l-muted','data-launch-help':''}));status.append(progress,make('dl',{'data-runtime-details':''}));const lifecycle=make('div',{class:'l-actions'});const start=make('button',{type:'button',class:'s-button l-primary','data-action':'start'},tr('启动服务','Start service'));const stop=make('button',{type:'button',class:'s-button','data-action':'stop',disabled:''},tr('停止服务','Stop service'));lifecycle.append(start,stop);status.append(lifecycle);side.append(status);
     presetPanel(side);
     const log=make('details',{class:'s-card l-log'});log.append(make('summary',{},tr('启动日志','Startup log')));const refresh=make('button',{type:'button',class:'s-button l-secondary'},tr('刷新日志','Refresh log'));log.append(refresh,make('pre',{class:'l-result','data-log':''}));side.append(log);refresh.onclick=async()=>{try{log.querySelector('[data-log]').textContent=(await api('log')).text||tr('暂无日志','No log yet');}catch(e){message(e.message,true);}};
@@ -1030,6 +1035,7 @@
       }catch(e){backend.value=b;message(e.message,true);}
     };
     [save,preview,start,stop].forEach(button=>button.onclick=()=>act(button.dataset.action));
+    if(info.script_export_version){start.textContent=tr('生成并启动','Generate and start');root.querySelectorAll('[data-browse-template],[data-browse-model],[data-scan-folder]').forEach(button=>button.hidden=true);}
     if(poly){
       for(const key of ['LogLevel']){const input=root.querySelector(`[data-param=${key}]`);if(input){input.disabled=true;input.dataset.backendSupported='false';}}
     }
@@ -1038,7 +1044,7 @@
     updateStatus(runtime);
     draftStatus();
   }
-  function updateStatus(status,confirmed=false){runtime=status;if(!status)return;if(confirmed)configUncertain=false;syncRunningConfiguration(status);window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['KV 块大小','KV block size',o?.block_tokens],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running||configurationLocked()||healthBlocks();root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){chat.hidden=false;chat.href='/chat/';chat.removeAttribute('aria-disabled');}renderLaunchProgress();}
+  function updateStatus(status,confirmed=false){runtime=status;if(!status)return;if(confirmed)configUncertain=false;syncRunningConfiguration(status);window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['管理方式','Managed by',status.owner==='systemd'?'systemd':status.owner==='temporary'?tr('临时运行','Temporary'):null],['服务状态','Service status',status.service_error||status.service?.substate],['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['KV 块大小','KV block size',o?.block_tokens],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running||configurationLocked()||healthBlocks();root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){chat.hidden=false;chat.href='/chat/';chat.removeAttribute('aria-disabled');}renderLaunchProgress();}
   function renderLaunchProgress(){
     const box=root.querySelector('[data-launch-progress]');if(!box)return;
     const state=startPending?'preparing':launchFailure?'failed':runtime?.state;
@@ -1051,6 +1057,65 @@
     track.hidden=state==='failed'||state==='exited';
     if(state==='ready')track.setAttribute('aria-valuenow','100');else track.removeAttribute('aria-valuenow');
     box.querySelector('[data-launch-help]').textContent=state==='failed'?launchFailure:state==='exited'?tr('请查看下方运行日志中的退出原因。','Check the service log below for the cause.'):state==='ready'?tr('右上角聊天入口已可用。','Chat is available in the top right.'):tr('请稍候。大模型首次加载可能需要较长时间。','Please wait. Loading a large model for the first time may take a while.');
+  }
+  function exportDialog(){
+    if(busy||configurationLocked())return;
+    if(!root.querySelector('form').reportValidity())return;
+    const dialog=make('dialog',{class:'l-model-dialog','aria-label':tr('生成启动脚本','Generate launch script')}),form=make('form',{method:'dialog'});
+    const heading=make('div',{class:'l-heading'}),close=make('button',{type:'button',class:'s-button'},tr('关闭','Close'));
+    heading.append(make('h2',{class:'s-title'},tr('生成启动脚本','Generate launch script')),close);
+    const nameLabel=make('label',{class:'l-field'},tr('配置名称','Profile name'));
+    const name=make('input',{type:'text',required:'',pattern:'[a-z0-9][a-z0-9_-]{0,63}','data-export-profile':''});name.value='default-'+root.querySelector('[data-param=Backend]').value;nameLabel.append(name);
+    const scopeLabel=make('label',{class:'l-field'},tr('后台服务类型','Background service type'));
+    const scope=make('select',{'data-export-scope':''});scope.append(make('option',{value:'user'},tr('用户服务','User service')),make('option',{value:'system'},tr('系统服务','System service')));scopeLabel.append(scope);
+    const userLabel=make('label',{class:'l-field'},tr('运行账户','Runtime account'));
+    const user=make('input',{type:'text','data-export-user':''});user.value=info.runtime_user||'';userLabel.append(user);userLabel.hidden=true;scope.onchange=()=>{userLabel.hidden=scope.value!=='system';user.required=scope.value==='system';};
+    const secretLabel=make('label',{class:'l-field'}),store=make('input',{type:'checkbox','data-export-store-key':''});secretLabel.append(store,make('span',{},tr('将 API 密钥保存到本机私有文件，供后台启动使用','Save the API key to a private local file for background startup')));secretLabel.hidden=!launchData().parameters.ApiKey;
+    const note=make('p',{class:'l-muted'},tr('每次生成保留独立版本，可直接在终端运行。服务文件同时生成；安装、启动和开机自启分别操作。','Each export preserves a separate version that can run from a terminal. A service file is included; installation, startup and boot activation are separate actions.'));
+    const row=make('div',{class:'l-actions'}),generate=make('button',{type:'button',class:'s-button l-primary','data-export-generate':''},tr('生成文件','Generate files')),start=make('button',{type:'button',class:'s-button',disabled:'','data-export-start':''},tr('启动此版本','Start this version'));
+    const register=make('button',{type:'button',class:'s-button',disabled:'','data-export-register':''},tr('登记后台服务','Register background service'));
+    const result=make('pre',{class:'l-result','data-export-result':'',role:'status'});row.append(generate,start,register);form.append(heading,nameLabel,scopeLabel,userLabel,secretLabel,note,row,result);dialog.append(form);root.append(dialog);
+    let exported=null;
+    close.onclick=()=>dialog.close();dialog.addEventListener('close',()=>dialog.remove(),{once:true});form.onsubmit=event=>event.preventDefault();
+    generate.onclick=async()=>{if(!form.reportValidity())return;generate.disabled=true;start.disabled=true;result.textContent=tr('正在检查并生成…','Checking and generating…');try{const config=launchData();exported=await api('export',{config,profile_id:name.value,scope:scope.value,...(scope.value==='system'?{user:user.value}:{}),store_api_key:store.checked});result.textContent=tr('启动脚本：','Launch script: ')+exported.script+'\n\n'+tr('服务文件：','Service file: ')+exported.unit+'\n\n'+tr('版本：','Revision: ')+exported.revision+(exported.requires_api_key_environment?'\n\n'+tr('独立运行前需设置 KVMEM_API_KEY；本控制台当前仍保留此密钥。','Set KVMEM_API_KEY before running independently; this console still has the current key.'):'');start.disabled=false;}catch(error){exported=null;result.textContent=error.message;}finally{generate.disabled=false;}};
+    start.onclick=async()=>{if(!exported||busy)return;start.disabled=true;generate.disabled=true;busy=true;try{const state=await api('start-revision',{profile_id:exported.profile_id,revision:exported.revision});updateStatus(state,true);dialog.close();message(tr('已启动生成的脚本版本，请查看服务状态。','Started the generated version; check service status.'));}catch(error){result.textContent=error.message;}finally{busy=false;start.disabled=false;generate.disabled=false;updateStatus(runtime);}};
+    const originalGenerate=generate.onclick;
+    generate.onclick=async()=>{register.disabled=true;await originalGenerate();if(exported){register.disabled=exported.requires_api_key_environment;if(exported.install_commands?.length)result.textContent+='\n\n'+tr('先在终端安装，再点击登记：\n','Install in a terminal, then register:\n')+exported.install_commands.join('\n');}};
+    register.onclick=async()=>{if(!exported)return;register.disabled=true;try{await api('service',{action:'register',profile_id:exported.profile_id,revision:exported.revision,scope:exported.scope});dialog.close();await servicesDialog();}catch(error){result.textContent=error.message;}finally{register.disabled=false;}};
+    dialog.showModal();name.focus();
+  }
+  async function servicesDialog(){
+    const dialog=make('dialog',{class:'l-model-dialog','aria-label':tr('后台服务管理','Background services')}),body=make('div');
+    const close=make('button',{type:'button',class:'s-button'},tr('关闭','Close'));
+    dialog.append(make('h2',{class:'s-title'},tr('后台服务管理','Background services')),close,body);root.append(dialog);
+    close.onclick=()=>dialog.close();dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();
+    async function refresh(){
+      body.replaceChildren(make('p',{},tr('读取服务状态…','Reading service status…')));
+      try{
+        const data=await api('services');body.replaceChildren();
+        body.append(make('p',{class:'l-muted'},tr('后台服务关闭控制台后仍会运行。生成脚本后，先登记服务，再分别选择启动与自启。','Background services survive closing the console. Generate a script, register it, then choose startup and boot activation separately.')));
+        if(data.selected){
+          const disconnect=make('button',{type:'button',class:'s-button','data-service-action':'disconnect'},tr('解除当前连接（不停止服务）','Disconnect current service (keep it running)'));
+          const error=make('p',{role:'status'});body.append(disconnect,error);
+          disconnect.onclick=async()=>{disconnect.disabled=true;try{await api('service',{action:'disconnect',profile_id:data.selected.profile,scope:data.selected.scope});updateStatus(await api('status'),true);await refresh();}catch(e){error.textContent=e.message;disconnect.disabled=false;}};
+        }
+        if(!data.capabilities.available||!data.capabilities.user)body.append(make('p',{class:'l-muted'},data.capabilities.reason||tr('用户会话服务不可用，可使用独立脚本或系统服务。','User services are unavailable; use independent scripts or system services.')));
+        if(!data.capabilities.linger)body.append(make('p',{class:'l-muted'},tr('用户服务“启用自启”在登录时生效。如需无人登录运行，请在终端按需执行：','Enabling a user service starts it at login. For unattended startup, explicitly run in a terminal:')+' loginctl enable-linger '+(info.runtime_user||'<user>')));
+        if(!data.services.length)body.append(make('p',{},tr('还没有登记的服务，请先生成启动脚本。','No services are registered. Generate a launch script first.')));
+        for(const service of data.services){
+          const card=make('section',{class:'s-card'}),actions=make('div',{class:'l-actions'}),error=make('p',{role:'status'});
+          card.append(make('h3',{},service.profile_id+' · '+service.scope),make('p',{},service.error||`${service.active} / ${service.substate} · ${service.enabled?tr('已启用自启','Enabled'):tr('未启用自启','Disabled')} · ${service.revision||''}`));
+          if(!service.error)for(const [action,zh,en] of [['select','查看／连接','View / connect'],['start','启动','Start'],['stop','停止','Stop'],['restart','重启','Restart'],[service.enabled?'disable':'enable',service.enabled?'取消自启':'启用自启',service.enabled?'Disable startup':'Enable startup'],['remove','移除登记','Remove registration']]){
+            if(action==='remove'&&service.scope==='system')continue;
+            const button=make('button',{type:'button',class:'s-button','data-service-action':action},tr(zh,en));
+            button.onclick=async()=>{actions.querySelectorAll('button').forEach(b=>b.disabled=true);try{await api('service',{action,profile_id:service.profile_id,scope:service.scope});updateStatus(await api('status'),true);await refresh();}catch(e){error.textContent=e.message;actions.querySelectorAll('button').forEach(b=>b.disabled=false);}};
+            actions.append(button);
+          }
+          card.append(actions,error);body.append(card);
+        }
+      }catch(error){body.replaceChildren(make('p',{role:'status'},error.message));}
+    }
+    await refresh();
   }
   async function act(action){
     if(busy||(configurationLocked()&&action!=='stop'))return;
