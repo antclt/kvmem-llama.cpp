@@ -1,5 +1,5 @@
 diff --git a/serve/images.py b/serve/images.py
-index bd62fa4d..caaf8e8a 100644
+index bd62fa4d2958d010355dbb0c406421d18a336f8a..caaf8e8a642c096d623e4daf541abdf51a47c7ff 100644
 --- a/serve/images.py
 +++ b/serve/images.py
 @@ -203,6 +203,14 @@ class ImageGen:
@@ -18,7 +18,7 @@ index bd62fa4d..caaf8e8a 100644
          """Keep the newest keep_files PNGs of response_format url (the oldest go)."""
          files = sorted((p for p in self.dir.glob("*.png") if FILE_NAME.match(p.name)), key=lambda p: p.stat().st_mtime)
 diff --git a/serve/server.py b/serve/server.py
-index 22bd4750..241ac7c2 100644
+index 22bd47507267b702e37b7f7974c41ab99c5e4712..241ac7c2d7ba941c7cabe6f3aa28a127fc35682f 100644
 --- a/serve/server.py
 +++ b/serve/server.py
 @@ -2611,6 +2611,10 @@ class Vision:
@@ -41,3 +41,22 @@ index 22bd4750..241ac7c2 100644
      for close in filter(None, closers):
          try:
              close()
+diff --git a/serve/test_server.py b/serve/test_server.py
+index 0ef431aa71db0c2d6fe0922b084b14d81db447a2..b66d12997991f7f96c255b6cdd8fb685b2384c0c 100644
+--- a/serve/test_server.py
++++ b/serve/test_server.py
+@@ -5981,10 +5981,14 @@ class VisionShutdown(unittest.TestCase):
+                 def kill(self):
+                     pass
+ 
++            log = io.StringIO()
++            v.spawn = ([], log, None)
+             v.proc = Proc()
+             v.close()
++            self.assertFalse(log.closed)
+             self.assertTrue((d / "k.sve").exists())
+             v.shutdown()
++            self.assertTrue(log.closed)
+             self.assertFalse(d.exists())
+ 
+ 

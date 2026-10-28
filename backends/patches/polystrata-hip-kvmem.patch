@@ -1,17 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3335fcbb..94b65201 100644
+index 3335fcbbb0a09f6ee1c4484193a1c09f294bd5be..aece86ea81ef00e228c7531b3a3710bf2e64cc3f 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -2095,7 +2095,7 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
-                    src/poly/kernels_dsv4.cu src/core/conversation_memory.cpp)
-     target_include_directories(poly_gdn_mma_state_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
-     target_link_libraries(poly_gdn_mma_state_test PRIVATE strata_poly_mmq strata_kernels strata_spec ggml-cpu ggml-base
--                         ${_strata_gpu_blas_target} ${_strata_gpu_runtime_target} CUDA::cuda_driver Threads::Threads)
-+                         ${_strata_gpu_blas_target} ${_strata_gpu_runtime_target} ${_strata_poly_driver} Threads::Threads)
-   endif()
- 
-   add_executable(strata-poly src/poly/main.cpp src/poly/engine.cpp src/poly/glm5next.cpp src/poly/qwen35.cpp
-@@ -2116,15 +2116,30 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
+@@ -2116,15 +2116,32 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
                                             Threads::Threads)
    set(STRATA_KVMEM_SOURCE_DIR "" CACHE PATH "Optional portable KVMem core source directory")
    if(STRATA_KVMEM_SOURCE_DIR)
@@ -34,7 +25,9 @@ index 3335fcbb..94b65201 100644
 +      target_include_directories(kvmem_recall_hip PRIVATE "${STRATA_KVMEM_SOURCE_DIR}/include"
 +                                                           ${_strata_gpu_include_directories})
 +      target_compile_definitions(kvmem PUBLIC KVMEM_PAGE_SOFTMAX_CUDA=1)
-+      target_sources(strata-poly PRIVATE $<TARGET_OBJECTS:kvmem_recall_hip>)
++      target_link_libraries(kvmem_recall_hip PRIVATE ${_strata_gpu_runtime_target})
++      target_sources(kvmem PRIVATE $<TARGET_OBJECTS:kvmem_recall_hip>)
++      target_link_libraries(kvmem PUBLIC hip::host)
 +    else()
 +      kvmem_enable_cuda_recall()
 +    endif()
@@ -45,7 +38,7 @@ index 3335fcbb..94b65201 100644
      target_compile_definitions(strata-poly PRIVATE STRATA_KVMEM=1)
      target_link_libraries(strata-poly PRIVATE kvmem)
      add_executable(poly_kvmem_history_test tools/poly_kvmem_history_test.cpp)
-@@ -2146,7 +2161,7 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
+@@ -2146,7 +2163,7 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
      target_compile_definitions(poly_elastic_test PRIVATE STRATA_KVMEM=1 STRATA_ELASTIC_TESTING=1)
      target_include_directories(poly_elastic_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
      target_link_libraries(poly_elastic_test PRIVATE kvmem strata_poly_mmq strata_kernels ggml-cpu ggml-base
@@ -54,7 +47,7 @@ index 3335fcbb..94b65201 100644
      # Requires a real qwen35moe model; deliberately excluded from automatic ctest.
      add_executable(poly_kvmem_mtp_test tools/poly_kvmem_mtp_test.cpp
        src/poly/engine.cpp src/poly/qwen35.cpp src/poly/glm5next.cpp src/poly/gemma4.cpp
-@@ -2155,7 +2170,7 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
+@@ -2155,7 +2172,7 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
      target_compile_definitions(poly_kvmem_mtp_test PRIVATE STRATA_KVMEM=1)
      target_include_directories(poly_kvmem_mtp_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
      target_link_libraries(poly_kvmem_mtp_test PRIVATE kvmem strata_poly_mmq strata_kernels ggml-cpu ggml-base

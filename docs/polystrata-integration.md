@@ -1,9 +1,13 @@
 # PolyStrata integration
 
-The opt-in `polystrata` backend pins upstream `v0.1.45-poly.4` at
-`145493e66580c80bba09b0130f667a2b1789da69`. It supports qwen35moe GGUF models
-on one CUDA GPU, with F16 or Q8_0 KV. The source submodule stays at the upstream
-commit; `backends/versions.json` identifies the integration patch and resulting tree.
+The opt-in `polystrata` backend pins upstream `v0.1.45-poly.5` at
+`bfd8911efbb8c27214d5aabc511907c6149171e7`. It supports qwen35moe GGUF models
+on one CUDA GPU, with F16 or Q8_0 KV. This revision also carries the opt-in HIP
+integration, marked experimental and disabled by default. Its compile/link CI
+is a merge gate; AMD inference qualification is required before promoting it
+to validated hardware support, rather than blocking the validated CUDA update.
+The source submodule stays at the upstream commit; `backends/versions.json`
+identifies all twelve ordered patches and their resulting trees.
 
 The backend provides bounded Query/replay, resident-only Pressure on tool
 continuations, process-shared RAM/SSD history storage, native concurrent sequences,
@@ -30,7 +34,58 @@ default. Its snapshot and graph-recording fallbacks are retained. It requires
 separate state/replay validation before claiming a speed or quality benefit.
 The web chat's send and regenerate paths share the same explicit request
 overrides, client-owned reasoning, native timing and incomplete-stream detection.
-The pin excludes commits after the poly.4 release.
+The current pin excludes commits after the poly.5 release. The poly.5 update
+rebases the existing integration layers, adds HIP KVMem integration, links
+Kolibri sources into model test targets, and preserves the `(0, 0)` no-Query
+sentinel when image tokens are expanded. A continuation must not reinterpret
+that sentinel as a request to recall old history.
+
+### Direct HIP launch
+
+After building a HIP worker against this checkout's portable KVMem core,
+select it explicitly in the Python launcher:
+
+```sh
+python3 tools/polystrata/server.py --backend hip --gpu 0 \
+  --source backends/polystrata --worker /path/to/strata-poly \
+  --model /path/to/model.gguf
+```
+
+`--gpu` is the HIP runtime ordinal reported by `strata-device --list-devices`.
+This path does not query `nvidia-smi`. CUDA remains the default and requires a
+GPU UUID. Existing console/launcher GPU selection is unchanged; this option is
+for direct Python launches. Use a vision encoder built for the selected device
+and a projector matching the language model; the filename alone does not prove
+that their embedding widths match. HIP startup prints an experimental-status
+notice. Deployments still require inference checks on the intended AMD
+architecture; build success alone is not a correctness or performance claim.
+
+### Poly.5 candidate validation (2026-10-28)
+
+On Windows x64, CUDA 13.2 / MSVC and architecture 120a, the worker, GDN state
+target and KVMem regression targets were built with eight parallel jobs. The
+prepared twelve-layer chain reproduced its recorded tree. The frontend suite
+passed 354 tests with three skips. Adapter tests cover CUDA/HIP selection,
+link dependency ownership, image Query boundaries, assets and UI contracts.
+The link tests fail on the original PR's prepared tree and pass after correction.
+
+RTX 5050 Laptop checks passed native kernels, history/session policy, F16/Q8
+MTP accepted state, elastic experts and KV reclaim. Full F16/32-token and
+Q8/64-token runs each passed twelve forced accepted-prefix cases, plus
+cancellation/reset and native-transfer checks. Real HTTP checks passed
+Unicode text, separate document/question turns, CPU image encoding with GPU
+inference, retained-image follow-up, tool continuation with no Query, and
+recovery after a streaming disconnect. The 6,651-token document was sent first;
+the subsequent question reused 6,652 tokens, captured Query `[6657, 6673)` and
+returned the expected key. These are functional checks, not a performance claim.
+
+On RTX 5060 Ti, GDN state/rollback/continuation/residency/cancellation passed
+with `STRATA_GDN_MMA=0` and `1`, using separate identical empty profile seeds.
+Two concurrent native sequences also passed with two slots active together;
+both retained follow-ups reused prefixes (362 and 386 tokens) without label
+cross-contamination.
+The optional GDN mode remains off by default. No new AMD hardware, native HIP
+compiler, Linux CUDA runtime, SYCL or GPU vision result is claimed here.
 
 ### Poly.4 update validation (2026-10-25)
 
@@ -208,14 +263,23 @@ comparison was run as part of this merge validation.
 ## Native CI coverage
 
 The `polystrata-cuda-build-linux` job prepares and verifies the pinned patch
-series, then builds `strata-poly` and all four `poly_kvmem_*_test` targets against
+series, then builds `strata-poly`, `poly_gdn_mma_state_test`, `poly_elastic_test`
+and all four `poly_kvmem_*_test` targets against
 the same checkout's `kvmem/` core. It uses CUDA 13.2 with an explicit Blackwell
 architecture, and the GGML commit pinned by PolyStrata. It does not reuse a
 previously installed worker. Compiler caching speeds up repeated builds; build
 and test diagnostics are saved as a CI artifact.
 
 The hosted runner has no GPU or model. It executes only the history and session
-policy tests; the kernel and MTP targets are compiled and linked, not executed.
+policy tests; the kernel, MTP, GDN state and elastic targets are compiled and
+linked, not executed. Host CI also checks image Query/no-Query boundaries and
+the vision log's unload/shutdown lifetime. The CMake dependency-contract test
+evaluates both backend branches without compiling HIP; it is not a HIP build.
+The separate `polystrata-hip-build-linux` matrix compiles and links the worker
+and five regression executables for `gfx1100` and `gfx1201` with ROCm 7.2.4.
+It pins the official container digest and BLAS development package versions
+and does not execute HIP binaries or access a GPU. Failure in either
+architecture fails the aggregate merge gate.
 GPU kernel correctness, F16/Q8 MTP boundaries, chunked archive integrity and
 two-session model isolation still require local GPU qualification. A successful
 CI build is not evidence of inference correctness or performance on its own.
