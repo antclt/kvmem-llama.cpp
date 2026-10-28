@@ -29,6 +29,15 @@ class ConsoleTests(unittest.TestCase):
         controller = console.Controller(package, state, 18197)
         self.assertEqual(controller.backends, ['ninfer'])
         self.assertEqual(set(controller.worker_defaults()), {'ninfer'})
+        registered = {name: str((Path(self.tmp.name) / (name + '-worker')).resolve())
+                      for name in ('ninfer', 'llamacpp', 'polystrata')}
+        (state / 'worker-paths.json').write_text(json.dumps(registered))
+        self.assertEqual(controller.worker_defaults()['ninfer']['path'], registered['ninfer'])
+        self.assertEqual(set(controller.worker_defaults()), {'ninfer'})
+        (state / 'worker-paths.json').write_text(json.dumps({'unknown': registered['ninfer']}))
+        with self.assertRaisesRegex(ValueError, 'Invalid worker-paths'):
+            controller.worker_defaults()
+        (state / 'worker-paths.json').unlink()
         with self.assertRaises(ValueError):
             console.normalize({'schema_version': 1, 'parameters': {'Backend': 'llamacpp'}}, controller.backends)
         controller.draft_path.write_text(json.dumps({'schema_version': 1, 'parameters': {'Backend': 'llamacpp', 'Model': 'old.gguf'}}))

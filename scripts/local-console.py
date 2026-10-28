@@ -255,7 +255,7 @@ class Controller:
         # Direct/source launches retain the explicit-registration precedence.
         registration = self.state_dir / 'worker-paths.json'
         paths = json.loads(registration.read_text(encoding='utf-8-sig')) if registration.exists() else {}
-        if (not isinstance(paths, dict) or set(paths) - set(self.backends)
+        if (not isinstance(paths, dict) or set(paths) - set(NATIVE)
                 or any(not isinstance(p, str) or not Path(p).is_absolute() or '\x00' in p
                        for p in paths.values())):
             raise ValueError('Invalid worker-paths.json: map backend names to absolute executable paths')
@@ -830,7 +830,7 @@ class Controller:
         finally:
             self.inspection_slots.release()
 
-    def export_config(self, data):
+    def export_config(self, data, *, for_launch=False):
         if os.name == 'nt':
             raise ValueError('Linux script generation requires the target Linux machine')
         if not isinstance(data, dict) or set(data) - {'config', 'profile_id', 'scope', 'user', 'store_api_key'}:
@@ -838,7 +838,7 @@ class Controller:
         if type(data.get('store_api_key', False)) is not bool:
             raise ValueError('store_api_key must be boolean')
         clean = normalize(data.get('config'), self.backends)
-        health = self.inspect_model(clean)
+        health = self.inspect_model(clean, for_launch=for_launch)
         if not health['can_start']:
             raise ValueError('Model inspection blocked export: ' + '; '.join(
                 c.get('zh', c.get('en', '')) + ': ' + c.get('detail', '')
@@ -932,7 +932,7 @@ class Controller:
 
     def start(self, data):
         if os.name != 'nt':
-            exported = self.export_config({'config': data})
+            exported = self.export_config({'config': data}, for_launch=True)
             return self.start_revision({key: exported[key] for key in ('profile_id', 'revision')})
         clean = normalize(data, self.backends)
         clean['parameters'] = self.prefer_packaged_worker(clean['parameters'])
