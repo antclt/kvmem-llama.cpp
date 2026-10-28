@@ -14,7 +14,7 @@ if(process.env.TEST_NINFER_WORKER)registrations.ninfer=process.env.TEST_NINFER_W
 fs.writeFileSync(path.join(state,'worker-paths.json'),JSON.stringify(registrations));
 const port=Number(process.env.CONSOLE_TEST_PORT||18431);
 const base=`http://127.0.0.1:${port}`;
-const child=spawn(process.env.PYTHON||'python',['-B',path.join(root,'scripts/local-console.py'),'--port',String(port),'--state-dir',state,...(process.env.BACKEND_ROOT?['--backend-root',process.env.BACKEND_ROOT]:[])],{windowsHide:true});
+const child=spawn(process.env.PYTHON||'python',['-B',path.join(root,'scripts/local-console.py'),'--port',String(port),'--state-dir',state,'--profiles-root',path.join(state,'profiles'),...(process.env.BACKEND_ROOT?['--backend-root',process.env.BACKEND_ROOT]:[])],{windowsHide:true});
 let stderr='';child.stderr.on('data',x=>stderr+=x);
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(fn,ms=20000){const end=Date.now()+ms;while(Date.now()<end){try{const value=await fn();if(value)return value;}catch{}await delay(200);}throw Error('Timed out: '+stderr);}
@@ -23,6 +23,10 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
 (async()=>{
  const info=await until(async()=>{const r=await api('info');return r.code===200&&r.body;});token=info.token;
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+ if(info.platform==='linux'){
+  await require('./test-launcher-linux.cjs')({browser,base,info,state});
+  return;
+ }
  // Either initialization order must preserve the stopped-service config page.
  for(const late of ['shell','info']){
   const context=await browser.newContext(),page=await context.newPage(),errors=[];

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 spec = importlib.util.spec_from_file_location('console', Path(__file__).resolve().parents[1] / 'scripts/local-console.py')
 console = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(console)
+EXE = '.exe' if os.name == 'nt' else ''
 
 
 class ConsoleTests(unittest.TestCase):
@@ -22,11 +23,21 @@ class ConsoleTests(unittest.TestCase):
         launcher = package / 'scripts/windows/start-backend.ps1'
         launcher.parent.mkdir(parents=True)
         launcher.write_bytes((console.ROOT / 'scripts/windows/start-backend.ps1').read_bytes())
+        (package / 'scripts/launcher-capabilities.json').write_bytes((console.ROOT / 'scripts/launcher-capabilities.json').read_bytes())
         (package / 'console-build.json').write_text(json.dumps({'supported_backends': ['ninfer']}))
         state = package / 'state'
         controller = console.Controller(package, state, 18197)
         self.assertEqual(controller.backends, ['ninfer'])
         self.assertEqual(set(controller.worker_defaults()), {'ninfer'})
+        registered = {name: str((Path(self.tmp.name) / (name + '-worker')).resolve())
+                      for name in ('ninfer', 'llamacpp', 'polystrata')}
+        (state / 'worker-paths.json').write_text(json.dumps(registered))
+        self.assertEqual(controller.worker_defaults()['ninfer']['path'], registered['ninfer'])
+        self.assertEqual(set(controller.worker_defaults()), {'ninfer'})
+        (state / 'worker-paths.json').write_text(json.dumps({'unknown': registered['ninfer']}))
+        with self.assertRaisesRegex(ValueError, 'Invalid worker-paths'):
+            controller.worker_defaults()
+        (state / 'worker-paths.json').unlink()
         with self.assertRaises(ValueError):
             console.normalize({'schema_version': 1, 'parameters': {'Backend': 'llamacpp'}}, controller.backends)
         controller.draft_path.write_text(json.dumps({'schema_version': 1, 'parameters': {'Backend': 'llamacpp', 'Model': 'old.gguf'}}))
@@ -57,7 +68,7 @@ class ConsoleTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_polystrata_plan_requires_matching_worker_block_capability(self):
-        worker=Path(self.tmp.name)/'worker.exe';worker.touch()
+        worker=Path(self.tmp.name)/f'worker{EXE}';worker.touch()
         config={'schema_version':1,'parameters':{'Backend':'polystrata','Worker':str(worker),'BlockTokens':32}}
         for supported,flag in (([32,64],32),([64],32),([],32),([32,64],64)):
             response={'argv':['python','server.py'],'native_argv':[str(worker),'--kvmem-block-tokens',str(flag)]}
@@ -117,7 +128,7 @@ class ConsoleTests(unittest.TestCase):
                 normalize(Backend='llamacpp', **{'DraftModel': str(draft), **invalid})
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
         self.controller = console.Controller(console.ROOT, self.tmp.name, 18199)
         self.capability_stub = patch.object(self.controller, 'worker_capabilities', return_value={
             'schema_version': 1, 'query_scoring_revision': 2, 'independent_graph_lrfu': True,
@@ -150,7 +161,7 @@ class ConsoleTests(unittest.TestCase):
                 console.normalize({'schema_version': 1, 'parameters': dict(console.DEFAULTS, **invalid)}, self.controller.backends)
 
     def test_worker_contract_rejects_old_or_wrong_worker_and_caches_probe(self):
-        worker = Path(self.tmp.name) / 'worker.exe'; worker.write_bytes(b'fixture')
+        worker = Path(self.tmp.name) / f'worker{EXE}'; worker.write_bytes(b'fixture')
         contract = dict(schema_version=1, backend='ninfer', query_scoring_revision=2,
                         independent_graph_lrfu=True, signed_lrfu_hits=True)
         with patch.object(console.subprocess, 'run', return_value=SimpleNamespace(
@@ -187,7 +198,7 @@ class ConsoleTests(unittest.TestCase):
         asset = package / 'launcher.js'; asset.write_text('original', encoding='utf-8')
         digest = console.hashlib.sha256(asset.read_bytes()).hexdigest()
         (package / 'console-build.json').write_text(json.dumps({
-            'launch_contract_version': 2, 'controller_files': {'launcher.js': digest}}), encoding='utf-8')
+            'launch_contract_version': 2 if os.name == 'nt' else 3, 'controller_files': {'launcher.js': digest}}), encoding='utf-8')
         backend_root = console.ROOT
         with patch.object(console, 'ROOT', package):
             control = console.Controller(backend_root, package / 'state', 18199)
@@ -200,6 +211,10 @@ class ConsoleTests(unittest.TestCase):
         folder = Path(self.tmp.name) / 'old-launcher'
         script = folder / 'scripts/windows/start-backend.ps1'; script.parent.mkdir(parents=True)
         script.write_text("[ValidateSet('llamacpp', 'ninfer')][string]$Backend", encoding='utf-8')
+        if os.name != 'nt':
+            with self.assertRaises(FileNotFoundError):
+                console.Controller(folder, folder / 'state', 18199)
+            return
         control = console.Controller(folder, folder / 'state', 18199)
         with self.assertRaisesRegex(ValueError, 'Launcher version mismatch'):
             control.plan(self.config)
@@ -214,6 +229,13 @@ class ConsoleTests(unittest.TestCase):
         script = folder / 'scripts/windows/start-backend.ps1'
         script.parent.mkdir(parents=True)
         script.write_text("[ValidateSet('llamacpp', 'ninfer', 'strata', 'polystrata')][string]$Backend", encoding='utf-8')
+        if os.name != 'nt':
+            manifest = json.loads((console.ROOT / 'scripts/launcher-capabilities.json').read_text())
+            manifest['backends']['strata'] = {}
+            (folder / 'scripts/launcher-capabilities.json').write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, 'manifest'):
+                console.Controller(folder, folder / 'state', 18199)
+            return
         controller = console.Controller(folder, folder / 'state', 18199)
         self.assertEqual(controller.backends, ['llamacpp', 'ninfer', 'polystrata'])
         for backend in ('strata',):
@@ -258,7 +280,7 @@ class ConsoleTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_native_service_mapping_and_private_launch_plan(self):
         key = 'test-only-credential-123456'
-        worker = Path(self.tmp.name) / 'worker.exe'; worker.touch()
+        worker = Path(self.tmp.name) / f'worker{EXE}'; worker.touch()
         template = Path(self.tmp.name) / "chat & ' $literal.jinja"; template.write_text('template', encoding='utf-8')
         for backend, suffix, alias_flag, template_flag, log_flag, log_value, off_flag in (
             ('llamacpp', '.gguf', '--alias', '--chat-template-file', '--verbosity', '5', '--no-think'),
@@ -297,7 +319,7 @@ class ConsoleTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_ninfer_thinking_and_native_array_survive_json_bridge(self):
-        worker = Path(self.tmp.name) / 'worker.exe'; worker.touch()
+        worker = Path(self.tmp.name) / f'worker{EXE}'; worker.touch()
         model = Path(self.tmp.name) / 'model with spaces.ninfer'; model.touch()
         self.config['parameters'].update(Model=str(model), Worker=str(worker),
             Gpu='GPU-00000000-0000-0000-0000-000000000001', ThinkingBudget=256,
@@ -318,8 +340,8 @@ class ConsoleTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_registered_worker_default_and_explicit_override(self):
         model = Path(self.tmp.name) / 'test.ninfer'; model.touch()
-        worker = Path(self.tmp.name) / 'installed worker.exe'; worker.touch()
-        explicit = Path(self.tmp.name) / 'explicit worker.exe'; explicit.touch()
+        worker = Path(self.tmp.name) / f'installed worker{EXE}'; worker.touch()
+        explicit = Path(self.tmp.name) / f'explicit worker{EXE}'; explicit.touch()
         registration = Path(self.tmp.name) / 'worker-paths.json'
         registration.write_text(json.dumps({'ninfer': str(worker)}), encoding='utf-8')
         self.config['parameters'].update(Model=str(model), Worker='',
@@ -340,7 +362,7 @@ class ConsoleTests(unittest.TestCase):
     def test_packaged_worker_default(self):
         old_root = self.controller.backend_root
         self.controller.backend_root = Path(self.tmp.name)
-        worker = self.controller.backend_root / 'workers/ninfer/ninfer-kvmem-server.exe'
+        worker = self.controller.backend_root / f'workers/ninfer/ninfer-kvmem-server{EXE}'
         worker.parent.mkdir(parents=True); worker.touch()
         try:
             self.assertEqual(self.controller.worker_defaults()['ninfer'],
@@ -351,13 +373,13 @@ class ConsoleTests(unittest.TestCase):
     def test_worker_discovery_in_installation_root_bin_and_workers(self):
         installation = Path(self.tmp.name) / 'installation'
         self.controller.backend_root = installation
-        cases = [('ninfer', 'ninfer-kvmem-server.exe', ''),
-                 ('ninfer', 'ninfer-serve.exe', ''),
-                 ('ninfer', 'ninfer-serve.exe', 'bin'),
-                 ('ninfer', 'ninfer-kvmem-server.exe', 'workers/ninfer'),
-                 ('llamacpp', 'llama-kvmem-server.exe', ''),
-                 ('llamacpp', 'llama-kvmem-server.exe', 'bin'),
-                 ('llamacpp', 'llama-kvmem-server.exe', 'workers/llamacpp')]
+        cases = [('ninfer', f'ninfer-kvmem-server{EXE}', ''),
+                 ('ninfer', f'ninfer-serve{EXE}', ''),
+                 ('ninfer', f'ninfer-serve{EXE}', 'bin'),
+                 ('ninfer', f'ninfer-kvmem-server{EXE}', 'workers/ninfer'),
+                 ('llamacpp', f'llama-kvmem-server{EXE}', ''),
+                 ('llamacpp', f'llama-kvmem-server{EXE}', 'bin'),
+                 ('llamacpp', f'llama-kvmem-server{EXE}', 'workers/llamacpp')]
         with patch.object(console, 'ROOT', installation), patch.object(console.subprocess, 'run') as run:
             for backend, name, directory in cases:
                 with self.subTest(backend=backend, name=name, directory=directory):
@@ -372,15 +394,15 @@ class ConsoleTests(unittest.TestCase):
         installation = Path(self.tmp.name) / 'installation'
         installation.mkdir()
         self.controller.backend_root = installation
-        canonical = installation / 'ninfer-kvmem-server.exe'; canonical.touch()
-        alias = installation / 'ninfer-serve.exe'; alias.touch()
-        bin_worker = installation / 'bin/ninfer-kvmem-server.exe'
+        canonical = installation / f'ninfer-kvmem-server{EXE}'; canonical.touch()
+        alias = installation / f'ninfer-serve{EXE}'; alias.touch()
+        bin_worker = installation / f'bin/ninfer-kvmem-server{EXE}'
         bin_worker.parent.mkdir(); bin_worker.touch()
         with patch.object(console, 'ROOT', installation):
             self.assertEqual(self.controller.worker_defaults()['ninfer']['path'], str(canonical))
             canonical.unlink()
             self.assertEqual(self.controller.worker_defaults()['ninfer']['path'], str(alias))
-            registered = Path(self.tmp.name) / 'registered.exe'; registered.touch()
+            registered = Path(self.tmp.name) / f'registered{EXE}'; registered.touch()
             (Path(self.tmp.name) / 'worker-paths.json').write_text(json.dumps({'ninfer': str(registered)}))
             self.assertEqual(self.controller.worker_defaults()['ninfer']['path'], str(registered))
             registered.unlink()
@@ -389,9 +411,9 @@ class ConsoleTests(unittest.TestCase):
 
     def test_packaged_launch_prefers_bundled_worker_over_stale_paths(self):
         installation = Path(self.tmp.name) / 'installation'
-        packaged = installation / 'workers/ninfer/ninfer-kvmem-server.exe'
+        packaged = installation / f'workers/ninfer/ninfer-kvmem-server{EXE}'
         packaged.parent.mkdir(parents=True); packaged.touch()
-        old = Path(self.tmp.name) / 'old-package/bin/ninfer-serve.exe'
+        old = Path(self.tmp.name) / f'old-package/bin/ninfer-serve{EXE}'
         old.parent.mkdir(parents=True); old.touch()
         state = Path(self.tmp.name) / 'packaged-state'; state.mkdir()
         (state / 'worker-paths.json').write_text(json.dumps({'ninfer': str(old)}))
@@ -409,17 +431,17 @@ class ConsoleTests(unittest.TestCase):
         installation.mkdir()
         self.controller.backend_root = Path(self.tmp.name) / 'backend'
         # Plain upstream llama-server and arbitrary/nested EXEs are not KVMem workers.
-        (installation / 'llama-server.exe').touch()
-        (installation / 'other.exe').touch()
-        nested = installation / 'other-build/ninfer-serve.exe'
+        (installation / f'llama-server{EXE}').touch()
+        (installation / f'other{EXE}').touch()
+        nested = installation / f'other-build/ninfer-serve{EXE}'
         nested.parent.mkdir(); nested.touch()
         with patch.object(console, 'ROOT', installation):
             self.assertFalse(self.controller.worker_defaults()['ninfer']['available'])
             self.assertFalse(self.controller.worker_defaults()['llamacpp']['available'])
-            worker = installation / 'ninfer-serve.exe'; worker.touch()
+            worker = installation / f'ninfer-serve{EXE}'; worker.touch()
             self.assertEqual(self.controller.worker_defaults()['ninfer'],
                              {'path': str(worker), 'available': True})
-            selected = self.controller.backend_root / 'ninfer-kvmem-server.exe'
+            selected = self.controller.backend_root / f'ninfer-kvmem-server{EXE}'
             selected.parent.mkdir(); selected.touch()
             self.assertEqual(self.controller.worker_defaults()['ninfer']['path'], str(selected))
 
@@ -576,7 +598,7 @@ class ConsoleTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_canonical_plan_preserves_literal_paths_and_gpu_identity(self):
         model = Path(self.tmp.name) / "model space & ' $literal.ninfer"
-        worker = Path(self.tmp.name) / 'worker space.exe'
+        worker = Path(self.tmp.name) / f'worker space{EXE}'
         model.touch(); worker.touch()
         self.config['parameters'].update(Model=str(model), Worker=str(worker),
                                          Gpu='GPU-00000000-0000-0000-0000-000000000001')
@@ -589,7 +611,7 @@ class ConsoleTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_multigpu_order_and_layers_reach_native_launcher(self):
         model = Path(self.tmp.name) / 'multi.ninfer'; model.touch()
-        worker = Path(self.tmp.name) / 'worker.exe'; worker.touch()
+        worker = Path(self.tmp.name) / f'worker{EXE}'; worker.touch()
         gpu_order = ['GPU-00000000-0000-0000-0000-000000000002',
                      'GPU-00000000-0000-0000-0000-000000000001']
         for devices, layers in [(gpu_order, [40, 24]), (gpu_order[::-1], [24, 40])]:
@@ -606,7 +628,7 @@ class ConsoleTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_independent_llama_kv_types_reach_native_flags(self):
         model = Path(self.tmp.name) / 'split kv.gguf'; model.touch()
-        worker = Path(self.tmp.name) / 'worker.exe'; worker.touch()
+        worker = Path(self.tmp.name) / f'worker{EXE}'; worker.touch()
         base = dict(console.DEFAULTS, Backend='llamacpp', Model=str(model), Worker=str(worker),
                     Gpu='GPU-00000000-0000-0000-0000-000000000001')
         quantized = ('q8_0', 'q5_0', 'q4_0')
@@ -649,7 +671,7 @@ class ConsoleTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows canonical launcher')
     def test_preview_reports_port_occupancy_without_starting(self):
         model = Path(self.tmp.name) / 'port.ninfer'; model.touch()
-        worker = Path(self.tmp.name) / 'port.exe'; worker.touch()
+        worker = Path(self.tmp.name) / f'port{EXE}'; worker.touch()
         self.config['parameters'].update(Model=str(model), Worker=str(worker),
                                          Gpu='GPU-00000000-0000-0000-0000-000000000001')
         with socket.socket() as occupied:
@@ -667,6 +689,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(result['argv'][result['argv'].index('--host') + 1], '0.0.0.0')
         self.assertIsNone(self.controller.process)
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows start path; Linux covered by generated revision tests')
     def test_listen_address_validation_and_wildcard_bind(self):
         for host in ('127.0.0.1', '0.0.0.0'):
             self.config['parameters']['ListenHost'] = host
@@ -734,14 +757,23 @@ class ConsoleTests(unittest.TestCase):
             self.assertFalse(console.matching_console(port, console.ROOT, Path(self.tmp.name) / 'other-state'))
             self.assertFalse(console.matching_console(port, Path(self.tmp.name) / 'other-install', self.tmp.name))
             self.assertFalse(console.matching_console(port, console.ROOT, self.tmp.name, True))
+            self.assertFalse(console.matching_console(port, console.ROOT, self.tmp.name,
+                                                     profiles_root=Path(self.tmp.name) / 'other-profiles'))
             with patch.object(console.sys, 'argv', ['local-console.py', '--port', str(port),
-                              '--state-dir', self.tmp.name, '--open-browser']), \
+                              '--state-dir', self.tmp.name, '--profiles-root', str(self.controller.profiles_root), '--open-browser']), \
                  patch.object(console, 'open_console_browser') as browser, \
                  patch.object(console, 'gpu_inventory') as inventory:
                 console.main()
                 browser.assert_called_once_with(f'http://127.0.0.1:{port}/monitor/')
                 inventory.assert_not_called()
             self.assertIsNone(self.controller.process)
+            with patch.object(console.sys, 'argv', ['local-console.py', '--port', str(port),
+                              '--state-dir', self.tmp.name, '--profiles-root', str(Path(self.tmp.name) / 'other-profiles'),
+                              '--open-browser']), patch.object(console, 'open_console_browser') as browser:
+                with self.assertRaises(SystemExit) as error:
+                    console.main()
+                self.assertEqual(error.exception.code, 1)
+                browser.assert_not_called()
             with patch.object(console.sys, 'argv', ['local-console.py', '--port', str(port),
                               '--state-dir', str(Path(self.tmp.name) / 'other-state'), '--open-browser']), \
                  patch.object(console, 'open_console_browser') as browser:
