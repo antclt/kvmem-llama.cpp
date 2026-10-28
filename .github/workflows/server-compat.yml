@@ -549,6 +549,10 @@ jobs:
         run: |
           node test-chat-props.cjs
           node test-chat-history.cjs
+          node test-chat-attachments.cjs
+          node test-chat-actions.cjs
+          node test-chat-background.cjs
+          node test-chat-metrics.cjs
       - name: Documentation-only result
         if: needs.changes.outputs.run_ci == 'false'
         run: echo 'Documentation only; UI tests and builds skipped.'

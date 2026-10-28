@@ -4,8 +4,9 @@
   import { DatabaseService as DB } from "$lib/services/database.service";
   import { settingsStore } from "$lib/stores/settings/index.svelte";
   import { context, streamChat, requestRecord, cancelRequest } from "./api";
-  import { normalizeHistory } from "./history";
+  import { activeBranch, normalizeHistory } from "./history";
   import { english } from "./labels";
+  import { readAttachment, fileAccept, supportedAttachment, attachmentContent } from "./attachments";
   import { setMode } from "mode-watcher";
   import {
     Plus,
@@ -17,6 +18,8 @@
     MessageSquare,
     Download,
     Copy,
+    RotateCcw,
+    Pencil,
     Paperclip,
     SlidersHorizontal,
     Brain,
@@ -34,6 +37,18 @@
     loading = $state(false),
     error = $state(""),
     notice = $state("");
+  let generatingConversation = $state<Row>(null);
+  const viewingGeneration = $derived(busy && active?.id === generatingConversation?.id);
+  let generationMessages: Row[] = [];
+  const generationErrors = new Map<string, string>();
+  const draftAttachments = new Map<string, Row[]>();
+  let dragDepth = $state(0);
+  let editingId = $state<string | null>(null),
+    editedInput = $state(""),
+    editedImages = $state<Row[]>([]);
+  let editField: HTMLTextAreaElement | undefined = $state();
+  const lastUserIndex = $derived(messages.findLastIndex((m) => m.role === "user"));
+  const lastUser = $derived(messages[lastUserIndex]);
   let settingsOpen = $state(false),
     historyOpen = $state(false),
     migrationOpen = $state(false),
@@ -287,7 +302,7 @@
       ctx = { ...ctx, state: "unavailable" };
       if (!ctx?.model) notice = t("请从 KVMem 控制台打开聊天");
     } finally {
-      ((contextBusy = false), (historyInitialized = false));
+      contextBusy = false;
     }
   }
   async function saveSettings() {
@@ -382,32 +397,45 @@
     void saveSettings();
     notice = t("已恢复当前服务设置");
   }
-  async function refreshHistory() {
+  function reportGenerationError(message: string, conversationId: string | undefined = generatingConversation?.id) {
+    if (conversationId) generationErrors.set(conversationId, message);
+    if (!conversationId || active?.id === conversationId) error = message;
+  }
+  async function refreshHistory(errorConversationId?: string) {
     try {
       conversations = await DB.getAllConversations();
     } catch (e) {
-      error = t("读取历史失败") + ": " + e;
+      if (errorConversationId) reportGenerationError(t("读取历史失败") + ": " + e, errorConversationId);
+      else error = t("读取历史失败") + ": " + e;
     }
   }
   async function selectConversation(conv: Row) {
-    if (busy || loading) return;
+    if (loading) return;
     loading = true;
+    const runningId = generatingConversation?.id;
     try {
-      if (historyInitialized) set(draftKey(), input);
+      if (historyInitialized) {
+        set(draftKey(), input);
+        draftAttachments.set(draftKey(), plain(images));
+      }
       historyInitialized = true;
-      messages = conv
-        ? (await DB.getConversationMessages(conv.id)).map((m: Row) => ({
+      // Refresh currNode: sidebar rows may predate a newly created reply branch.
+      const current = conv ? await DB.getConversation(conv.id) : null;
+      const saved = current ? await DB.getConversationMessages(current.id) : [];
+      messages = current?.id === runningId && current
+        ? generationMessages.map((m) => ({ ...m }))
+        : current ? activeBranch(saved, current.currNode).map((m: Row) => ({
             ...m,
             uiStatus: m.uiStatus === "pending" ? "interrupted" : m.uiStatus,
-          }))
-        : [];
-      active = conv;
-      overrides = conv?.consoleSettings?.[scope()] ?? {};
+          })) : [];
+      active = current;
+      overrides = current?.consoleSettings?.[scope()] ?? {};
       input = get(draftKey(), "");
-      images = [];
-      error = "";
+      images = plain(draftAttachments.get(draftKey()) || []);
+      cancelEdit();
+      error = generationErrors.get(current?.id) || "";
       historyOpen = false;
-      set("kvmem-console-active", conv?.id ?? null);
+      set("kvmem-console-active", current?.id ?? null);
       await tick();
       bottom?.scrollIntoView();
     } catch (e) {
@@ -433,29 +461,55 @@
   function navigate(page: string) {
     parent.postMessage({ type: "kvmem-navigate", page }, location.origin);
   }
-  async function addImages(files: File[]) {
-    if (!ctx?.capabilities?.vision) return;
-    try {
-      for (const f of files) {
-        if (
-          !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-            f.type,
-          ) ||
-          f.size > 10 * 1024 * 1024 ||
-          images.length >= 4
-        )
-          throw Error(t("最多 4 张图片，每张不超过 10 MiB"));
-        const url = await new Promise<string>((resolve, reject) => {
-          const r = new FileReader();
-          r.onload = () => resolve(String(r.result));
-          r.onerror = reject;
-          r.readAsDataURL(f);
-        });
-        images = [...images, { name: f.name, base64Url: url, type: "image" }];
-      }
-    } catch (e) {
-      error = String(e);
+  async function addFiles(files: File[]) {
+    if (busy || loading || !files.length) return;
+    const editing = !!editingId;
+    const existing = editing ? editedImages : images;
+    if (existing.length + files.length > 4) {
+      error = t("每条消息最多添加 4 个文件");
+      return;
     }
+    loading = true;
+    error = "";
+    try {
+      const added = [];
+      for (const file of files) {
+        try { added.push(await readAttachment(file, !!ctx?.capabilities?.vision)); }
+        catch (e) { throw Error(file.name + ": " + t(e instanceof Error ? e.message : String(e))); }
+      }
+      if (editing) editedImages = [...existing, ...added];
+      else images = [...existing, ...added];
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+  function fileDrag(e: DragEvent) {
+    return Array.from(e.dataTransfer?.types || []).includes("Files");
+  }
+  function dragOver(e: DragEvent) {
+    if (!fileDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = busy || loading ? "none" : "copy";
+  }
+  function dropFiles(e: DragEvent) {
+    dragDepth = 0;
+    if (!fileDrag(e)) return;
+    e.preventDefault();
+    if (busy || loading) return;
+    if (settingsOpen || migrationOpen) {
+      error = t("请先关闭面板，再将文件拖入聊天");
+      return;
+    }
+    const items = Array.from(e.dataTransfer?.items || []);
+    if (items.some((item) => item.webkitGetAsEntry?.()?.isDirectory)) {
+      error = t("请拖入文件，不支持文件夹");
+      return;
+    }
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (!files.length) { error = t("无法读取拖入的文件，请使用附件按钮选择"); return; }
+    void addFiles(files);
   }
   function wire(m: Row) {
     if (m.tool_calls || m.toolCalls || m.tools?.length || m.role === "tool")
@@ -464,20 +518,12 @@
     if (
       m.legacyContent ||
       m.legacySource?.images?.some((x: Row) => !x.url) ||
-      extras.some((x: Row) => x.type !== "image" || !x.base64Url)
+      extras.some((x: Row) => !supportedAttachment(x))
     )
       throw Error(t("此历史包含当前聊天页尚不支持的附件，原记录已保留"));
     return {
       role: m.role,
-      content: extras.length
-        ? [
-            { type: "text", text: m.content },
-            ...extras.map((x: Row) => ({
-              type: "image_url",
-              image_url: { url: x.base64Url },
-            })),
-          ]
-        : m.content,
+      content: attachmentContent(m.content, extras),
       ...(m.reasoningContent ? { reasoning_content: m.reasoningContent } : {}),
     };
   }
@@ -495,6 +541,7 @@
     if (drawTimer) return;
     drawTimer = setTimeout(() => {
       drawTimer = null;
+      if (active?.id !== generatingConversation?.id) return;
       const follow =
         scroll &&
         scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 140;
@@ -508,34 +555,61 @@
     writes = writes
       .then(() => DB.updateMessage(id, saved))
       .catch((e) => {
-        error = t("保存历史失败") + ": " + e;
+        reportGenerationError(t("保存历史失败") + ": " + e);
       });
   }
-  async function send(continuation = false) {
-    if (busy || loading) return;
-    await refreshContext();
-    if (ctx?.state !== "ready") {
-      error = t("请先启动模型");
-      return;
-    }
-    if (!continuation && !input.trim() && !images.length) return;
-    error = "";
-    notice = "";
+  function cancelEdit() {
+    editingId = null;
+    editedInput = "";
+    editedImages = [];
+  }
+  async function editLastMessage() {
+    if (busy || loading || !lastUser) return;
     try {
-      messages.forEach(wire);
+      wire(lastUser);
+      editingId = lastUser.id;
+      editedInput = lastUser.content;
+      editedImages = plain(lastUser.extra || []);
+      await tick();
+      editField?.focus();
+      editField?.scrollIntoView({ block: "nearest" });
+    } catch (e) {
+      error = String(e);
+    }
+  }
+  async function send(mode: "send" | "continue" | "regenerate" | "edit" = "send") {
+    if (busy || loading) return;
+    if (editingId && mode !== "edit") return;
+    const regenerate = mode === "regenerate", editing = mode === "edit";
+    if ((regenerate || editing) && !lastUser) return;
+    if (editing && editingId !== lastUser.id) return;
+    const content = mode === "continue" ? t("请从刚才停止的位置继续。") : editing ? editedInput : input;
+    const attachments = plain(editing ? editedImages : images);
+    if (!regenerate && !content.trim() && !attachments.length) return;
+    const prefix = regenerate || editing ? messages.slice(0, lastUserIndex + (regenerate ? 1 : 0)) : messages;
+    // Lock the preflight too: context refresh awaits network I/O.
+    loading = true;
+    try {
+      await refreshContext();
+      if (ctx?.state !== "ready") throw Error(t("请先启动模型"));
+      prefix.forEach(wire);
+      if (
+        ((!regenerate && attachments.some((x: Row) => x.type === "image")) ||
+          prefix.some((m) => m.extra?.some((x: Row) => x.type === "image"))) &&
+        !ctx.capabilities?.vision
+      ) throw Error(t("当前模型不支持图片"));
     } catch (e) {
       error = String(e);
       return;
+    } finally {
+      loading = false;
     }
-    if (
-      (images.length ||
-        messages.some((m) => m.extra?.some((x: Row) => x.type === "image"))) &&
-      !ctx.capabilities?.vision
-    ) {
-      error = t("当前模型不支持图片");
-      return;
-    }
+    error = "";
+    notice = "";
     busy = true;
+    loading = true;
+    let preparing = true;
+    let conversationId = active?.id;
     reply = null;
     controller = new AbortController();
     requestId = crypto.randomUUID();
@@ -548,31 +622,42 @@
         set("kvmem-console-active", active.id);
         await saveSettings();
       }
-      const user = await DB.createMessageBranch(
+      conversationId = active.id;
+      generatingConversation = active;
+      generationErrors.delete(conversationId);
+      const user = regenerate ? lastUser : await DB.createMessageBranch(
         {
-          convId: active.id,
+          convId: conversationId,
           type: "text",
           role: "user",
-          content: continuation ? t("请从刚才停止的位置继续。") : input,
+          content,
           timestamp: Date.now(),
           children: [],
           parent: null,
-          extra: plain(images),
+          extra: attachments,
         } as any,
-        messages.at(-1)?.id ?? null,
+        prefix.at(-1)?.id ?? null,
       );
-      messages = [...messages, user];
-      input = "";
-      images = [];
-      set(draftKey(), "");
-      set("kvmem-console-draft:new", "");
-      const history = messages
+      const nextMessages = regenerate ? prefix : [...prefix, user];
+      if (!regenerate) {
+        messages = nextMessages;
+        if (editing) cancelEdit();
+        else {
+          input = "";
+          images = [];
+          set(draftKey(), "");
+          set("kvmem-console-draft:new", "");
+          draftAttachments.delete(draftKey());
+          draftAttachments.delete("kvmem-console-draft:new");
+        }
+      }
+      const history = nextMessages
           .filter((m) => m.content || m.reasoningContent || m.extra?.length)
           .map(wire),
         opts = options();
       reply = await DB.createMessageBranch(
         {
-          convId: active.id,
+          convId: conversationId,
           type: "text",
           role: "assistant",
           content: "",
@@ -598,9 +683,13 @@
         } as any,
         user.id,
       );
-      messages = [...messages, reply];
+      generationMessages = [...nextMessages, reply];
+      messages = [...generationMessages];
+      await refreshHistory(conversationId);
       await tick();
       bottom?.scrollIntoView();
+      preparing = false;
+      loading = false;
       saveTimer = setInterval(persistReply, 750);
       await streamChat(
         { ...opts, messages: history },
@@ -634,7 +723,7 @@
     } catch (e) {
       if (reply)
         reply.uiStatus = controller?.signal.aborted ? "interrupted" : "error";
-      if (!controller?.signal.aborted) error = String(e);
+      if (!controller?.signal.aborted) reportGenerationError(String(e), conversationId);
     } finally {
       clearInterval(saveTimer);
       if (drawTimer) {
@@ -652,18 +741,24 @@
           : null;
         persistReply();
         await writes;
-        messages = messages.map((m) => (m.id === reply.id ? { ...reply } : m));
-        if (follow) await tick().then(() => bottom?.scrollIntoView());
+        if (active?.id === conversationId) {
+          messages = messages.map((m) => (m.id === reply.id ? { ...reply } : m));
+          if (follow) await tick().then(() => {
+            if (active?.id === conversationId) bottom?.scrollIntoView();
+          });
+        }
       }
       try {
         await cancelRequest(requestId);
-        if (active)
-          await DB.updateConversation(active.id, { lastModified: Date.now() });
-        await refreshHistory();
+        if (conversationId)
+          await DB.updateConversation(conversationId, { lastModified: Date.now() });
+        await refreshHistory(conversationId);
       } catch (e) {
-        error = t("保存历史失败") + ": " + e;
+        reportGenerationError(t("保存历史失败") + ": " + e, conversationId);
       } finally {
+        if (preparing) loading = false;
         busy = false;
+        generatingConversation = null;
         controller = null;
         reply = null;
       }
@@ -833,6 +928,13 @@
   });
 </script>
 
+<svelte:window
+  ondragenter={(e) => { if (fileDrag(e)) { e.preventDefault(); dragDepth += 1; } }}
+  ondragover={dragOver}
+  ondragleave={(e) => { if (fileDrag(e)) dragDepth = Math.max(0, dragDepth - 1); }}
+  ondrop={dropFiles}
+  ondragend={() => (dragDepth = 0)}
+/>
 <svelte:head
   ><title>KVMem · Chat</title><link
     rel="stylesheet"
@@ -870,7 +972,7 @@
       </div>
       <button
         class="s-primary new-chat"
-        disabled={busy || loading}
+        disabled={loading}
         onclick={() => selectConversation(null)}
         ><Plus size={17} /> {t("新建对话")}</button
       >
@@ -881,13 +983,15 @@
             {#each group.items as c (c.id)}<div
                 class="history-row"
                 class:selected={active?.id === c.id}
+                class:generating={busy && generatingConversation?.id === c.id}
               >
                 <button
                   class="history-item"
                   aria-current={active?.id === c.id ? "page" : undefined}
-                  disabled={busy || loading}
+                  disabled={loading}
                   onclick={() => selectConversation(c)}
-                  title={c.name}>{c.name}</button
+                  title={c.name}><span class="history-name">{c.name}</span>
+                  {#if busy && generatingConversation?.id === c.id}<span class="generation-badge"><span class="pulse" aria-hidden="true"></span>{t("生成中")}</span>{/if}</button
                 >
                 <details class="history-menu" use:disclosure>
                   <summary
@@ -941,7 +1045,7 @@
           class:ready={ctx?.state === "ready"}
           class:working={busy}
           >{t(
-            busy ? "生成中" : ctx?.state === "ready" ? "就绪" : "未就绪",
+            busy ? (viewingGeneration ? "生成中" : "后台生成中") : ctx?.state === "ready" ? "就绪" : "未就绪",
           )}</span
         ><button
           onclick={() => (settingsOpen = true)}
@@ -996,7 +1100,7 @@
               >{/if}
           </div>{/if}
         <div class="messages">
-          {#each messages as m (m.id)}<article class:user={m.role === "user"}>
+          {#each messages as m (m.id)}<article class:user={m.role === "user"} class:editing={editingId === m.id}>
               <div class="role">
                 {m.role === "user"
                   ? t("你")
@@ -1029,16 +1133,51 @@
                       {m.reasoningContent}
                     </div>{/if}
                 </details>{/if}
-              {#if m.role === "assistant"}<MarkdownContent
+              {#if editingId === m.id}<form
+                  class="message-editor"
+                  onsubmit={(e) => { e.preventDefault(); void send("edit"); }}
+                >
+                  <label for="edit-last-message">{t("重新编辑")}</label>
+                  <textarea
+                    id="edit-last-message"
+                    bind:this={editField}
+                    bind:value={editedInput}
+                    rows="4"
+                    disabled={busy || loading}
+                    onkeydown={(e) => {
+                      if (e.key === "Escape" && !busy && !loading) cancelEdit();
+                      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+                        e.preventDefault(); void send("edit");
+                      }
+                    }}
+                  ></textarea>
+                  {#if editedImages.length}<div class="attachments">
+                      {#each editedImages as im, i}<button type="button"
+                          disabled={busy || loading}
+                          aria-label={t(im.type === "image" ? "移除图片" : "移除文件") + " " + im.name}
+                          onclick={() => (editedImages = editedImages.filter((_, j) => i !== j))}
+                          >{im.name || t("文件")} ×</button>{/each}
+                    </div>{/if}
+                  <div class="edit-actions">
+                    <button type="button" onclick={cancelEdit} disabled={busy || loading}>{t("取消")}</button>
+                    <button type="submit" class="s-primary"
+                      disabled={busy || loading || ctx?.state !== "ready" || (!editedInput.trim() && !editedImages.length)}
+                      >{t("保存并重新生成")}</button>
+                  </div>
+                </form>
+              {:else if m.role === "assistant"}<MarkdownContent
                   content={m.content}
                 />{:else}<div class="user-text">
                   {m.content}
                 </div>{/if}
-              {#each m.extra ?? [] as item}{#if item.type === "image" && item.base64Url}<img
+              {#each (editingId === m.id ? editedImages : m.extra) ?? [] as item}{#if item.type === "image" && item.base64Url}<img
                     class="attachment"
                     src={item.base64Url}
                     alt={item.name || t("图片")}
-                  />{/if}{/each}
+                  />{:else if item.type === "text"}<details class="text-attachment">
+                    <summary>{item.name} · {t("文本文件")}</summary>
+                    <pre>{item.content}</pre>
+                  </details>{/if}{/each}
               {#if m.role === "assistant" && m.uiStatus !== "pending"}{@const mtp = mtpStats(m)}<footer
                   class="message-footer"
                 >
@@ -1100,11 +1239,21 @@
                     </div>
                   </details>
                 </footer>{/if}
+              {#if m.role === "user" && m.id === lastUser?.id && !viewingGeneration}<footer class="user-message-actions">
+                  <div class="message-actions">
+                    <button onclick={() => send("regenerate")}
+                      disabled={busy || loading || !!editingId || ctx?.state !== "ready"}
+                      ><RotateCcw size={14} />{t("重新生成")}</button>
+                    <button onclick={editLastMessage} disabled={busy || loading || !!editingId}
+                      ><Pencil size={14} />{t("重新编辑")}</button>
+                  </div>
+                </footer>{/if}
             </article>{/each}
           <div bind:this={bottom}></div>
         </div>
       </div>
-      <div class="composer-wrap">
+      <div class="composer-wrap" class:drag-active={dragDepth > 0 && !busy && !loading}>
+        {#if dragDepth > 0 && !busy && !loading}<div class="drop-hint" role="status">{t(editingId ? "松开文件，添加到正在编辑的消息" : "松开文件以添加附件")}</div>{/if}
         {#if error && !settingsOpen}<div class="chat-error" role="alert">
             {error}
           </div>{/if}{#if notice}<div class="chat-notice" role="status">
@@ -1113,7 +1262,11 @@
               aria-label={t("关闭面板")}><X size={16} /></button
             >
           </div>{/if}
-        {#if busy}<div class="live-line" role="status">
+        {#if busy && !viewingGeneration}<div class="background-generation" role="status">
+            <span>{t("另一会话正在生成，可查看历史记录")}</span>
+            <button onclick={() => selectConversation(generatingConversation)} disabled={loading}>{t("返回生成中的会话")}</button>
+          </div>{/if}
+        {#if viewingGeneration}<div class="live-line" role="status">
             <span class="pulse"></span>{t(
               live?.state === "thinking"
                 ? "思考中"
@@ -1142,6 +1295,9 @@
           {#if images.length}<div class="attachments">
               {#each images as im, i}<button
                   type="button"
+                  disabled={busy || loading}
+                  aria-label={t(im.type === "image" ? "移除图片" : "移除文件") + " " + im.name}
+                  title={im.name}
                   onclick={() => (images = images.filter((_, j) => i !== j))}
                   >{im.name} ×</button
                 >{/each}
@@ -1161,30 +1317,30 @@
             }}
             onpaste={(e) => {
               const f = Array.from(e.clipboardData?.files || []);
-              if (f.length && ctx?.capabilities?.vision) {
+              if (f.length) {
                 e.preventDefault();
-                void addImages(f);
+                void addFiles(f);
               }
             }}
           ></textarea>
           <div class="compose-actions">
             <div class="quick-controls">
-              {#if ctx?.capabilities?.vision}<label
+              <label
                   class="button"
-                  title={t("图片")}
+                  title={t("添加文件：图片、文本和代码；最多 4 个")}
                   ><Paperclip size={17} /><span class="sr-only"
-                    >{t("图片")}</span
+                    >{t("添加文件")}</span
                   ><input
                     type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    accept={fileAccept}
                     multiple
-                    disabled={busy}
+                    disabled={busy || loading}
                     onchange={(e) => {
-                      void addImages(Array.from(e.currentTarget.files || []));
+                      void addFiles(Array.from(e.currentTarget.files || []));
                       e.currentTarget.value = "";
                     }}
                   /></label
-                >{/if}<button
+                ><button
                 type="button"
                 class="thinking-control"
                 onclick={() => (settingsOpen = true)}
@@ -1221,22 +1377,23 @@
                 >{/if}
             </div>
             <div class="send-actions">
-              {#if busy}<button
+              {#if viewingGeneration}<button
                   type="button"
                   class="stop"
                   onclick={stop}
                   aria-label={t("停止生成")}
                   title={t("停止生成")}
                   ><Square size={14} fill="currentColor" /></button
-                >{:else}{#if messages.at(-1)?.finishReason === "length" || messages.at(-1)?.uiStatus === "interrupted"}<button
+                >{:else}{#if !busy && !editingId && (messages.at(-1)?.finishReason === "length" || messages.at(-1)?.uiStatus === "interrupted")}<button
                     type="button"
-                    onclick={() => send(true)}>{t("续写（新请求）")}</button
+                    disabled={loading || ctx?.state !== "ready"}
+                    onclick={() => send("continue")}>{t("续写（新请求）")}</button
                   >{/if}<button
                   type="submit"
                   class="s-primary"
                   aria-label={t("发送")}
                   title={t("发送")}
-                  disabled={loading ||
+                  disabled={busy || loading || !!editingId ||
                     ctx?.state !== "ready" ||
                     (!input.trim() && !images.length)}
                   ><ArrowUp size={19} /></button
@@ -1505,8 +1662,23 @@
   .history-row.selected {
     background: color-mix(in srgb, var(--s-info) 11%, var(--s-surface));
   }
+  .history-row.generating {
+    background: color-mix(in srgb, var(--s-accent) 16%, var(--s-surface));
+    box-shadow: inset 3px 0 var(--s-accent);
+  }
+  .history-name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .generation-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    color: var(--s-info-text);
+    font-size: 10px;
+  }
   #app .history-item {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
     min-height: 38px;
     text-align: left;
@@ -1700,6 +1872,9 @@
   article.user .role {
     display: none;
   }
+  article.user.editing {
+    width: 640px;
+  }
   .role {
     font-size: 12px;
     font-weight: 500;
@@ -1748,7 +1923,8 @@
     border-radius: 10px;
     margin: 8px 0;
   }
-  .message-footer {
+  .message-footer,
+  .user-message-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -1758,6 +1934,7 @@
     font-size: 11px;
     line-height: 1.6;
   }
+  .user-message-actions { margin-top: 8px; justify-content: flex-end; }
   .message-meta {
     display: flex;
     flex-wrap: wrap;
@@ -1775,9 +1952,30 @@
   }
   .message-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 3px;
   }
-  #app .message-footer button {
+  #app .message-editor {
+    margin-top: 8px;
+    width: 100%;
+  }
+  .message-editor textarea {
+    min-height: 96px;
+    padding: 12px;
+  }
+  .message-editor label {
+    font-size: 12px;
+    color: var(--s-muted);
+  }
+  .edit-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px;
+  }
+  #app .message-footer button,
+  #app .user-message-actions button {
     border: 0;
     color: var(--s-muted);
     font-size: 11px;
@@ -1785,7 +1983,8 @@
     padding: 3px 6px;
     gap: 5px;
   }
-  #app .message-footer button:hover {
+  #app .message-footer button:hover,
+  #app .user-message-actions button:hover {
     background: var(--s-soft);
     color: var(--s-ink);
   }
@@ -1946,6 +2145,17 @@
     border: 0;
     min-height: 26px;
   }
+  .background-generation {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--s-info-text);
+  }
+  #app .background-generation button { font-size: 12px; padding: 4px 8px; }
   .live-line {
     display: flex;
     align-items: center;
@@ -1969,6 +2179,30 @@
     border-radius: 50%;
     background: var(--s-accent);
   }
+  .drag-active form {
+    border-color: var(--s-accent);
+    outline: 2px dashed var(--s-accent);
+    outline-offset: 3px;
+  }
+  .drop-hint {
+    padding: 8px 12px;
+    color: var(--s-info);
+    font-size: 13px;
+  }
+  .text-attachment {
+    margin-top: 8px;
+    font-size: 12px;
+  }
+  .text-attachment summary { overflow-wrap: anywhere; cursor: pointer; }
+  .text-attachment pre {
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 8px;
+    background: var(--s-surface);
+  }
+  .attachments button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
   .attachments {
     padding: 10px 12px 0;
     display: flex;
