@@ -1112,4 +1112,5 @@
     }
   });
   poll();
+  document.documentElement.dataset.monitorReady = "true";
 })();

@@ -147,12 +147,31 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     ...(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {}),
   });
   try {
+    // The fallback is authored in HTML, so it survives MIME rejection and disabled JS.
+    for (const script of ['i18n.js', 'monitor.js', 'launcher.js', 'logs.js', 'console-shell.js']) {
+      const broken = await browser.newPage();
+      try {
+        await broken.route(`**/monitor/${script}`, route => route.fulfill({
+          contentType: 'text/plain', headers: {'X-Content-Type-Options': 'nosniff'},
+          body: fs.readFileSync(path.join(directory, script), 'utf8'),
+        }));
+        await broken.goto(url);
+        assert.equal(await broken.locator('[data-ui-pending]').isVisible(), true, script);
+        assert.match(await broken.locator('[data-ui-pending]').textContent(), /界面尚未初始化/);
+      } finally { await broken.close(); }
+    }
+    const noScripts = await browser.newPage({javaScriptEnabled: false});
+    try {
+      await noScripts.goto(url);
+      assert.equal(await noScripts.locator('[data-ui-pending]').isVisible(), true);
+    } finally { await noScripts.close(); }
     const page = await browser.newPage({
         viewport: { width: 1440, height: 1100 },
       }),
       errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto(url);
+    assert.equal(await page.locator('[data-ui-pending]').isVisible(), false);
     await page.waitForFunction(
       () => document.querySelector('[data-gpu="load"]')?.textContent === "42",
     );

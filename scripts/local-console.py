@@ -10,7 +10,6 @@ import getpass
 import hashlib
 from ctypes import wintypes
 import json
-import mimetypes
 import os
 from pathlib import Path
 import re
@@ -33,6 +32,26 @@ from console_hardware import SystemDiskSampler
 from model_health import request_parameters, unchecked
 
 ROOT = Path(__file__).resolve().parents[1]
+# Product assets must not inherit OS MIME overrides (notably Windows .js=text/plain).
+# Route allowlists still decide which files may be served.
+CONTENT_TYPES = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.txt': 'text/plain; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+}
+
+
+def media_type(name):
+    return CONTENT_TYPES.get(Path(name).suffix.lower(), 'application/octet-stream')
+
+
 from launcher.config import (SPECULATIVE_PROFILES, DEFAULTS, ENGINE_DEFAULTS,
     STRINGS, INTEGERS, BOOLEANS, DECIMALS, NATIVE, NATIVE_SWITCHES,
     without_secrets, normalize)
@@ -1212,7 +1231,7 @@ class Handler(BaseHTTPRequestHandler):
         if name not in allowed:
             self.reply(404, {'error': 'Not found'}); return
         file = ROOT / 'ui/monitor' / name
-        self.reply(200, file.read_bytes(), mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
+        self.reply(200, file.read_bytes(), media_type(file.name))
 
     def chat_asset(self, name):
         roots = [ROOT/'ui/dist', self.control.backend_root/'workers/share/kvmem/ui', ROOT/'build/share/kvmem/ui']
@@ -1223,7 +1242,7 @@ class Handler(BaseHTTPRequestHandler):
         file = (root/(name or 'index.html')).resolve()
         if root not in file.parents or not file.is_file() or file.suffix not in {'.html','.js','.css','.svg','.png','.ico','.woff','.woff2','.json'}:
             self.reply(404, {'error':'Not found'}); return
-        self.reply(200,file.read_bytes(),mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
+        self.reply(200,file.read_bytes(),media_type(file.name))
 
     def do_POST(self):
         if not self.trusted(mutate=True):
