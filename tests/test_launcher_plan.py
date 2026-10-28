@@ -20,7 +20,9 @@ class PlanTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.directory = Path(self.tmp.name)
+        # Hosted Windows TEMP may use an 8.3 alias (RUNNER~1). Use one path
+        # spelling for exact argv comparisons with PowerShell's FullName.
+        self.directory = Path(self.tmp.name).resolve()
         self.worker = self.directory / 'worker with spaces.exe'
         self.worker.write_text('#!/bin/sh\nexit 0\n')
         self.worker.chmod(0o755)
