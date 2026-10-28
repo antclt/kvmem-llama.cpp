@@ -128,7 +128,7 @@ class ConsoleTests(unittest.TestCase):
                 normalize(Backend='llamacpp', **{'DraftModel': str(draft), **invalid})
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
         self.controller = console.Controller(console.ROOT, self.tmp.name, 18199)
         self.capability_stub = patch.object(self.controller, 'worker_capabilities', return_value={
             'schema_version': 1, 'query_scoring_revision': 2, 'independent_graph_lrfu': True,
