@@ -1,11 +1,12 @@
 """Local, independently hosted configuration UI and owned inference-process controller.
 
-Uses the selected checkout's canonical launcher in DryRun mode; never constructs
-shell command strings. System telemetry uses psutil. Windows launch support.
+Uses structured launch plans and owned process controllers. Windows standalone
+launchers remain compatible; Linux runs an explicitly generated script revision.
 """
 import argparse
 import copy
 import ctypes
+import getpass
 import hashlib
 from ctypes import wintypes
 import json
@@ -15,6 +16,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -31,273 +33,53 @@ from console_hardware import SystemDiskSampler
 from model_health import request_parameters, unchecked
 
 ROOT = Path(__file__).resolve().parents[1]
-SPECULATIVE_PROFILES = json.loads((ROOT / 'scripts/speculative-capabilities.json').read_text(encoding='utf-8-sig'))
-DEFAULTS = dict(Backend='ninfer', Model='', Worker='', Gpu='', Context=262144,
-                Budget=32768, Reserve=1024, HostMiB=16384, Prefill=128,
-                MaxTokens=1024, Port=18200, ListenHost='127.0.0.1',
-                SinkTokens=12288, RecentTokens=1024)
-# Initial UI recipes; never merge engine-specific flags into saved configurations.
-ENGINE_DEFAULTS = {'ninfer': {'Context': 262144,
-            'Budget': 47104,
-            'Reserve': 2048,
-            'MaxTokens': 0,
-            'ThinkingBudget': 16384,
-            'ReasoningEffort': 'xhigh',
-            'PreserveThinking': True,
-            'HostMiB': 12288,
-            'SinkTokens': 12288,
-            'RecentTokens': 1024,
-            'Concurrency': 1,
-            'QueryScorer': 'page-softmax',
-            'ScoreAggregation': 'mean',
-            'GraphAlpha': 0.2,
-            'Lrfu': False,
-            'QueryMaxTokens': 512,
-            'QueryReplayMaxTokens': 2048,
-            'ThinkingMode': 'default',
-            'KvType': 'int8',
-            'Prefill': 256,
-            'DraftTokens': 4,
-            'DraftPolicy': 'adaptive',
-            'NgramDrafts': 31,
-            'NgramMinMatch': 12,
-            'FastPrefill': True,
-            'DeviceProfile': 'auto',
-            'Vision': True,
-            'VisionResidency': 'cpu',
-            'VisionTokens': 1024,
-            'Backend': 'ninfer',
-            'SpeculativeMode': 'mtp',
-            'RetainedSessions': 1},
- 'llamacpp': {'Context': 262144,
-              'Budget': 47104,
-              'Reserve': 2048,
-              'MaxTokens': 0,
-              'ThinkingBudget': 16384,
-              'ReasoningEffort': 'xhigh',
-              'PreserveThinking': True,
-              'HostMiB': 12288,
-              'SinkTokens': 12288,
-              'RecentTokens': 1024,
-              'Concurrency': 1,
-              'QueryScorer': 'page-softmax',
-              'ScoreAggregation': 'mean',
-              'GraphAlpha': 0.2,
-              'Lrfu': False,
-              'QueryMaxTokens': 512,
-              'QueryReplayMaxTokens': 2048,
-              'ThinkingMode': 'on',
-              'KvTypeK': 'q8_0',
-              'KvTypeV': 'q8_0',
-              'Prefill': 256,
-              'DraftTokens': 3,
-              'DraftPolicy': 'fixed',
-              'Vision': True,
-              'VisionResidency': 'cpu',
-              'VisionTokens': 1024,
-              'Backend': 'llamacpp',
-              'SpeculativeMode': 'mtp',
-              'RetainedSessions': 1},
- 'polystrata': {'Context': 262144,
-                'Budget': 47104,
-                'Reserve': 2048,
-                'MaxTokens': 0,
-                'ThinkingBudget': 16384,
-                'ReasoningEffort': 'xhigh',
-                'PreserveThinking': True,
-                'HostMiB': 12288,
-                'SinkTokens': 12288,
-                'RecentTokens': 1024,
-                'Concurrency': 1,
-                'QueryScorer': 'page-softmax',
-                'ScoreAggregation': 'mean',
-                'GraphAlpha': 0.2,
-                'Lrfu': False,
-                'QueryMaxTokens': 512,
-                'QueryReplayMaxTokens': 2048,
-                'ThinkingMode': 'on',
-                'KvType': 'q8_0',
-                'Prefill': 512,
-                'DraftTokens': 2,
-                'DraftPolicy': 'adaptive',
-                'Vision': False,
-                'VramReserveMiB': 256,
-                'Backend': 'polystrata',
-                'SpeculativeMode': 'mtp',
-                'RetainedSessions': 2,
-                'WorkerArgs': ['--elastic-experts-headroom',
-                               '--elastic-headroom-mib',
-                               '128',
-                               '--elastic-physical-reserve-mib',
-                               '512']}}
-STRINGS = {'Tokenizer','PolystrataSource','Python','VisionWorker','Mmproj','QueryScorer','Backend', 'Model', 'Worker', 'Gpu', 'ListenHost', 'KvType', 'KvTypeK', 'KvTypeV', 'DiskPath',
-           'VisionResidency',
-           'DeviceProfile', 'ScoreAggregation', 'QueryScorer', 'ApiKey', 'ModelAlias', 'LogLevel',
-           'ChatTemplateFile', 'ThinkingMode', 'ReasoningEffort', 'SpeculativeMode', 'DraftPolicy', 'DraftModel'}
-INTEGERS = {'BlockTokens', 'VramReserveMiB', 'Context', 'Budget', 'Reserve', 'HostMiB', 'Prefill', 'MaxTokens', 'Port',
-            'MtpDrafts', 'NgramDrafts', 'NgramMinMatch', 'Concurrency', 'RetainedSessions',
-            'VisionTokens', 'ThinkingBudget', 'SinkTokens', 'RecentTokens', 'DiskMiB', 'DraftTokens',
-            'QueryMaxTokens', 'QueryReplayMaxTokens', 'ReplayMaxTokens'}
-BOOLEANS = {'AdaptiveMtp', 'FastPrefill', 'Vision', 'NoLrfu', 'Lrfu', 'PreserveThinking'}
-DECIMALS = {'LrfuLambda', 'LrfuTopFraction', 'GraphAlpha'}
-# Deliberately limited native escape hatch. Common options must not be duplicated.
-NATIVE = {'llamacpp': {'--threads', '--threads-batch', '--n-gpu-layers'},
-          'ninfer': {'--threads'}, 'polystrata': {'--threads', '--elastic-headroom-mib', '--elastic-physical-reserve-mib'}}
-NATIVE_SWITCHES = {'polystrata': {'--elastic-experts', '--elastic-experts-headroom'}}
+from launcher.config import (SPECULATIVE_PROFILES, DEFAULTS, ENGINE_DEFAULTS,
+    STRINGS, INTEGERS, BOOLEANS, DECIMALS, NATIVE, NATIVE_SWITCHES,
+    without_secrets, normalize)
+from launcher.plan import build_plan, capabilities as launcher_capabilities, scoring_settings
+from launcher.export import export_profile, read_revision
 
 
-def without_secrets(data):
-    clean = copy.deepcopy(data)
-    clean.get('parameters', {}).pop('ApiKey', None)
-    return clean
+def private_log(path, *, truncate=False):
+    """Create or repair a private regular log without following links."""
+    if os.name == 'nt':
+        return Path(path).open('wb' if truncate else 'ab')
+    flags = os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if truncate:
+        flags |= os.O_CREAT
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                or (os.geteuid() != 0 and metadata.st_uid != os.geteuid())):
+            raise ValueError('The console log must be a private regular file owned by this account')
+        os.fchmod(descriptor, 0o600)
+        if truncate:
+            os.ftruncate(descriptor, 0)
+        stream = os.fdopen(descriptor, 'wb')
+        descriptor = None
+        return stream
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
-def normalize(data, backends):
-    if (not isinstance(data, dict) or type(data.get('schema_version')) is not int
-            or data.get('schema_version') != 1 or set(data) != {'schema_version', 'parameters'}):
-        raise ValueError('Unsupported configuration schema')
-    params = data.get('parameters')
-    if not isinstance(params, dict):
-        raise ValueError('parameters must be an object')
-    allowed = STRINGS | INTEGERS | BOOLEANS | DECIMALS | {'StageLayers', 'WorkerArgs'}
-    if set(params) - allowed:
-        raise ValueError('Unknown parameters: ' + ', '.join(sorted(set(params) - allowed)))
-    p = copy.deepcopy(params)
-    if p.get('Backend') not in NATIVE or p.get('Backend') not in backends:
-        raise ValueError('This backend is not installed in the selected backend checkout')
-    if p['Backend'] == 'polystrata':
-        p.setdefault('BlockTokens', 32)
-        if type(p['BlockTokens']) is not int or p['BlockTokens'] not in (32, 64):
-            raise ValueError('PolyStrata BlockTokens must be 32 or 64')
-    elif 'BlockTokens' in p:
-        raise ValueError('BlockTokens configures PolyStrata in this console')
-    for key, value in p.items():
-        if key in STRINGS and (not isinstance(value, str) or '\x00' in value or len(value) > 8192):
-            raise ValueError(f'{key} must be a string without NUL characters')
-        if key in INTEGERS and (type(value) is not int or not 0 <= value <= 2147483647):
-            raise ValueError(f'{key} must be a nonnegative integer')
-        if key in BOOLEANS and type(value) is not bool:
-            raise ValueError(f'{key} must be boolean')
-        if key in DECIMALS and (type(value) not in (int, float) or not 0 <= value <= 1):
-            raise ValueError(f'{key} must be between 0 and 1')
-    # Old signed-cosine templates predate QueryScorer. Resolve their intent once
-    # and submit canonical independent controls, including explicit false.
-    legacy_scoring = 'QueryScorer' not in p and bool({'NoLrfu', 'LrfuLambda', 'LrfuTopFraction'} & p.keys())
-    if legacy_scoring:
-        p['QueryScorer'] = 'meanq-cosine' if (
-            not p.get('NoLrfu', False) or p.get('ScoreAggregation') == 'max' or
-            'LrfuLambda' in p or 'LrfuTopFraction' in p) else 'page-softmax'
-    if 'NoLrfu' in p:
-        if 'Lrfu' in p and p['Lrfu'] == p['NoLrfu']:
-            raise ValueError('Lrfu conflicts with NoLrfu')
-        p['Lrfu'] = not p.pop('NoLrfu')
-        if legacy_scoring and not p['Lrfu']:
-            p.pop('LrfuLambda', None); p.pop('LrfuTopFraction', None)
-    if p.get('QueryScorer', 'page-softmax') not in {'page-softmax', 'meanq-cosine'}:
-        raise ValueError('Unsupported QueryScorer')
-    if p.get('ScoreAggregation', 'mean') not in {'mean', 'max'}:
-        raise ValueError('Unsupported ScoreAggregation')
-    for key in ('QueryMaxTokens', 'QueryReplayMaxTokens'):
-        if key in p and p[key] <= 0:
-            raise ValueError(f'{key} must be positive')
-    history = p.get('Lrfu', p.get('QueryScorer') == 'meanq-cosine')
-    if not history and {'LrfuLambda', 'LrfuTopFraction'} & p.keys():
-        raise ValueError('LRFU tuning requires enabled LRFU')
-    if 'LrfuTopFraction' in p and p['LrfuTopFraction'] <= 0:
-        raise ValueError('LrfuTopFraction must be in (0,1]')
-    if p.get('ListenHost', '127.0.0.1') not in {'127.0.0.1', '0.0.0.0'}:
-        raise ValueError('ListenHost must be 127.0.0.1 or 0.0.0.0')
-    if not 1 <= p.get('Port', 18200) <= 65535:
-        raise ValueError('Port must be between 1 and 65535')
-    if p.get('ApiKey') and (len(p['ApiKey']) > 512 or not re.fullmatch(r'[A-Za-z0-9._~+/-]+=*', p['ApiKey'])):
-        raise ValueError('ApiKey must be a single ASCII token (letters, digits, . _ ~ + / - and optional trailing =)')
-    if p.get('LogLevel', '') not in {'', 'off', 'error', 'warning', 'info', 'trace', 'debug'}:
-        raise ValueError('Unsupported LogLevel')
-    if p.get('ThinkingMode', 'default') not in {'default', 'on', 'off'}:
-        raise ValueError('ThinkingMode must be default, on or off')
-    if p['Backend'] == 'ninfer' and p.get('ThinkingMode') == 'on':
-        raise ValueError('NInfer supports default/off at startup; thinking-on is selected by requests')
-    if p.get('ReasoningEffort') not in (None, 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'):
-        raise ValueError('Unsupported ReasoningEffort')
-    if p.get('ThinkingMode') == 'off' and p.get('ReasoningEffort'):
-        raise ValueError('ReasoningEffort conflicts with ThinkingMode off')
-    if p['Backend'] != 'llamacpp' and {'KvTypeK', 'KvTypeV'} & p.keys():
-        raise ValueError('K/V 独立格式仅适用于 llama.cpp；NInfer 请使用 KV 格式选项。')
-    if p.get('Concurrency') is not None and not 1 <= p['Concurrency'] <= 8:
-        raise ValueError('Concurrency must be 1..8')
-    if p.get('ChatTemplateFile') and not Path(p['ChatTemplateFile']).is_file():
-        raise ValueError('ChatTemplateFile must be an existing template file')
-    if 'SpeculativeMode' in p or 'DraftTokens' in p or 'DraftPolicy' in p or 'DraftModel' in p:
-        mode = p.get('SpeculativeMode', 'mtp' if p.get('MtpDrafts', 0) else 'none')
-        profile = SPECULATIVE_PROFILES[p['Backend']].get(mode)
-        if profile is None:
-            raise ValueError('Unsupported SpeculativeMode')
-        count = p.get('DraftTokens', p.get('MtpDrafts', 5 if mode == 'dflash2' else 4 if mode == 'mtp' else 0))
-        policy = p.get('DraftPolicy', 'adaptive' if p.get('AdaptiveMtp') else 'fixed')
-        if policy not in {'fixed', 'adaptive'}:
-            raise ValueError('DraftPolicy must be fixed or adaptive')
-        if 'DraftTokens' in p and 'MtpDrafts' in p and count != p['MtpDrafts']:
-            raise ValueError('DraftTokens conflicts with MtpDrafts')
-        if 'DraftPolicy' in p and 'AdaptiveMtp' in p and (policy == 'adaptive') != p['AdaptiveMtp']:
-            raise ValueError('DraftPolicy conflicts with AdaptiveMtp')
-        if p['Backend'] == 'polystrata' and mode == 'mtp':
-            policy = 'adaptive'
-            p['DraftPolicy'] = policy
-            p.pop('AdaptiveMtp', None)
-        if mode == 'none':
-            if count or policy == 'adaptive' or p.get('NgramDrafts') or p.get('DraftModel'):
-                raise ValueError('Disabled speculative decoding cannot have active draft options')
-        else:
-            if not 1 <= count <= profile['max_draft_tokens']:
-                raise ValueError('DraftTokens exceeds this backend/algorithm capability')
-            if policy == 'adaptive' and not profile['adaptive']:
-                raise ValueError('Adaptive drafts are unavailable for this backend/algorithm')
-            if p.get('NgramDrafts') and not profile['ngram']:
-                raise ValueError('Ngram drafts are unavailable for this backend/algorithm')
-            if p.get('Concurrency', 1) > profile['max_concurrency']:
-                raise ValueError('This speculative algorithm does not support the selected concurrency')
-            if len(p.get('Gpu', '').split(',')) > profile['max_devices']:
-                raise ValueError('This speculative algorithm does not support the selected GPU count')
-            draft = p.get('DraftModel', '')
-            if profile['draft_asset'] == 'embedded' and draft:
-                raise ValueError('NInfer uses an embedded draft component')
-            if profile['draft_asset'] == 'required_gguf' and not draft:
-                raise ValueError('DFlash2 requires DraftModel with a compatible GGUF')
-            if draft and (Path(draft).suffix.lower() != '.gguf' or not Path(draft).is_file()):
-                raise ValueError('DraftModel must be an existing GGUF file')
-    if p['Backend']=='polystrata':
-        if p.get('KvType','f16') not in {'f16','q8_0'}: raise ValueError('PolyStrata KV format must be f16 or q8_0')
-        if ',' in p.get('Gpu',''): raise ValueError('PolyStrata currently supports one GPU')
-        if p.get('ReasoningEffort') not in (None,'none','low','medium','high','xhigh'): raise ValueError('PolyStrata reasoning effort must be none, low, medium or high')
-        if p.get('ThinkingMode')=='on' and p.get('ReasoningEffort')=='none': raise ValueError('ThinkingMode conflicts with ReasoningEffort none')
-    gpu = p.get('Gpu', '')
-    if gpu and not all(re.fullmatch(r'GPU-[0-9a-fA-F-]{8,64}', x) for x in gpu.split(',')):
-        raise ValueError('Select GPUs by UUID, separated by commas')
-    layers = p.get('StageLayers', [])
-    if not isinstance(layers, list) or len(layers) > 8 or any(type(x) is not int or x < 1 for x in layers):
-        raise ValueError('StageLayers must contain positive integers')
-    args = p.get('WorkerArgs', [])
-    if not isinstance(args, list) or len(args) > 20 or any(not isinstance(x, str) for x in args):
-        raise ValueError('Native arguments must be an array of strings')
-    seen = set()
-    index = 0
-    while index < len(args):
-        flag = args[index]
-        if flag in seen:
-            raise ValueError(f'Unsupported or duplicate native option: {flag}')
-        seen.add(flag)
-        index += 1
-        if flag in NATIVE_SWITCHES.get(p['Backend'], set()):
-            continue
-        if (flag not in NATIVE[p['Backend']] or index == len(args)
-                or not re.fullmatch(r'\d{1,6}', args[index])):
-            raise ValueError(f'Unsupported or incomplete native option: {flag}')
-        if flag == '--elastic-headroom-mib' and not 0 <= int(args[index]) <= 1024:
-            raise ValueError('Elastic headroom must be 0..1024 MiB')
-        if flag == '--elastic-physical-reserve-mib' and not 256 <= int(args[index]) <= 4096:
-            raise ValueError('Elastic physical reserve must be 256..4096 MiB')
-        index += 1
-    return {'schema_version': 1, 'parameters': p}
+def prepare_state_directory(path):
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != 'nt':
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            metadata = os.fstat(descriptor)
+            if (path in (Path(path.anchor), Path.home().resolve()) or metadata.st_mode & stat.S_ISVTX
+                    or (os.geteuid() != 0 and metadata.st_uid != os.geteuid())):
+                raise ValueError('Use a dedicated state directory owned by this account')
+            os.fchmod(descriptor, 0o700)
+        finally:
+            os.close(descriptor)
+        log = path / 'service.log'
+        if log.exists() or log.is_symlink():
+            with private_log(log):
+                pass
 
 
 class WindowsJob:
@@ -346,13 +128,20 @@ class WindowsJob:
 class Controller:
     def __init__(self, backend_root, state_dir, port, prefer_bundled_worker=False):
         self.backend_root = Path(backend_root).resolve()
-        self.state_dir = Path(state_dir).resolve(); self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir = Path(state_dir).resolve()
+        prepare_state_directory(self.state_dir)
         self.prefer_bundled_worker = bool(prefer_bundled_worker)
-        source = (self.backend_root / 'scripts/windows/start-backend.ps1').read_text(encoding='utf-8-sig')
-        match = re.search(r"\[ValidateSet\(([^\n]+)\)\]\[string\]\$Backend", source)
-        if not match:
-            raise ValueError('Cannot detect supported backends from start-backend.ps1')
-        self.backends = [name for name in re.findall(r"'([^']+)'", match[1]) if name in NATIVE]
+        if os.name == 'nt':
+            source = (self.backend_root / 'scripts/windows/start-backend.ps1').read_text(encoding='utf-8-sig')
+            match = re.search(r"\[ValidateSet\(([^\n]+)\)\]\[string\]\$Backend", source)
+            if not match:
+                raise ValueError('Cannot detect supported backends from start-backend.ps1')
+            self.backends = [name for name in re.findall(r"'([^']+)'", match[1]) if name in NATIVE]
+            self.launcher_query_contract = all(name in source for name in ('QueryScorer', 'GraphAlpha', 'QueryMaxTokens', 'QueryReplayMaxTokens'))
+        else:
+            manifest = launcher_capabilities(self.backend_root)
+            self.backends = [name for name in manifest['backends'] if name in ('ninfer', 'llamacpp')]
+            self.launcher_query_contract = True
         build_info=self.backend_root/'BUILD-INFO.json'
         if build_info.is_file():
             package=json.loads(build_info.read_text(encoding='utf-8-sig'))
@@ -365,7 +154,6 @@ class Controller:
                 if not isinstance(allowed,list) or not allowed or any(name not in NATIVE for name in allowed):
                     raise ValueError('Invalid console package backend list')
                 self.backends=[name for name in self.backends if name in allowed]
-        self.launcher_query_contract = all(name in source for name in ('QueryScorer', 'GraphAlpha', 'QueryMaxTokens', 'QueryReplayMaxTokens'))
         profile_file = self.backend_root / 'scripts/speculative-capabilities.json'
         self.speculative_profiles = json.loads(profile_file.read_text(encoding='utf-8-sig')) if profile_file.is_file() else {}
         if not self.backends:
@@ -379,6 +167,7 @@ class Controller:
         self.active_plan = None
         self.worker_cache = {}
         self.observed_scoring = {}
+        self.observed_service = None
         self.observed_offset = 0
         self.observed_pending = ''
         self.instance = secrets.token_hex(12)
@@ -387,6 +176,13 @@ class Controller:
         self.exit_code = None
         self.draft_path = self.state_dir / 'launch-draft.json'
         self.log_path = self.state_dir / 'service.log'
+        self.profiles_root = self.state_dir / 'profiles'
+        self.generated_secrets = {}
+        self.active_revision = None
+        self.service_selection_path = self.state_dir / 'service-selection.json'
+        self.service_selection = None
+        if os.name != 'nt' and self.service_selection_path.is_file():
+            self.service_selection = json.loads(self.service_selection_path.read_text(encoding='utf-8'))
         # This describes the file, not the editing draft or the live process.
         # Keep it after stop so the final output keeps its original identity.
         self.log_session = secrets.token_hex(12)
@@ -394,53 +190,38 @@ class Controller:
         manifest_path = ROOT / 'console-build.json'
         if manifest_path.is_file():
             manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
-            if manifest.get('launch_contract_version') != 2:
+            if manifest.get('launch_contract_version') not in ((2, 3) if os.name == 'nt' else (3,)):
                 raise ValueError('控制台组件版本不匹配，请完整更新启动包。 Console components do not match; update the complete package.')
             for name, digest in manifest.get('controller_files', {}).items():
                 path = (ROOT / name).resolve()
                 if not path.is_relative_to(ROOT.resolve()) or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                     raise ValueError('控制台文件不匹配，请完整更新启动包。 Console file mismatch: ' + name)
 
-    def worker_capabilities(self, worker, backend):
+    def worker_capabilities(self, worker, backend, environment=None):
         path = Path(worker).resolve()
         stat = path.stat()
-        key = (str(path), stat.st_size, stat.st_mtime_ns, backend)
+        key = (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+               backend, tuple(sorted((environment or {}).items())))
         if key in self.worker_cache:
             return copy.deepcopy(self.worker_cache[key])
-        try:
-            run = subprocess.run([str(path), '--kvmem-capabilities'], capture_output=True,
-                                 encoding='utf-8', errors='replace', timeout=10, cwd=path.parent,
-                                 env=dict(os.environ, CUDA_VISIBLE_DEVICES='-1'),
-                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            value = json.loads(run.stdout)
-            if run.returncode or not isinstance(value, dict) or value.get('schema_version') != 1 or value.get('backend') != backend or value.get('query_scoring_revision', 0) < 2 or not value.get('independent_graph_lrfu') or not value.get('signed_lrfu_hits'):
-                raise ValueError('incompatible worker contract')
-        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
-            raise ValueError('后端版本不支持当前启动配置，请完整更新后端和控制台。 '
-                             'Worker does not support this launch contract; update the complete package. ' + str(path)) from error
-        with path.open('rb') as stream:
-            hasher = hashlib.sha256()
-            for chunk in iter(lambda: stream.read(1 << 20), b''):
-                hasher.update(chunk)
-            digest = hasher.hexdigest()
-        value['executable_sha256'] = digest
-        value['path'] = str(path)
+        from launcher.worker import probe_worker
+        value = probe_worker(path, backend, environment)
         self.worker_cache = {key: value}
         return copy.deepcopy(value)
 
     @staticmethod
     def scoring_from_argv(argv):
-        def value(flag, default):
-            return argv[argv.index(flag) + 1] if flag in argv else default
-        return {'scorer': value('--kvmem-query-scorer', 'page-softmax'),
-                'agg': value('--kvmem-score-agg', 'mean'), 'lrfu': '--kvmem-lrfu' in argv,
-                'lambda': float(value('--kvmem-lrfu-lambda', .5)),
-                'top_frac': float(value('--kvmem-lrfu-top-frac', .9)),
-                'graph_alpha': float(value('--kvmem-graph-alpha', .2)),
-                'query_max_tokens': int(value('--kvmem-query-max-tokens', 512)),
-                'query_replay_max_tokens': int(value('--kvmem-query-replay-max-tokens', 2048))}
+        return scoring_settings(argv)
 
     def observe_scoring(self):
+        if self.service_selection:
+            log = self.service_log(scoring=True)
+            identity = (self.service_selection['profile'], self.service_selection['scope'], log['session'])
+            if identity != self.observed_service:
+                self.observed_scoring = {}
+                self.observed_service = identity
+            self.parse_scoring(log['text'].splitlines())
+            return
         if not self.active_plan or not self.log_path.is_file():
             return
         with self.log_path.open('rb') as stream:
@@ -450,6 +231,9 @@ class Controller:
         text = self.observed_pending + data.decode('utf-8', errors='replace')
         lines = text.split('\n')
         self.observed_pending = lines.pop()
+        self.parse_scoring(lines)
+
+    def parse_scoring(self, lines):
         for line in lines:
             for marker in ('KVMEM_SCORING ', 'KVMEM_LIMITS ', 'KVMEM_BLOCKS '):
                 if marker not in line:
@@ -471,12 +255,14 @@ class Controller:
         # Direct/source launches retain the explicit-registration precedence.
         registration = self.state_dir / 'worker-paths.json'
         paths = json.loads(registration.read_text(encoding='utf-8-sig')) if registration.exists() else {}
-        if (not isinstance(paths, dict) or set(paths) - set(self.backends)
+        if (not isinstance(paths, dict) or set(paths) - set(NATIVE)
                 or any(not isinstance(p, str) or not Path(p).is_absolute() or '\x00' in p
                        for p in paths.values())):
             raise ValueError('Invalid worker-paths.json: map backend names to absolute executable paths')
         names = {'ninfer': ('ninfer-kvmem-server.exe', 'ninfer-serve.exe'),
                  'llamacpp': ('llama-kvmem-server.exe',), 'polystrata':('strata-poly.exe',)}
+        if os.name != 'nt':
+            names = {backend: tuple(name.removesuffix('.exe') for name in entries) for backend, entries in names.items()}
         result = {}
         for backend in self.backends:
             # Search only known names in bounded installation locations; never
@@ -535,8 +321,6 @@ class Controller:
         api_key = clean['parameters'].pop('ApiKey', '')
         if api_key:
             self.redactions.add(api_key)
-        if os.name != 'nt':
-            raise ValueError('Service launch currently requires Windows PowerShell')
         params = self.prefer_packaged_worker(clean['parameters'])
         if params.get('Port', 18200) == self.port:
             raise ValueError('Inference service and console must use different ports')
@@ -549,6 +333,24 @@ class Controller:
             params['Worker'] = worker['path']
         elif not Path(params['Worker']).is_file():
             raise ValueError('指定的后端程序不存在，请检查“引擎专属参数 → 后端程序”：' + params['Worker'])
+        if os.name != 'nt':
+            if api_key:
+                params['ApiKey'] = api_key
+            result = build_plan({'schema_version': 1, 'parameters': params}, self.backend_root,
+                                reveal_secrets=reveal_secrets)
+            result['worker'] = self.worker_capabilities(result['argv'][0], params['Backend'], result['environment'])
+            result['resolved_scoring'] = self.scoring_from_argv(result['argv'])
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    probe.bind((params.get('ListenHost', '127.0.0.1'), params.get('Port', 18200)))
+                    available = True
+                except OSError:
+                    available = False
+            result['preflight'] = {'port': params.get('Port', 18200),
+                                   'listen_host': params.get('ListenHost', '127.0.0.1'),
+                                   'port_available': available}
+            return result
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', encoding='utf-8',
                                          dir=self.state_dir, delete=False) as stream:
             json.dump(params, stream, ensure_ascii=False); name = stream.name
@@ -845,15 +647,37 @@ class Controller:
 
     def status(self):
         with self.lock:
-            self.observe_scoring()
+            service = None
+            service_error = None
+            if self.service_selection:
+                try:
+                    service = self.services().status(**self.service_selection)
+                    _, _, self.active_plan, self.active = self.revision_config(service['profile_id'], service['revision'])
+                    self.active_revision = {key: service[key] for key in ('profile_id', 'revision')}
+                    self.instance = service['invocation'] or 'systemd-' + service['profile_id']
+                    self.exit_code = service['exit_code']
+                except (OSError, ValueError) as error:
+                    service_error = str(error)
+                    self.active = self.active_plan = None
+            if not service_error:
+                self.observe_scoring()
             running = self.process is not None and self.process.poll() is None
             if self.process and not running:
                 self.exit_code = self.process.returncode
                 self._release()
+            if service:
+                running = service['active'] in ('active', 'activating')
             result = {'state': 'starting' if running else ('exited' if self.exit_code is not None else 'stopped'),
-                      'pid': self.process.pid if running else None, 'exit_code': self.exit_code, 'instance':self.instance,
+                      'pid': self.process.pid if running and self.process else None, 'exit_code': self.exit_code, 'instance':self.instance,
                       'active_config': without_secrets(self.active) if self.active else None,
                       'api_key_configured': bool(self.active and self.active['parameters'].get('ApiKey')), 'url': None}
+            result['owner'] = 'temporary' if self.active else None
+            if self.service_selection:
+                result.update(owner='systemd', service=service, service_error=service_error,
+                              pid=service['pid'] if service else None)
+                if service and service['active'] == 'inactive':
+                    result['state'] = 'stopped'
+            result['generated_revision'] = copy.deepcopy(self.active_revision)
             result['planned_scoring'] = copy.deepcopy(self.active_plan.get('resolved_scoring')) if self.active_plan else None
             result['effective_scoring'] = dict(self.observed_scoring) or None
             result['worker'] = copy.deepcopy(self.active_plan.get('worker')) if self.active_plan else None
@@ -863,7 +687,7 @@ class Controller:
                 key in self.observed_scoring and self.observed_scoring[key] == value for key, value in planned.items()))
             result['scoring_mismatch'] = bool(planned and set(planned).issubset(self.observed_scoring)
                                               and not result['scoring_confirmed'])
-            if running:
+            if running and self.active and (not service or service['worker_matches']):
                 port = self.active['parameters'].get('Port', 18200)
                 result['url'] = f'http://127.0.0.1:{port}'
                 try:
@@ -879,6 +703,97 @@ class Controller:
                 except (OSError, urllib.error.URLError):
                     pass
             return result
+
+    def services(self):
+        if os.name == 'nt':
+            raise ValueError('systemd management requires Linux')
+        from launcher.services import Services
+        return Services(self.profiles_root)
+
+    def service_list(self):
+        manager = self.services()
+        return {'capabilities': manager.available(), 'services': manager.list(),
+                'selected': self.service_selection}
+
+    def service_log(self, *, scoring=False):
+        with self.lock:
+            if not self.service_selection:
+                return dict(text='', available=False, session='', running=False, truncated=False)
+            manager = self.services()
+            registered, _, _, _ = manager.read(**self.service_selection)
+            # Logs may be the first request after reopening the console. Restore
+            # redaction credentials before reading any journal content.
+            self.revision_config(registered['profile_id'], registered['revision'])
+            return manager.journal(**self.service_selection, redactions=tuple(self.redactions), scoring=scoring)
+
+    def service_action(self, data):
+        if not isinstance(data, dict) or set(data) - {'action', 'profile_id', 'revision', 'scope'}:
+            raise ValueError('Expected a registered service and action')
+        action, profile, scope = data.get('action'), data.get('profile_id'), data.get('scope', 'user')
+        manager = self.services()
+        with self.lock:
+            if action == 'disconnect':
+                # Disconnecting only changes this console's selection. It must
+                # also work when the registration or system unit was removed.
+                manager._record_path(profile, scope)
+                selected = self.service_selection == dict(profile=profile, scope=scope)
+                if selected:
+                    self.chat.cancel_all()
+                    self.clear_service_selection()
+                return dict(disconnected=selected)
+            if action in ('stop', 'restart'):
+                self.chat.cancel_all()
+            if action == 'register':
+                return manager.register(profile, data.get('revision'), scope)
+            if action in ('select', 'start', 'restart'):
+                if self.process and self.process.poll() is None:
+                    raise ValueError('Stop the temporary service before switching to systemd')
+                state = manager.status(profile, scope)
+                _, _, plan, config = self.revision_config(profile, state['revision'])
+                if action != 'select':
+                    native = self.worker_capabilities(plan['argv'][0], plan['backend'], plan['environment'])
+                    if native.get('executable_sha256') != plan.get('worker', {}).get('executable_sha256'):
+                        raise ValueError('Worker changed; generate and register a new version')
+                    if not self.inspect_model(config, for_launch=True)['can_start']:
+                        raise ValueError('Model inspection blocked service launch')
+                    if state['active'] not in ('active', 'activating'):
+                        p = config['parameters']
+                        with socket.socket() as probe:
+                            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                            try: probe.bind((p.get('ListenHost', '127.0.0.1'), p.get('Port', 18200)))
+                            except OSError as error:
+                                raise ValueError('Inference port is occupied; the existing service was left running') from error
+                    manager.action(profile, scope, action)
+                from launcher.services import atomic_json
+                self.service_selection = dict(profile=profile, scope=scope)
+                atomic_json(self.service_selection_path, self.service_selection)
+                self._release()
+                self.active, self.active_plan = config, plan
+                self.observed_scoring = {}
+                self.observed_service = None
+                return self.status()
+            result = manager.action(profile, scope, action)
+            if action == 'remove' and self.service_selection == dict(profile=profile, scope=scope):
+                self.clear_service_selection()
+            return result
+
+    def clear_service_selection(self):
+        self.service_selection = None
+        self.service_selection_path.unlink(missing_ok=True)
+        self.active = self.active_plan = self.active_revision = None
+        self.observed_scoring = {}
+        self.observed_service = None
+        self.exit_code = None
+        self.instance = secrets.token_hex(12)
+
+    def close(self):
+        # Persistent services belong to systemd and survive closing the UI.
+        with self.lock:
+            self.chat.cancel_all()
+            if not self.service_selection:
+                self.stop()
+            else:
+                self._release()
 
     def _release(self):
         if self.job:
@@ -915,7 +830,110 @@ class Controller:
         finally:
             self.inspection_slots.release()
 
+    def export_config(self, data, *, for_launch=False):
+        if os.name == 'nt':
+            raise ValueError('Linux script generation requires the target Linux machine')
+        if not isinstance(data, dict) or set(data) - {'config', 'profile_id', 'scope', 'user', 'store_api_key'}:
+            raise ValueError('Expected a configuration and profile export settings')
+        if type(data.get('store_api_key', False)) is not bool:
+            raise ValueError('store_api_key must be boolean')
+        clean = normalize(data.get('config'), self.backends)
+        health = self.inspect_model(clean, for_launch=for_launch)
+        if not health['can_start']:
+            raise ValueError('Model inspection blocked export: ' + '; '.join(
+                c.get('zh', c.get('en', '')) + ': ' + c.get('detail', '')
+                for c in health['checks'] if c['status'] == 'error'))
+        plan = self.plan(clean)
+        resolved = {'schema_version': 1, 'parameters': dict(plan['requested_parameters'])}
+        key = clean['parameters'].get('ApiKey')
+        if key:
+            resolved['parameters']['ApiKey'] = key
+        result = export_profile(resolved, self.backend_root, self.profiles_root,
+            data.get('profile_id', 'default-' + clean['parameters']['Backend']),
+            persist_secret=data.get('store_api_key', False), scope=data.get('scope', 'user'),
+            user=data.get('user'), _validated_plan=plan)
+        if key and result['requires_api_key_environment']:
+            self.generated_secrets[(result['profile_id'], result['revision'])] = key
+            while len(self.generated_secrets) > 64:
+                self.generated_secrets.pop(next(iter(self.generated_secrets)))
+        return result
+
+    def revision_config(self, profile_id, revision):
+        directory, manifest, plan = read_revision(self.profiles_root, profile_id, revision)
+        config = json.loads((directory / 'profile.json').read_text(encoding='utf-8'))
+        key = ''
+        ref = plan.get('secret_ref')
+        if ref:
+            if ref['kind'] == 'file':
+                key = Path(ref['path']).read_text(encoding='utf-8').rstrip('\n')
+            else:
+                key = self.generated_secrets.get((profile_id, revision), '')
+            if not key:
+                raise ValueError('This generated version needs its API key. Re-enter it and generate a new version, or use a stored credential.')
+            config['parameters']['ApiKey'] = key
+            self.redactions.add(key)
+        config = normalize(config, self.backends)
+        return directory, manifest, plan, config
+
+    def start_revision(self, data):
+        if os.name == 'nt':
+            raise ValueError('Linux script execution requires Linux')
+        if not isinstance(data, dict) or set(data) != {'profile_id', 'revision'}:
+            raise ValueError('Expected profile_id and revision')
+        from launcher.process_linux import OwnedProcess
+        directory, _, plan, clean = self.revision_config(data['profile_id'], data['revision'])
+        native = self.worker_capabilities(plan['argv'][0], plan['backend'], plan['environment'])
+        if native.get('executable_sha256') != plan.get('worker', {}).get('executable_sha256'):
+            raise ValueError('Worker changed after script generation; check the configuration and generate a new version')
+        health = self.inspect_model(clean, for_launch=True)
+        if not health['can_start']:
+            raise ValueError('Model inspection blocked launch: ' + '; '.join(
+                c.get('zh', c.get('en', '')) + ': ' + c.get('detail', '')
+                for c in health['checks'] if c['status'] == 'error'))
+        with self.lock:
+            if self.service_selection:
+                current = self.services().status(**self.service_selection)
+                if current['active'] in ('active', 'activating', 'deactivating'):
+                    raise ValueError('Stop the selected systemd service before starting a temporary service')
+                self.clear_service_selection()
+            if self.process and self.process.poll() is None:
+                raise ValueError('A managed service is already running; stop it before starting another')
+            self._release()
+            p = clean['parameters']
+            if p.get('Port', 18200) == self.port:
+                raise ValueError('Inference service and console must use different ports')
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    probe.bind((p.get('ListenHost', '127.0.0.1'), p.get('Port', 18200)))
+                except OSError as error:
+                    raise ValueError('Inference port is occupied; the existing service was left running') from error
+            self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
+            self.log = private_log(self.log_path, truncate=True)
+            for change in plan['token_settings'].get('adjustments', []):
+                self.log.write((f"KVMEM_CONFIG {change['parameter']}: {change['requested']} -> {change['effective']} tokens ({change['reason']})\n").encode())
+            self.log.flush()
+            env = dict(os.environ)
+            if p.get('ApiKey'):
+                env['KVMEM_API_KEY'] = p['ApiKey']
+            try:
+                owned = OwnedProcess(directory / 'run.sh', self.log, env)
+                self.process = self.job = owned
+            except BaseException:
+                self._release()
+                raise
+            self.active, self.active_plan, self.exit_code = clean, plan, None
+            self.active_revision = dict(data)
+            self.instance = secrets.token_hex(12)
+            self.log_session = secrets.token_hex(12)
+            self.log_metadata = {'backend': p['Backend'], 'model': Path(p['Model']).name,
+                                 'started_at': int(time.time() * 1000)}
+            return self.status()
+
     def start(self, data):
+        if os.name != 'nt':
+            exported = self.export_config({'config': data}, for_launch=True)
+            return self.start_revision({key: exported[key] for key in ('profile_id', 'revision')})
         clean = normalize(data, self.backends)
         clean['parameters'] = self.prefer_packaged_worker(clean['parameters'])
         # Never trust a cached browser report. Inspect this exact launch request.
@@ -967,19 +985,25 @@ class Controller:
             return self.status()
 
     def stop(self):
-        self.chat.cancel_all()
         with self.lock:
+            self.chat.cancel_all()
+            if self.service_selection:
+                self.services().action(**self.service_selection, action='stop')
+                return self.status()
             process = self.process
             if self.job:
                 self.job.close(); self.job = None
             if process:
                 process.wait(timeout=10)
             self._release(); self.exit_code = None; self.active = None; self.active_plan = None
+            self.active_revision = None
             self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
             self.instance = secrets.token_hex(12)
             return self.status()
 
     def log_tail(self):
+        if self.service_selection:
+            return self.redact(self.service_log()['text'])
         if not self.log_path.exists():
             return ''
         with self.log_path.open('rb') as stream:
@@ -994,6 +1018,13 @@ class Controller:
         before the normal redactor can match it. A stopped process's last line
         is useful even without a newline. No client-supplied path is accepted.
         """
+        if self.service_selection:
+            log = self.service_log()
+            log['text'] = self.redact(log['text'])
+            stamp = log['session'] + ':' + hashlib.sha256(log['text'].encode()).hexdigest()
+            return dict(protocol=1, source='journal', revision=stamp, bytes=len(log['text'].encode()),
+                        limit_bytes=262144, updated_at=None,
+                        pending=False, **{**log, 'text': None if revision == stamp else log['text']})
         limit = 256 * 1024
         with self.lock:
             code = self.process.poll() if self.process else self.exit_code
@@ -1119,6 +1150,11 @@ class Handler(BaseHTTPRequestHandler):
                                 'model_inspection_version': 1,
                                 'kv_cache_version': 1,
                                 'query_scoring_version': 2,
+                                'platform': 'windows' if os.name == 'nt' else 'linux',
+                                'native_picker': os.name == 'nt',
+                                'script_export_version': 0 if os.name == 'nt' else 1,
+                                'profiles_root': str(self.control.profiles_root),
+                                'runtime_user': getpass.getuser(),
                                 'speculative_capabilities': self.control.speculative_profiles,
                                 'state_dir': str(self.control.state_dir),
                                 'backend_root': str(self.control.backend_root), 'gpus': self.server.gpus,
@@ -1129,6 +1165,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, self.control.model_directories())
             elif path == '/api/launcher/status':
                 self.reply(200, self.control.status())
+            elif path == '/api/launcher/services':
+                self.reply(200, self.control.service_list())
             elif path == '/api/launcher/hardware':
                 self.reply(200, self.server.hardware.snapshot())
             elif path == '/api/launcher/log':
@@ -1203,6 +1241,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/api/chat/cancel':
                 self.reply(200,self.control.chat.cancel(str(data.get('id','')))); return
             actions = {'/api/launcher/save': self.control.save, '/api/launcher/preview': self.control.plan,
+                       '/api/launcher/export': self.control.export_config,
+                       '/api/launcher/start-revision': self.control.start_revision,
+                       '/api/launcher/service': self.control.service_action,
                        '/api/launcher/browse-model': self.control.browse_model,
                        '/api/launcher/browse-template': lambda data: self.control.browse_model(data, template=True),
                        '/api/launcher/browse-model-folder': lambda data: self.control.browse_model(data, folder=True),
@@ -1214,7 +1255,7 @@ class Handler(BaseHTTPRequestHandler):
             if action is None:
                 self.reply(404, {'error': 'Not found'}); return
             self.reply(200, action(data))
-        except (ValueError, OSError, subprocess.SubprocessError) as error:
+        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
             self.reply(400, {'error': self.control.redact(str(error))})
 
 
@@ -1227,7 +1268,7 @@ def open_console_browser(url):
     print(f'Open this address in your browser: {url}', flush=True)
 
 
-def matching_console(port, backend_root, state_dir, prefer_bundled_worker=False):
+def matching_console(port, backend_root, state_dir, prefer_bundled_worker=False, profiles_root=None):
     """Only reuse a controller from this installation and the same state directory."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -1242,6 +1283,8 @@ def matching_console(port, backend_root, state_dir, prefer_bundled_worker=False)
                 and Path(data['console_root']).resolve() == ROOT.resolve()
                 and Path(data['backend_root']).resolve() == Path(backend_root).resolve()
                 and Path(data['state_dir']).resolve() == Path(state_dir).resolve()
+                and Path(data.get('profiles_root', Path(data['state_dir']) / 'profiles')).resolve()
+                    == Path(profiles_root or Path(state_dir) / 'profiles').resolve()
                 and bool(data.get('prefer_bundled_worker')) == bool(prefer_bundled_worker))
     except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
         return False
@@ -1251,7 +1294,7 @@ def choose_console_port(current_port, language='zh-CN'):
     english = language == 'en'
     if english:
         label = 'Default port' if current_port == 18199 else 'Port'
-        print(f'{label} {current_port} is unavailable. It may be in use or reserved by Windows.', flush=True)
+        print(f'{label} {current_port} is unavailable. It may be in use or reserved by the system.', flush=True)
     else:
         label = '默认端口' if current_port == 18199 else '端口'
         print(f'{label} {current_port} 不可用，可能已被占用或被系统保留。', flush=True)
@@ -1283,7 +1326,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=18199)
     parser.add_argument('--backend-root', type=Path, default=ROOT)
-    parser.add_argument('--state-dir', type=Path, default=ROOT / 'build/local-console')
+    default_state = ROOT / 'build/local-console' if os.name == 'nt' else Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'kvmem/console'
+    parser.add_argument('--state-dir', type=Path, default=default_state)
+    parser.add_argument('--profiles-root', type=Path, default=None if os.name == 'nt' else Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'kvmem/profiles', help='Generated versions; Linux defaults to XDG_CONFIG_HOME/kvmem/profiles')
     parser.add_argument('--open-browser', action='store_true', help='open the UI; reuse an identical running console')
     parser.add_argument('--prefer-bundled-worker', action='store_true',
                         help='prefer a worker shipped inside this installation over saved external paths')
@@ -1292,6 +1337,8 @@ def main():
                         help='startup message language; en also opens the UI in English')
     args = parser.parse_args()
     control = Controller(args.backend_root, args.state_dir, args.port, args.prefer_bundled_worker)
+    if args.profiles_root:
+        control.profiles_root = args.profiles_root.resolve()
     while True:
         url = f'http://127.0.0.1:{args.port}/monitor/' + ('?lang=en' if args.language == 'en' else '')
         try:
@@ -1300,7 +1347,7 @@ def main():
         except OSError as error:
             if ((args.open_browser or args.prompt_port)
                     and matching_console(args.port, args.backend_root, args.state_dir,
-                                         args.prefer_bundled_worker)):
+                                         args.prefer_bundled_worker, control.profiles_root)):
                 print(f'KVMem console is already running: {url}', flush=True)
                 if args.open_browser:
                     open_console_browser(url)
@@ -1320,14 +1367,14 @@ def main():
     if args.language == 'en':
         print('\nHow to stop:\n'
               '  Keep this window open while using the console.\n'
-              '  Close this window or press Ctrl+C to stop the console and its inference services, and unload their models.\n'
+              '  Close this window or press Ctrl+C to stop the console and temporary services; systemd services continue running.\n'
               '  Click "Stop service" in the UI to stop inference while keeping the console open.\n'
               '  Closing only the browser leaves services running.\n'
               '  Backends started separately are unaffected.\n', flush=True)
     else:
         print('\n使用说明：\n'
               '  保持此窗口开启，控制台才能持续运行。\n'
-              '  关闭此窗口或按 Ctrl+C：结束控制台，并停止由它启动的推理服务、卸载模型。\n'
+              '  关闭此窗口或按 Ctrl+C：停止控制台和临时服务；systemd 后台服务保持运行。\n'
               '  页面点击“停止服务”：只停止推理，控制台继续保留。\n'
               '  只关闭浏览器：服务继续运行。\n'
               '  另外单独启动的后端服务不受影响。\n', flush=True)
@@ -1339,7 +1386,7 @@ def main():
         pass
     finally:
         server.hardware.close()
-        control.stop(); server.server_close()
+        control.close(); server.server_close()
 
 
 if __name__ == '__main__':

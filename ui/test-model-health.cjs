@@ -76,7 +76,7 @@ async function until(fn){for(let i=0;i<100;i++){try{if(await fn())return;}catch{
  assert.equal(await start.isEnabled(),true);
  await page.unroute('**/api/launcher/inspect-model');
  // A backend switch clears the previous report and checks the new backend's file format.
- for(const backend of ['polystrata','llamacpp','ninfer']){
+ for(const backend of info.backends){
    await page.locator('[data-param=Backend]').selectOption(backend);
    await page.locator('[data-param=Model]').fill(broken);
    await until(async()=>await card.getAttribute('data-state')==='blocked');
@@ -85,5 +85,5 @@ async function until(fn){for(let i=0;i<100;i++){try{if(await fn())return;}catch{
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  if(process.env.HEALTH_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.HEALTH_SCREENSHOT_DIR,'health-mobile.png'),fullPage:true});
  assert.deepEqual(errors,[]);
- console.log('PASS: authenticated live inspection, fresh launch gate, vision recovery, polling, localization, stale response isolation, unavailable fallback, three backends and mobile layout');
+ console.log('PASS: authenticated live inspection, fresh launch gate, vision recovery, polling, localization, stale response isolation, unavailable fallback, installed backends and mobile layout');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{if(browser)await browser.close();child.kill();});

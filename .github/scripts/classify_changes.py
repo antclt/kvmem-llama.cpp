@@ -14,6 +14,30 @@ NON_CUDA_PATHS = {
     'scripts/windows/start-server.ps1', 'scripts/windows/test-backend-launcher.ps1',
     'scripts/windows/test-launcher.ps1',
 }
+CONSOLE_PATHS = {
+    'START-HERE-CN.sh', 'START-HERE-EN.sh', 'START-HERE-CN.bat', 'START-HERE-EN.bat',
+    'scripts/local-console.py', 'scripts/launcher-cli.py', 'scripts/launcher-capabilities.json',
+    'scripts/console_chat.py', 'scripts/console_hardware.py', 'scripts/model_health.py',
+    'scripts/requirements-console.txt', 'scripts/speculative-capabilities.json',
+    'scripts/linux/start-ui.sh', 'scripts/linux/package-console.py',
+    'scripts/windows/start-ui.ps1', 'scripts/windows/package-console.ps1',
+    'scripts/windows/describe-launch-json.ps1', 'scripts/install-console-dependency.py',
+    'ui/package.json', 'ui/package-lock.json',
+}
+
+
+def is_console_path(path):
+    if '..' in PurePosixPath(path).parts or path.startswith('/'):
+        return False
+    return (path in CONSOLE_PATHS or path.startswith(('scripts/launcher/', 'scripts/model_health_ninfer/', 'ui/monitor/'))
+            or bool(re.fullmatch(r'tests/test_(launcher[^/]*|local_console|console_[^/]+|one_click|model_health)\.py', path))
+            or bool(re.fullmatch(r'ui/test-[^/]+\.cjs', path)))
+
+
+def requires_native(paths):
+    # Unknown paths and CI recipe changes stay conservative. Pure UI changes
+    # still run Python/browser checks, without configuring or building engines.
+    return not paths or any(not is_documentation(path) and not is_console_path(path) for path in paths)
 
 
 def is_documentation(path):
@@ -58,7 +82,7 @@ def cuda_build_definition(text):
 
 
 def requires_cuda(paths, before, after, cwd=None):
-    if not paths or any(not is_documentation(path) and path not in NON_CUDA_PATHS for path in paths):
+    if not paths or any(not is_documentation(path) and path not in NON_CUDA_PATHS and not is_console_path(path) for path in paths):
         return True
     if WORKFLOW in paths:
         try:
@@ -103,7 +127,8 @@ def main():
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
         output.write('run_ci=' + str(full).lower() + '\n')
         output.write('run_cuda=' + str(cuda).lower() + '\n')
-    print(json.dumps({'run_ci': full, 'run_cuda': cuda, 'reason': reason, 'paths': paths}, ensure_ascii=True))
+        output.write('run_native=' + str(full and requires_native(paths)).lower() + '\n')
+    print(json.dumps({'run_ci': full, 'run_cuda': cuda, 'run_native': full and requires_native(paths), 'reason': reason, 'paths': paths}, ensure_ascii=True))
 
 
 if __name__ == '__main__':
