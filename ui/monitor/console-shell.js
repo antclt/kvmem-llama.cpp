@@ -49,4 +49,5 @@
   // deferred script loads. Preserve that selection on an unqualified URL.
   const selected=document.querySelector('[data-page][aria-pressed="true"]')?.dataset.page;
   open(location.pathname.startsWith('/chat')||location.hash?current():selected||current(),true);
+  document.documentElement.dataset.shellReady = "true";
 })();

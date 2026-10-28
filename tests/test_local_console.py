@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import mimetypes
+import shutil
 import os
 from pathlib import Path
 import tempfile
@@ -879,6 +881,80 @@ class ConsoleTests(unittest.TestCase):
             console.main()
         inventory.assert_not_called()
         browser.assert_not_called()
+
+
+class ConsoleAssetTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        shutil.copytree(console.ROOT / 'ui/monitor', self.root / 'ui/monitor')
+        self.chat = self.root / 'ui/dist'
+        self.chat.mkdir()
+        self.expected = {
+            '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
+            '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png',
+            '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
+        }
+        for extension in self.expected:
+            (self.chat / ('index' + extension)).write_bytes(b'fixture')
+        (self.chat / 'private.py').write_bytes(b'private')
+        (self.root / 'ui/private.js').write_bytes(b'private')
+        root_patch = patch.object(console, 'ROOT', self.root)
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
+        self.server = console.Server(('127.0.0.1', 0), console.Handler)
+        self.server.control = SimpleNamespace(backend_root=self.root)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.stop_server)
+        self.origin = f'http://127.0.0.1:{self.server.server_port}'
+
+    def stop_server(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+    def assert_asset(self, route, content_type, expected_body):
+        with urllib.request.urlopen(self.origin + route, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers.get_content_type(), content_type)
+            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+            self.assertEqual(response.read(), expected_body)
+
+    def test_monitor_assets_ignore_host_mime_configuration(self):
+        # Simulates the value returned after Windows registry MIME overrides.
+        with patch.object(mimetypes, 'guess_type', return_value=('text/plain', None)):
+            for asset in (self.root / 'ui/monitor').iterdir():
+                if not asset.is_file():
+                    continue
+                expected = {**self.expected, '.txt': 'text/plain'}[asset.suffix]
+                with self.subTest(asset=asset.name):
+                    self.assert_asset('/monitor/' + asset.name, expected, asset.read_bytes())
+            for route in ('/monitor/', '/chat/'):
+                self.assert_asset(route, 'text/html', (self.root / 'ui/monitor/index.html').read_bytes())
+
+    def test_chat_assets_ignore_host_mime_configuration_in_all_locations(self):
+        with patch.object(mimetypes, 'guess_type', return_value=('text/plain', None)):
+            for directory in (self.chat, self.root / 'workers/share/kvmem/ui',
+                              self.root / 'build/share/kvmem/ui'):
+                if directory != self.chat:
+                    directory.parent.mkdir(parents=True, exist_ok=True)
+                    self.chat.rename(directory)
+                    self.chat = directory
+                self.assert_asset('/chat/view/', 'text/html', b'fixture')
+                for extension, expected in self.expected.items():
+                    with self.subTest(directory=directory, extension=extension):
+                        self.assert_asset('/chat/view/index' + extension, expected, b'fixture')
+
+    def test_static_allowlists_and_traversal_protection_remain_enforced(self):
+        for route in ('/monitor/../private.js', '/monitor/private.py',
+                      '/chat/view/../private.js', '/chat/view/private.py'):
+            with self.subTest(route=route):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(self.origin + route, timeout=5)
+                self.assertEqual(error.exception.code, 404)
+                error.exception.close()
 
 
 if __name__ == '__main__':

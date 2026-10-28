@@ -254,4 +254,5 @@
   window.addEventListener('pagehide',() => {clearTimeout(timer); controller?.abort();});
   window.addEventListener('pageshow',wake);
   appearance(); wake();
+  document.documentElement.dataset.logsReady = "true";
 })();

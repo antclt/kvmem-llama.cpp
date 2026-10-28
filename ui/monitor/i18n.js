@@ -159,4 +159,5 @@
     },
     save() { try { localStorage.setItem("kvmem-monitor-language", language); } catch {} }
   };
+  document.documentElement.dataset.i18nReady = "true";
 })();
