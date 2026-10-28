@@ -1,5 +1,20 @@
 // Normalize old exports without changing their source databases. Preserve unknown
 // fields and message trees; namespace identifiers to prevent cross-source clashes.
+export function activeBranch(messages: any[], current: string | null) {
+  const byId = new Map(messages.map((message) => [message.id, message]));
+  const branch: any[] = [], seen = new Set<string>();
+  let id = current || messages.at(-1)?.id;
+  while (id) {
+    if (seen.has(id)) throw Error("History contains a cycle");
+    const message = byId.get(id);
+    if (!message) throw Error("History parent or leaf is missing");
+    seen.add(id);
+    branch.push(message);
+    id = message.parent;
+  }
+  return branch.reverse();
+}
+
 export async function normalizeHistory(value: any) {
   let items = Array.isArray(value)
     ? value
@@ -76,7 +91,8 @@ export async function normalizeHistory(value: any) {
         throw Error("Invalid message identity or role");
       seen.add(m.id);
       if (
-        (m.extra || []).some((e: any) => e.type !== "image") ||
+        (m.extra || []).some((e: any) => e.type !== "image" &&
+          !(e.type === "text" && typeof e.name === "string" && typeof e.content === "string")) ||
         m.tool_calls ||
         m.toolCalls ||
         m.tools?.length ||
