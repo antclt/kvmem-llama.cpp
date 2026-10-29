@@ -62,7 +62,7 @@ foreach($file in Get-ChildItem -LiteralPath (Join-Path $poly 'serve') -Recurse -
     New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
     Copy-Item -LiteralPath $file.FullName -Destination $dest
 }
-$consoleInspection = @('scripts/model_health.py', 'scripts/console_hardware.py', 'scripts/requirements-console.txt')
+$consoleInspection = @('scripts/model_health.py', 'scripts/console_hardware.py', 'scripts/console_memory.py', 'scripts/requirements-console.txt')
 foreach ($name in '__init__.py', 'reader.py', 'schema.py', 'layouts.py', 'formats.py', 'framing.py', 'file_io.py', 'LICENSE', 'PROVENANCE.json') {
     $consoleInspection += 'scripts/model_health_ninfer/' + $name
 }

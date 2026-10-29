@@ -39,7 +39,7 @@ $files = @('START-HERE-CN.bat', 'START-HERE-EN.bat', 'scripts/local-console.py',
            'scripts/windows/describe-launch-json.ps1', 'scripts/windows/start-backend.ps1',
            'scripts/windows/start-ninfer.ps1', 'scripts/windows/start-dflash2.ps1','scripts/windows/start-polystrata.ps1','tools/polystrata/server.py','tools/polystrata/assets.py',
            'scripts/windows/native-process.ps1', 'scripts/windows/query-scoring.ps1', 'scripts/windows/token-settings.ps1', 'scripts/windows/select-model.ps1', 'scripts/speculative-capabilities.json')
-$files += 'scripts/model_health.py', 'scripts/console_hardware.py', 'scripts/requirements-console.txt'
+$files += 'scripts/model_health.py', 'scripts/console_hardware.py', 'scripts/console_memory.py', 'scripts/requirements-console.txt'
 $files += 'scripts/launcher-capabilities.json'
 foreach ($name in '__init__.py', 'config.py', 'plan.py', 'export.py', 'systemd.py', 'worker.py') {
     $files += 'scripts/launcher/' + $name

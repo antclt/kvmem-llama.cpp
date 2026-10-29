@@ -27,6 +27,9 @@ public:
     std::string begin(const std::string & endpoint, const std::string & key = "") {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto id = key.empty() ? std::to_string(++sequence_) : key;
+        // Preparation can register a keyed request before execution starts.
+        // Keep its original clock and input metadata when execution adopts it.
+        if (!key.empty() && active_.count(id)) return id;
         if (active_.size() >= 512) { ++dropped_; return ""; }
         active_[id] = {{{"id", id}, {"endpoint", endpoint}, {"started_at_ms", now_ms()},
                         {"status", "processing"}, {"prompt_tokens", nullptr}, {"cached_tokens", nullptr},

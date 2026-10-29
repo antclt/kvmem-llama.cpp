@@ -190,6 +190,8 @@ larger directories do not guarantee more points under a small Host budget.
 
 See the [validation record](checkpoint-policy-validation-20261025.md) for current
 results, fixed failures and qualification limits.
+The [NInfer cross-owner validation](ninfer-cross-owner-validation-20261029.md)
+records Chat rollback, OpenCode forks, shared storage and cold-read failure tests.
 
 `kvmem-checkpoint-policy-test` checks retention, identity aliases, tiny budgets,
 fixed leases, truncation and exact capture boundaries. `kvmem-checkpoint-image-test`

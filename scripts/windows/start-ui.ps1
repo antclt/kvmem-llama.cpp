@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 try {
-    foreach ($relative in 'scripts/local-console.py', 'scripts/console_chat.py', 'scripts/model_health.py', 'scripts/console_hardware.py',
+    foreach ($relative in 'scripts/local-console.py', 'scripts/console_chat.py', 'scripts/model_health.py', 'scripts/console_hardware.py', 'scripts/console_memory.py',
                           'scripts/launcher/__init__.py', 'scripts/launcher/config.py', 'scripts/launcher/plan.py',
                           'scripts/launcher/export.py', 'scripts/launcher/systemd.py', 'scripts/launcher/worker.py', 'scripts/launcher-capabilities.json',
                           'scripts/model_health_ninfer/__init__.py', 'scripts/model_health_ninfer/reader.py',

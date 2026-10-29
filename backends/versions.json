@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "a046242f5a815dce1dbddb5a86868a86a05188c7",
+    "patched_tree": "bb98e6d4d106096627df42219d73807c3caba48e",
     "patches": [
       {
         "id": "kvmem",
@@ -232,13 +232,63 @@
         "source": "KVMem DFlash2 layer-pipeline admission, native capabilities and configuration regressions; pinned upstream feature transport and StateImage execution retained"
       },
       {
+        "id": "cpu-vision-props",
+        "path": "backends/patches/ninfer-cpu-vision-props.patch",
+        "sha256": "a50cf2a5b9d7b9deaf8448a4d7d8447145f64deda637b47d087df394e0031f21",
+        "requires": [
+          "dflash2-layer-pipeline"
+        ],
+        "after_tree": "a05247b38cac87589467b6208d82834d8dca63a6",
+        "source": "Observe live CPU Vision cache metadata without acquiring the inference execution lock"
+      },
+      {
+        "id": "memory-planning",
+        "path": "backends/patches/ninfer-memory-planning.patch",
+        "sha256": "60a17d2c406333207103e34a4fa168b9e0cf3f98882b5bd716e3d1521df15322",
+        "requires": [
+          "cpu-vision-props"
+        ],
+        "after_tree": "f485770ff15c81f1a82139bec85992d938d29382",
+        "source": "Native single-GPU memory recovery and proactive budget planning with fixed reserve/KV and page-aligned bounds"
+      },
+      {
+        "id": "multigpu-resident-vision",
+        "path": "backends/patches/ninfer-multigpu-resident-vision.patch",
+        "sha256": "c361365ab9c65086f4413aabd405971686236080c5bf85032733e2602ab4a515",
+        "requires": [
+          "memory-planning"
+        ],
+        "after_tree": "d976d3f8b2069f1c6255b803a70466360a107288",
+        "source": "Remove duplicate resident Vision binding in automatic pipeline sizing; regress single head-stage byte charge and CPU/text-only selection"
+      },
+      {
+        "id": "t5-sm75-prefill",
+        "path": "backends/patches/ninfer-t5-sm75-prefill.patch",
+        "sha256": "599d51daf54502c8faa0b523574aca0553c415bd77001bd7c3e62c4499723783",
+        "requires": [
+          "t5-performance",
+          "multigpu-resident-vision"
+        ],
+        "after_tree": "71f47f722a9f23f2f0db661eb903864dfc759583",
+        "source": "T5 prefill shared-memory admission for SM75, with FP64 boundary and graph regression coverage"
+      },
+      {
+        "id": "monitor-image-input",
+        "path": "backends/patches/ninfer-monitor-image-input.patch",
+        "sha256": "7215953bbb7c5a6c18d35463da28a1df19dccb016d68844a5ad740eb564be3f0",
+        "requires": [
+          "t5-sm75-prefill"
+        ],
+        "after_tree": "8d79a97c26ed725ab897faebcd6f73c08d6692f5"
+      },
+      {
         "id": "chat-cache-owner",
         "path": "backends/patches/ninfer-chat-cache-owner.patch",
         "sha256": "a6bfcdcc9a062590f0cc3747b0a3700ff24fe4e25dffe5684dd8dd282a6a9839",
         "requires": [
-          "dflash2-layer-pipeline"
+          "monitor-image-input"
         ],
-        "after_tree": "72754d88c8f0ed5792537360eee522b727491758",
+        "after_tree": "1ef9dd19cea68a5eb0564f7a67081123a4899790",
         "source": "Bind Chat prompt_cache_key / OpenCode promptCacheKey to live cache ownership; explicit conversation override, native prefix/state checks preserved; schema and real OpenCode rollback regressions"
       },
       {
@@ -248,7 +298,7 @@
         "requires": [
           "chat-cache-owner"
         ],
-        "after_tree": "a046242f5a815dce1dbddb5a86868a86a05188c7",
+        "after_tree": "bb98e6d4d106096627df42219d73807c3caba48e",
         "source": "NInfer spread cross-key exact prefix discovery in RAM; independent owners sharing immutable RAM/SSD KV and state, transactional cold restore and fault/cancellation regression"
       }
     ]
@@ -259,7 +309,7 @@
     "base_commit": "bfd8911efbb8c27214d5aabc511907c6149171e7",
     "license_file": "backends/polystrata/LICENSE",
     "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 32); shutdown releases the frontend's shared log handles so Windows removes their temporary directory; ROCm/HIP builds compile the portable KVMem core and its query scorer through hip_compat; poly.5's Kolibri1 engine is linked into the KVMem regression test targets; an assistant-final image prompt keeps its (0,0) no-Query sentinel out of the image expansion; CUDA driver test links explicitly; HIP query scorer is shared by all KVMem consumers",
-    "patched_tree": "e2a8c1de21c0060b3dcfa71e59f5df6983123b64",
+    "patched_tree": "57a642c231acd590089bd0cf8ca4c1e6f25b34a9",
     "source_tag": "v0.1.45-poly.5",
     "patches": [
       {
@@ -368,6 +418,15 @@
           "kolibri-test-link"
         ],
         "after_tree": "e2a8c1de21c0060b3dcfa71e59f5df6983123b64"
+      },
+      {
+        "id": "monitor-image-input",
+        "path": "backends/patches/polystrata-monitor-image-input.patch",
+        "sha256": "302a7eb75c0e63f874528ff96dfd0ae5ee9e1c1c04c8eef989d6188692db6ec7",
+        "requires": [
+          "kvmem-image-query-span"
+        ],
+        "after_tree": "57a642c231acd590089bd0cf8ca4c1e6f25b34a9"
       }
     ]
   }

@@ -1,0 +1,71 @@
+/* Real controller and DOM with a simulated one-shot planning worker; no GPU. */
+const assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs'),os=require('node:os');
+const {spawn}=require('node:child_process');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const root=path.resolve(__dirname,'..'),state=fs.mkdtempSync(path.join(os.tmpdir(),'budget-ui-'));
+const port=Number(process.env.CONSOLE_TEST_PORT||18471),base=`http://127.0.0.1:${port}`;
+const child=spawn(process.env.PYTHON||'python',['-B',path.join(__dirname,'memory-fixture.py'),String(port),state],{windowsHide:true});
+let browser,stderr='';child.stderr.on('data',x=>stderr+=x);
+async function until(fn){for(let i=0;i<100;i++){try{if(await fn())return;}catch{}await new Promise(r=>setTimeout(r,100));}throw Error(stderr||'timeout');}
+(async()=>{
+ await until(async()=>(await fetch(base+'/api/launcher/status')).ok);
+ browser=await chromium.launch({headless:true,...(process.env.CHROMIUM?{executablePath:process.env.CHROMIUM}:{})});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(base+'/monitor/?lang=en#config');await page.locator('[data-param=Model]').waitFor();
+ const button=page.locator('[data-budget-auto]'),status=page.locator('[data-budget-status]');
+ await page.locator('[data-param=Model]').fill('test.ninfer');await page.locator('[data-gpu-choice]').first().check();
+ await page.locator('[data-param=Budget]').fill('16384');await page.locator('[data-param=Reserve]').fill('8192');
+ await page.locator('[data-param=KvType]').selectOption('rk8v4');
+ await page.getByRole('button',{name:'About: Automatically adjust budget',exact:true}).hover();
+ await until(async()=>(await page.getByRole('tooltip').filter({visible:true}).innerText()).includes('keep gen reserve, KV type'));
+ await page.keyboard.press('Escape');
+ const before=await (await fetch(base+'/api/launcher/status')).json();
+ await button.click();await until(async()=>(await status.innerText()).includes('Set to 49,152'));
+ assert.equal(await page.locator('[data-param=Budget]').inputValue(),'49152');
+ assert.equal(await page.locator('[data-param=Reserve]').inputValue(),'8192');
+ assert.equal(await page.locator('[data-param=KvType]').inputValue(),'rk8v4');
+ assert.deepEqual(await (await fetch(base+'/api/launcher/status')).json(),before);
+ const prefillPanel=await page.locator('[data-param=Prefill]').evaluate(el=>el.closest('[role=tabpanel]').id);
+ await page.locator(`[aria-controls="${prefillPanel}"]`).click();
+ for(const omitted of [['Reserve'],['Prefill'],['Reserve','Prefill']]){
+   await page.locator('[data-param=Reserve]').fill('8192');await page.locator('[data-param=Prefill]').fill('256');
+   for(const key of omitted)await page.locator(`[data-param=${key}]`).fill('');
+   await page.locator('[data-param=Budget]').fill('16384');
+   const response=page.waitForResponse(r=>r.url().endsWith('/api/launcher/adjust-budget'));
+   await button.click();const result=await (await response).json();
+   await until(async()=>(await status.innerText()).includes('Set to 49,152'));
+   assert.equal(result.reserve,omitted.includes('Reserve')?1024:8192);
+   assert.equal(result.prefill,omitted.includes('Prefill')?128:256);
+   for(const key of omitted)assert.equal(await page.locator(`[data-param=${key}]`).inputValue(),'');
+   assert.equal(await page.locator('[data-param=Budget]').inputValue(),'49152');
+   assert.equal(await page.locator('[data-param=KvType]').inputValue(),'rk8v4');
+ }
+ await page.locator('[data-param=Reserve]').fill('8192');await page.locator('[data-param=Prefill]').fill('256');
+ let seen,release;const requested=new Promise(r=>seen=r),held=new Promise(r=>release=r);
+ const delayed=async route=>{seen();await held;await route.continue();};
+ await page.route('**/api/launcher/adjust-budget',delayed);
+ await page.locator('[data-param=Budget]').fill('20032');await button.click();await requested;
+ assert.ok(await button.isDisabled());assert.ok(await page.locator('[data-action=start]').isDisabled());
+ await page.locator('[data-param=Reserve]').fill('4096');release();
+ await until(async()=>(await status.innerText()).includes('result was not applied'));
+ assert.equal(await page.locator('[data-param=Budget]').inputValue(),'20032');
+ await page.unroute('**/api/launcher/adjust-budget',delayed);
+ const fail=route=>route.fulfill({status:400,json:{error:'Minimum budget does not fit; adjust other settings'}});
+ await page.route('**/api/launcher/adjust-budget',fail);await button.click();
+ await until(async()=>(await status.innerText()).includes('Minimum budget does not fit'));
+ assert.equal(await page.locator('[data-param=Budget]').inputValue(),'20032');assert.ok(await button.isEnabled());
+ await page.unroute('**/api/launcher/adjust-budget',fail);
+ await page.locator('[data-language-select]').selectOption('zh-CN');await page.setViewportSize({width:390,height:844});
+ await button.click();await until(async()=>(await status.innerText()).includes('已调整为 49,152'));
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.getByRole('button',{name:'关于：自动调整 budget',exact:true}).click();
+ await until(async()=>(await page.getByRole('tooltip').filter({visible:true}).innerText()).includes('根据其他设置自动调整 budget'));
+ if(process.env.BUDGET_SCREENSHOTS){fs.mkdirSync(process.env.BUDGET_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.BUDGET_SCREENSHOTS,'mobile.png'),fullPage:true});}
+ await page.keyboard.press('Escape');await page.setViewportSize({width:1440,height:1000});
+ if(process.env.BUDGET_SCREENSHOTS)await page.screenshot({path:path.join(process.env.BUDGET_SCREENSHOTS,'desktop.png'),fullPage:true});
+ await page.locator('[data-action=start]').click();await until(async()=>(await page.locator('[data-runtime-state]').innerText()).includes('服务已就绪'));
+ assert.ok(await button.isDisabled());
+ await page.locator('[data-action=stop]').click();await until(()=>button.isEnabled());
+ assert.deepEqual(errors,[]);
+ console.log('PASS: budget-only growth, omitted reserve/prefill defaults, fixed 8K reserve and KV, no automatic start, stale edits rejected, inline failure, busy/running lock, hover help, Chinese/English, desktop/mobile');
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{if(browser)await browser.close();child.kill();});

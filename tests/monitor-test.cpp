@@ -16,6 +16,20 @@ int main() {
     check(slow.sample(26, 5000000000ULL, 6000)["decode_tps_live"] == 5.0);
     check(fast.sample(111, 6000000000ULL, 7000)["decode_tps_sampled_at_ms"] == 6000);
     check(fast.sample(1, 0, 8000)["decode_tps_live"].is_null());
+    {
+        kvmem::monitor monitor;
+        const auto media = monitor.begin("images", "media-request");
+        monitor.update(media, {{"has_media", true}});
+        const auto started = monitor.snapshot()["active"][0]["started_at_ms"];
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        check(monitor.begin("images", media) == media);
+        auto preparing = monitor.snapshot();
+        check(preparing["active"].size() == 1);
+        check(preparing["active"][0]["has_media"] == true);
+        check(preparing["active"][0]["started_at_ms"] == started);
+        monitor.finish(media, "error");
+        check(monitor.snapshot()["active"].empty());
+    }
     kvmem::monitor monitor;
     auto a = monitor.begin("/v1/chat/completions");
     auto b = monitor.begin("/v1/responses");
