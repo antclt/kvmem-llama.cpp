@@ -1,8 +1,8 @@
 diff --git a/docs/BACKENDS.md b/docs/BACKENDS.md
-index ba183039..0f4a0959 100644
+index 65172620..478b2e0e 100644
 --- a/docs/BACKENDS.md
 +++ b/docs/BACKENDS.md
-@@ -160,6 +160,12 @@ Qualification uses `poly_elastic_test MODEL.gguf [--no-graphs]`: exact native KV
+@@ -168,6 +168,12 @@ Qualification uses `poly_elastic_test MODEL.gguf [--no-graphs]`: exact native KV
  across map cycles, full versus narrow workspace logits with fixed expert placement, partial-admission rollback,
  real cache growth/reclaim, Pressure and bounded Query/replay. These are functional tests, not recall-quality tests.
  
@@ -16,7 +16,7 @@ index ba183039..0f4a0959 100644
  
  There are two levels.
 diff --git a/src/poly/engine.cpp b/src/poly/engine.cpp
-index f30aa2c2..7b9ce000 100644
+index 10c74878..777e7600 100644
 --- a/src/poly/engine.cpp
 +++ b/src/poly/engine.cpp
 @@ -854,7 +854,16 @@ size_t Engine::trim_card_kv(int64_t end) {
@@ -38,10 +38,10 @@ index f30aa2c2..7b9ce000 100644
      OnCard here(device_, split_);
      ck(cudaDeviceSynchronize(), "the attention cache");
 diff --git a/src/poly/main.cpp b/src/poly/main.cpp
-index 55e3c2c8..6d6bb2f6 100644
+index 39c69439..e51e446d 100644
 --- a/src/poly/main.cpp
 +++ b/src/poly/main.cpp
-@@ -472,8 +472,8 @@ struct Session {
+@@ -473,8 +473,8 @@ struct Session {
          if (const size_t freed = engine.trim_kv(n)) {
              const int had = engine.cached_experts();
              engine.mind_vram();
