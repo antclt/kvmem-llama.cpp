@@ -110,14 +110,55 @@ branch. Inferred/unknown conversation IDs retain the existing continuation gate;
 legacy mode also keeps that gate for explicit IDs. This is an intentional policy
 change required for middle-edit reuse, not a correction of the old fork policy.
 
-NInfer's existing Responses route binds `prompt_cache_key` to a session key
-(`store: false` is sufficient); that explicit owner can also replace an earlier
-suffix. In Chat Completions, `prompt_cache_key` is only a prompt-anchor hint,
-not a session binding. Spread protects anonymous histories from consumptive
+NInfer's Responses route binds `prompt_cache_key` to a session key
+(`store: false`, without a previous response); that explicit owner can also replace an earlier
+suffix. Chat Completions now binds a non-empty `prompt_cache_key` to the same live-session
+semantics, including `store:false`. An explicit `kvmem.conversation_id` takes precedence.
+The OpenCode compatible SDK spelling `promptCacheKey` is also accepted on Chat;
+conflicting non-empty values under both spellings are rejected.
+For OpenCode's `@ai-sdk/openai-compatible` provider, enable
+`provider.<id>.options.setCacheKey: true`; OpenCode then sends its session ID as
+`promptCacheKey`. Reverting messages within that session preserves the key.
+Keep the identity stable through append, regenerate and rollback. Separate conversations
+should use distinct identities; sharing a key shares one owner, so a suffix edit can discard
+checkpoints another branch would otherwise reuse. A key identifies an owner; token/media,
+native-state and KV proofs still govern every restore. Missing/null/empty cache keys remain
+anonymous. Spread protects anonymous histories from consumptive
 restores by unrelated requests sharing only the system prefix: a continuation
 must reach the previous accepted input boundary, allowing a 64-token template
 tail margin. Earlier edits without a session key start a separate history. This
 keeps a short unrelated conversation from truncating the retained long history.
+
+NInfer spread mode first searches that named owner's checkpoints. If none is
+valid, a request with a current user Query may discover another named owner's
+matching prefix. The bounded retained directory, token/media/position digests,
+coverage and placement metadata live in RAM. Digest filtering reads no SSD
+payload; at most 16 foreign candidates receive exact prefix checks. Candidates
+prefer the deepest legal frontier, then the fewest cold state/KV bytes, then
+recent publication. A hash match never replaces the exact identity checks.
+
+The new owner copies mutable selector/statistics and checkpoint metadata through
+the selected frontier. Sealed KV records and immutable native images share their
+physical storage; a later KV write detaches that owner's record. Physical payload
+quota is charged once while shared. Owner metadata and mean-K copies still cost
+RAM, and the first divergent page costs a new KV allocation. The source owner
+remains intact and both branches can independently append, roll back and return.
+Once the other owners and all outstanding readers release a KV page, its sole
+owner can write it without allocating a second copy. A deferred read source or
+active read lease still requires copy-on-write until that reader releases it.
+Ordinary session/count/byte eviction limits still apply after publication.
+
+RAM and SSD candidates are equally eligible. After selection and capacity checks,
+the transaction binds the source generation and reads only the selected cold
+image and required native KV pages. Read workers do not mutate the parent.
+Cancellation releases unpublished child references; preparation failure falls
+back to the admitted full prefill. The native restore verifies state before a
+history hit is recorded. Previously quoted API reuse counters can still include
+the planned prefix on that fallback; use the native restore log to distinguish
+completed reuse. OpenCode needs no parent ID or fork protocol change: its new
+session/cache key selects a new owner with an identical serialized prefix.
+This cross-owner policy is specific to the NInfer Qwen3.5 KVMem path; the llama
+ownership rules above remain unchanged.
 
 Ordinary tool continuation still appends with resident-only Pressure. A saved Q
 does not authorize cold-history recall. Checkpoint policy does not change the
@@ -149,12 +190,20 @@ larger directories do not guarantee more points under a small Host budget.
 
 See the [validation record](checkpoint-policy-validation-20261025.md) for current
 results, fixed failures and qualification limits.
+The [NInfer cross-owner validation](ninfer-cross-owner-validation-20261029.md)
+records Chat rollback, OpenCode forks, shared storage and cold-read failure tests.
 
 `kvmem-checkpoint-policy-test` checks retention, identity aliases, tiny budgets,
 fixed leases, truncation and exact capture boundaries. `kvmem-checkpoint-image-test`
 checks framing, checksum, partial reads, full disk/queue, cancellation, source
 lifetime and reservation refund. The native checkpoint-tail test compares exact
 KV/recurrent bytes and rejects incomplete coverage.
+
+NInfer's `ninfer_ssd_failure <artifact> --fork` checks two-stage document/question
+reuse against fresh prefill, a failed cold read, cancellation during cold I/O,
+parent survival, changed prefixes and requests that forbid index updates.
+Host KV tests cover shared RAM/SSD records, copy-on-write, allocation failure,
+owner deletion and physical quota release; mean-K tests cover independent tails.
 
 `tests/checkpoint-coverage-regression.py` exercises ordinary document-first and
 separate-question turns, tail/middle/front edits, session switches and actual SSD

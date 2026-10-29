@@ -1,0 +1,199 @@
+diff --git a/docs/serving.md b/docs/serving.md
+index bb4c54861a650492d98635c339a1b35ba1ec3a39..5a727a7f2a0a6a1a3a8f16b9220ac3e81da528c1 100644
+--- a/docs/serving.md
++++ b/docs/serving.md
+@@ -957,11 +957,21 @@ Each capability rejection identifies the affected field and the guarantee NInfer
+ Semantically neutral fields do not make an otherwise executable request fail. All-zero
+ `logit_bias`, `logprobs:false`, `verbosity:"medium"`, empty legacy tool controls,
+ text-only `audio` configuration, and `prediction` are accepted without changing Engine execution.
+-Metadata, user/safety identifiers, service-tier and prompt-cache hints are likewise advisory.
++Metadata, user/safety identifiers and service-tier hints are likewise advisory.
+ `prompt_cache_key` (at most 256 bytes, beyond the API's 64 so that a gateway can namespace keys per
+-user) is not a prefix identity, but a non-empty key, on Chat Completions as on Responses, makes the
+-Engine keep a private long-anchor checkpoint at the end of the prompt, so an agent loop with no new
+-user turn between requests resumes from its previous request. Unknown top-level fields are ignored.
++user) is not a prefix identity. A non-empty Chat Completions key binds a live cache session,
++advances its session index and keeps a private long anchor at the prompt end, including when
++`store:false`. This matches the client-managed Responses path (`store:false`, no previous response).
++Chat also accepts `promptCacheKey`, as emitted by OpenCode's openai-compatible SDK adapter.
++If both spellings have non-empty values they must agree; a conflict is a request error.
++The optional `kvmem.conversation_id` (1–256 bytes) takes precedence over `prompt_cache_key`.
++Keep the identity stable across append, regenerate and history rollback; use separate identities
++for independent conversations. Shared keys share one cache lineage: editing an earlier prefix
++can discard its later checkpoints, so independently retained branches require distinct owners.
++Every restore still validates the token/media prefix and native KV/state; a matching key alone
++does not make incompatible inputs reusable. Missing, null or empty cache keys remain anonymous.
++Ordinary tool continuation retains its append and resident-only Pressure behavior.
++Unknown top-level fields are ignored.
+ 
+ A string `name` on any message is accepted and ignored, as the optional OpenAI participant label
+ that agent frameworks use to tag injected messages and that some clients mirror onto tool results.
+diff --git a/src/serve/openai_chat.h b/src/serve/openai_chat.h
+index da62ddeed8d673093d5b99d24becdd647fe55303..97281929c4598f9bd52d58a4cff6253e85cc3109 100644
+--- a/src/serve/openai_chat.h
++++ b/src/serve/openai_chat.h
+@@ -34,6 +34,10 @@ struct OpenAIChatRequest {
+ OpenAIChatRequest parse_chat_completion_request(const RequestJson& body,
+                                                 const RequestLimits& limits);
+ 
++// A named cache lineage authorizes replacing its suffix on history edits.
++// The key scopes candidates; native prefix and state validation still govern reuse.
++ContextCacheHints parse_chat_context_cache_hints(const RequestJson& body);
++
+ struct OpenAIChatResponseIdentity {
+     std::string id;
+     std::string model;
+diff --git a/src/serve/openai_chat_http.cpp b/src/serve/openai_chat_http.cpp
+index 7683ba6d0edeb108f85f26ba7983fe48b2072711..6557e321514bb42a57ef34c89fc12fb3fbda9c4a 100644
+--- a/src/serve/openai_chat_http.cpp
++++ b/src/serve/openai_chat_http.cpp
+@@ -24,11 +24,13 @@ std::string sse_error_event(const ApiError& error) {
+ 
+ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::Response& res) {
+     OpenAIChatRequest request;
++    ContextCacheHints cache_hints;
+     ModelRegistry::Lease lease;
+     try {
+         const RequestLimits limits       = request_limits(options_);
+         const auto body                  = parse_json_body(req);
+         request                          = parse_chat_completion_request(body, limits);
++        cache_hints                      = parse_chat_context_cache_hints(body);
+         request.generation.ngram_session = resolve_ngram_session(req, body, options_);
+         lease                            = lease_model(request.model, req);
+         request.model                    = lease.model();
+@@ -52,7 +54,8 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
+         prepared = service->prepare(request.generation,
+                                     request.stream ? GenerationConsumerMode::Streaming
+                                                    : GenerationConsumerMode::Aggregate,
+-                                    observation, [&req] { return client_disconnected(req); });
++                                    observation, [&req] { return client_disconnected(req); },
++                                    std::move(cache_hints));
+         prepared.model_hold = std::make_shared<ModelRegistry::Lease>(std::move(lease));
+     } catch (const ApiException& exception) {
+         record_request_rejected(make_request_rejection_log_context(
+diff --git a/src/serve/openai_chat_request.cpp b/src/serve/openai_chat_request.cpp
+index f11a52af90f34b0fbb206c4b40aa7ec05adebfab..fab1e411c23036cae4ba43ff10e3170af1ef3d8f 100644
+--- a/src/serve/openai_chat_request.cpp
++++ b/src/serve/openai_chat_request.cpp
+@@ -1003,9 +1003,44 @@ OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestL
+     // message, so a tool-calling exchange (many requests, no new user turn between them) would
+     // otherwise resume from the start of the exchange instead of from the previous request.
+     output.generation.private_cache_boundary_at_prompt_end =
+-        body.contains("prompt_cache_key") && body.at("prompt_cache_key").is_string() &&
+-        !body.at("prompt_cache_key").get_ref<const std::string&>().empty();
++        parse_chat_context_cache_hints(body).session_key.has_value();
+     return output;
+ }
+ 
++ContextCacheHints parse_chat_context_cache_hints(const RequestJson& body) {
++    ContextCacheHints hints;
++    const auto key = [&](const RequestJson& value, const char* field, bool allow_empty) {
++        if (!value.is_string()) { bad_request(std::string(field) + " must be a string", field); }
++        auto result = value.get<std::string>();
++        if ((!allow_empty && result.empty()) || result.size() > ninfer::kMaximumContextCacheSessionKeyBytes) {
++            bad_request(std::string(field) + " must contain " + (allow_empty ? "0" : "1") +
++                            " to " + std::to_string(ninfer::kMaximumContextCacheSessionKeyBytes) + " bytes",
++                        field);
++        }
++        return result;
++    };
++    // OpenCode's openai-compatible adapter forwards the SDK spelling unchanged.
++    for (const char* field : {"prompt_cache_key", "promptCacheKey"}) {
++        if (!body.contains(field) || body.at(field).is_null()) { continue; }
++        auto value = key(body.at(field), field, true);
++        if (value.empty()) { continue; }
++        if (hints.session_key && *hints.session_key != value) {
++            bad_request("prompt_cache_key and promptCacheKey must agree", field);
++        }
++        hints.session_key = std::move(value);
++    }
++    if (body.contains("kvmem") && !body.at("kvmem").is_null()) {
++        const auto& extension = body.at("kvmem");
++        if (!extension.is_object()) { bad_request("kvmem must be an object", "kvmem"); }
++        if (extension.contains("conversation_id") && !extension.at("conversation_id").is_null()) {
++            hints.session_key = key(extension.at("conversation_id"), "kvmem.conversation_id", false);
++        }
++    }
++    if (hints.session_key) {
++        hints.retention = CacheRetentionHint::LiveSession;
++        hints.update_session_index = true;
++    }
++    return hints;
++}
++
+ } // namespace ninfer::serve
+diff --git a/tests/test_openai_schema.cpp b/tests/test_openai_schema.cpp
+index c02e3f50053b7bf78aa591368343bf844885be81..fc5a6f61429f533b994778f41e171d3e32f6b374 100644
+--- a/tests/test_openai_schema.cpp
++++ b/tests/test_openai_schema.cpp
+@@ -1745,6 +1745,62 @@ int test_prompt_cache_key_grants_long_anchor() {
+     return failures;
+ }
+ 
++int test_chat_cache_session_binding() {
++    int failures = 0;
++    Json body = base_request();
++    const auto anonymous = parse_chat_context_cache_hints(body);
++    failures += check(!anonymous.session_key && anonymous.retention == ninfer::CacheRetentionHint::Default,
++                      "unkeyed Chat preserves anonymous cache semantics");
++    body["prompt_cache_key"] = "opencode-session-a";
++    auto hints = parse_chat_context_cache_hints(body);
++    failures += check(hints.session_key == "opencode-session-a" &&
++                          hints.retention == ninfer::CacheRetentionHint::LiveSession && hints.update_session_index,
++                      "Chat cache key binds a retained, advancing session lineage");
++    body["store"] = false;
++    failures += check(parse_chat_context_cache_hints(body).session_key == hints.session_key,
++                      "Chat store:false does not disable cache identity");
++    body["prompt_cache_key"] = "opencode-session-b";
++    failures += check(parse_chat_context_cache_hints(body).session_key != hints.session_key,
++                      "different client keys remain distinct owners");
++    body["promptCacheKey"] = "opencode-session-b";
++    failures += check(parse_chat_context_cache_hints(body).session_key == "opencode-session-b",
++                      "matching SDK and wire cache keys are accepted");
++    body["promptCacheKey"] = "different-owner";
++    failures += check(api_error([&] { (void)parse(body); }).param == "promptCacheKey",
++                      "conflicting SDK and wire keys are rejected");
++    body.erase("prompt_cache_key");
++    body["promptCacheKey"] = "opencode-session-b";
++    failures += check(parse_chat_context_cache_hints(body).session_key == "opencode-session-b" &&
++                          parse(body).generation.private_cache_boundary_at_prompt_end,
++                      "OpenCode compatible SDK spelling binds the session and anchor");
++    body["promptCacheKey"] = 17;
++    failures += check(api_error([&] { (void)parse(body); }).param == "promptCacheKey",
++                      "malformed SDK cache key rejected");
++    body.erase("promptCacheKey");
++    body["prompt_cache_key"] = "opencode-session-b";
++    body["kvmem"] = Json{{"conversation_id", "explicit-owner"}};
++    failures += check(parse_chat_context_cache_hints(body).session_key == "explicit-owner",
++                      "explicit conversation identity takes precedence over cache affinity");
++    body.erase("prompt_cache_key");
++    failures += check(parse(body).generation.private_cache_boundary_at_prompt_end,
++                      "explicit owner gets an endpoint anchor without a cache key");
++    for (const auto& invalid : std::vector<Json>{"", 17, std::string(257, 'x')}) {
++        body["kvmem"]["conversation_id"] = invalid;
++        failures += check(api_error([&] { (void)parse(body); }).param == "kvmem.conversation_id",
++                          "invalid explicit owner rejected before execution");
++    }
++    body.erase("kvmem");
++    for (const auto& empty : std::vector<Json>{nullptr, ""}) {
++        body["prompt_cache_key"] = empty;
++        failures += check(!parse_chat_context_cache_hints(body).session_key,
++                          "empty or null cache key preserves anonymous behavior");
++    }
++    body["prompt_cache_key"] = 17;
++    failures += check(api_error([&] { (void)parse_chat_context_cache_hints(body); }).param == "prompt_cache_key",
++                      "non-string cache key rejected");
++    return failures;
++}
++
+ int main(int argc, char** argv) {
+     if (argc == 2 && std::string_view(argv[1]) == "--image-detail-only") {
+         const int failures = test_messages_and_media();
+@@ -1753,6 +1809,7 @@ int main(int argc, char** argv) {
+     }
+     int failures = 0;
+     failures += test_prompt_cache_key_grants_long_anchor();
++    failures += test_chat_cache_session_binding();
+     failures += test_graft_extension();
+     failures += test_thinking_budget_extension();
+     failures += test_request_envelope_and_sampling();

@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "8d79a97c26ed725ab897faebcd6f73c08d6692f5",
+    "patched_tree": "bb98e6d4d106096627df42219d73807c3caba48e",
     "patches": [
       {
         "id": "kvmem",
@@ -280,6 +280,26 @@
           "t5-sm75-prefill"
         ],
         "after_tree": "8d79a97c26ed725ab897faebcd6f73c08d6692f5"
+      },
+      {
+        "id": "chat-cache-owner",
+        "path": "backends/patches/ninfer-chat-cache-owner.patch",
+        "sha256": "a6bfcdcc9a062590f0cc3747b0a3700ff24fe4e25dffe5684dd8dd282a6a9839",
+        "requires": [
+          "monitor-image-input"
+        ],
+        "after_tree": "1ef9dd19cea68a5eb0564f7a67081123a4899790",
+        "source": "Bind Chat prompt_cache_key / OpenCode promptCacheKey to live cache ownership; explicit conversation override, native prefix/state checks preserved; schema and real OpenCode rollback regressions"
+      },
+      {
+        "id": "cross-owner-fork",
+        "path": "backends/patches/ninfer-cross-owner-fork.patch",
+        "sha256": "6aaa2626b1f2d52412a1bbb06e0b9ba2c63fbe8cb1e56107aee062cf34d152a1",
+        "requires": [
+          "chat-cache-owner"
+        ],
+        "after_tree": "bb98e6d4d106096627df42219d73807c3caba48e",
+        "source": "NInfer spread cross-key exact prefix discovery in RAM; independent owners sharing immutable RAM/SSD KV and state, transactional cold restore and fault/cancellation regression"
       }
     ]
   },
