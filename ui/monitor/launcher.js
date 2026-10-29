@@ -4,6 +4,7 @@
   const root = document.querySelector('[data-launch-root]');
   const tr = (zh,en) => window.monitorI18n.language === 'en' ? en : zh;
   let info, busy=false, activeTab=0, runtime=null, startPending=false, launchFailure="";
+  let budgetPending=false, budgetAdjustment=null;
   let health=null, healthKey='', healthTimer=null, healthAbort=null, healthSequence=0, healthState='idle';
   // A running process owns the displayed configuration; browser drafts cannot replace it.
   let configLocked=false, configUncertain=false, runningParameters=null, pendingParameters=null, runningView='';
@@ -16,12 +17,12 @@
       else if(lockedControls.has(el)){el.disabled=lockedControls.get(el);lockedControls.delete(el);delete el.dataset.launchLocked;}
     });
     root.querySelectorAll('.l-draft-actions button').forEach(el=>el.disabled=locked||busy);
-    const start=root.querySelector('[data-action=start]'),stop=root.querySelector('[data-action=stop]'); if(start)start.disabled=locked||busy||healthBlocks(); if(stop)stop.disabled=busy||!['starting','ready'].includes(runtime?.state);
+    const start=root.querySelector('[data-action=start]'),stop=root.querySelector('[data-action=stop]'); if(start)start.disabled=locked||busy||runtime?.budget_planning||healthBlocks(); if(stop)stop.disabled=busy||!['starting','ready'].includes(runtime?.state);
     const title=root.querySelector('.l-intro h1');if(title)title.textContent=locked?tr('当前启动参数','Current launch parameters'):tr('启动配置','Launch configuration');
     const healthBox=root.querySelector('[data-model-health]');if(healthBox)healthBox.hidden=locked;
     const key=root.querySelector('[data-param=ApiKey]');
     if(locked&&key){key.value='';key.placeholder=runtime?.api_key_configured?tr('已设置 · 密钥不回显','Configured · Key not displayed'):tr('未设置','Not configured');}
-    draftStatus();
+    draftStatus();renderBudgetAdjustment();
   }
   function syncRunningConfiguration(status){
     const running=['starting','ready'].includes(status.state);
@@ -247,8 +248,8 @@
     if(draft.raw){const layers=root.querySelector('[data-param=StageLayers]');if(layers&&typeof draft.raw.StageLayers==='string'){layers.value=draft.raw.StageLayers;layers.dispatchEvent(new Event('input'));}const native=root.querySelector('[data-native]');if(native&&typeof draft.raw.WorkerArgs==='string'){native.value=draft.raw.WorkerArgs;native.dispatchEvent(new Event('input'));}}
     draftStatus();
   }
-  root.addEventListener('input',event=>{if(!configurationLocked()&&event.target.matches('[data-param], [data-native]')){syncDependencies();scheduleSave();scheduleHealth();}});
-  root.addEventListener('change',event=>{if(!configurationLocked()&&event.target.matches('[data-param], [data-native]')){syncDependencies();scheduleSave();scheduleHealth();}});
+  root.addEventListener('input',event=>{if(!configurationLocked()&&event.target.matches('[data-param], [data-native]')){if(!budgetPending)budgetAdjustment=null;syncDependencies();scheduleSave();scheduleHealth();renderBudgetAdjustment();}});
+  root.addEventListener('change',event=>{if(!configurationLocked()&&event.target.matches('[data-param], [data-native]')){if(!budgetPending)budgetAdjustment=null;syncDependencies();scheduleSave();scheduleHealth();renderBudgetAdjustment();}});
   window.addEventListener('pagehide',saveEditing);
   function readTemplates(){
     const values=JSON.parse(localStorage.getItem(TEMPLATE_KEY)||'[]');
@@ -264,7 +265,8 @@
     close.onclick=()=>el.close();el.addEventListener('close',()=>el.remove());el.showModal();return el;
   }
   function showError(error){const el=dialog(tr('操作未完成','Action could not complete'),'error');el.append(make('p',{class:'l-error',role:'alert'},error.message||String(error)));}
-  function refreshTemplates(){const current=root.querySelector('.l-presets');if(current){const side=current.parentElement;current.querySelectorAll('.l-help').forEach(button=>{if(openHelp?.button===button)closeHelp();document.getElementById(button.getAttribute('aria-describedby'))?.remove();});current.remove();presetPanel(side);}}
+  function refreshTemplates(){const current=root.querySelector('.l-presets');if(current){const side=current.parentElement;current.querySelectorAll('.l-help').forEach(button=>{if(openHelp?.button===button)closeHelp();document.getElementById(button.getAttribute('aria-describedby'))?.remove();});current.remove();
+    presetPanel(side);}}
   function templateEditor(mode='create',item=null){
     const snapshot=captureDraft(),title=mode==='delete'?tr('删除模板','Delete template'):mode==='rename'?tr('重命名模板','Rename template'):mode==='update'?tr('更新模板','Update template'):tr('另存为模板','Save as template');
     const el=dialog(title,'template'),form=make('form'),error=make('p',{class:'l-error',role:'alert'});
@@ -842,7 +844,14 @@
     outputLimit.addEventListener('input',()=>{outputMode.value=outputLimit.value!==''&&Number(outputLimit.value)===0?'unlimited':'limited';outputLimit.hidden=outputMode.value==='unlimited';});
     outputMode.onchange=()=>{outputLimit.value=outputMode.value==='unlimited'?'0':String(Number(outputLimit.value)||16384);outputLimit.hidden=outputMode.value==='unlimited';outputLimit.dispatchEvent(new Event('input',{bubbles:true}));};
     if(poly)field(fields,p,'BlockTokens','KV 管理块大小 · tokens','KV block size · tokens','number',[[32,'32'],[64,'64']],['启动时固定；32 提供更细的召回粒度，并增加统计与评分开销。','Fixed at startup. 32 enables finer recall and increases statistics and scoring overhead.']);
-    field(fields,p,'Budget','GPU 历史 KV 预算 · tokens','GPU history KV budget · tokens','number',null,['每条活动请求选中的历史 KV，不含生成预留空间；不是整卡显存上限','Selected history KV per active request, excluding append workspace; not a device VRAM limit']);
+    const budgetInput=field(fields,p,'Budget','GPU 历史 KV 预算 · tokens','GPU history KV budget · tokens','number',null,['每条活动请求选中的历史 KV，不含生成预留空间；不是整卡显存上限','Selected history KV per active request, excluding append workspace; not a device VRAM limit']);
+    if(p.Backend==='ninfer'&&info.budget_adjustment!==false){
+      const row=make('div',{class:'l-budget-value'}),button=make('button',{type:'button',class:'s-button l-budget-auto','data-budget-auto':''},tr('自动调整','Auto adjust'));
+      budgetInput.replaceWith(row);row.append(budgetInput,button);
+      help(row,tr('自动调整 budget','Automatically adjust budget'),tr('根据其他设置自动调整 budget：保持当前 gen reserve、KV 类型等设置，加载一次模型并测算带显存余量的最大 budget。仅填回 budget，不启动服务；仍需实际启动验证。','Adjust budget from the other settings: keep gen reserve, KV type and other options, load the model once and estimate the largest budget with memory headroom. Fill in budget without starting the service; startup validation is still needed.'),button);
+      row.after(make('small',{'data-budget-status':'',role:'status','aria-live':'polite',hidden:''}));
+      button.onclick=event=>{event.preventDefault();adjustBudget();};
+    }
     field(fields,p,'Reserve','生成预留空间 · tokens','Generation reserve · tokens','number',null,['每条活动请求的追加 KV 工作空间；可循环复用，输出预算可以超过此值','Append KV workspace per active request; reusable, so output budget may exceed this value']);
     const resourceFields=make('div',{class:'l-resource-grid l-wide'});
     for(const key of ['Context','MaxTokens','Budget','Reserve']){
@@ -1002,6 +1011,7 @@
     if(info.script_export_version){const generate=make('button',{type:'button',class:'s-button','data-action':'export'},tr('生成启动脚本','Generate launch script'));generate.onclick=exportDialog;actions.append(generate);}
     if(info.script_export_version){const services=make('button',{type:'button',class:'s-button','data-services-open':''},tr('后台服务管理','Background services'));services.onclick=servicesDialog;actions.append(services);}
     const status=make('section',{class:'s-card l-runtime'}),statusTitle=make('h2',{class:'s-title'},tr('当前运行服务','Running service'));status.append(statusTitle,make('p',{class:'l-status s-badge','data-runtime-state':''},tr('读取中','Loading')));help(statusTitle,tr('当前运行服务','Running service'),tr('只管理此控制台启动的服务。停止会卸载模型并清空其内存缓存。','Only services started here are managed. Stopping unloads the model and its in-memory cache.'));const progress=make('div',{class:'l-launch-progress','data-launch-progress':'',hidden:''});progress.append(make('p',{'data-launch-phase':'',role:'status'}),make('div',{class:'l-launch-track',role:'progressbar','data-launch-track':''}),make('small',{class:'l-muted','data-launch-help':''}));status.append(progress,make('dl',{'data-runtime-details':''}));const lifecycle=make('div',{class:'l-actions'});const start=make('button',{type:'button',class:'s-button l-primary','data-action':'start'},tr('启动服务','Start service'));const stop=make('button',{type:'button',class:'s-button','data-action':'stop',disabled:''},tr('停止服务','Stop service'));lifecycle.append(start,stop);status.append(lifecycle);side.append(status);
+    progress.after(make('section',{class:'l-memory-recovery','data-memory-recovery':'','aria-label':tr('显存恢复建议','Memory recovery recommendations'),hidden:''}));
     presetPanel(side);
     const log=make('details',{class:'s-card l-log'});log.append(make('summary',{},tr('启动日志','Startup log')));const refresh=make('button',{type:'button',class:'s-button l-secondary'},tr('刷新日志','Refresh log'));log.append(refresh,make('pre',{class:'l-result','data-log':''}));side.append(log);refresh.onclick=async()=>{try{log.querySelector('[data-log]').textContent=(await api('log')).text||tr('暂无日志','No log yet');}catch(e){message(e.message,true);}};
     const liveLog=make('button',{type:'button',class:'s-button l-secondary'},tr('打开实时日志 →','Open live logs →'));log.insertBefore(liveLog,refresh);liveLog.onclick=()=>document.querySelector('[data-page=logs]').click();
@@ -1044,7 +1054,102 @@
     updateStatus(runtime);
     draftStatus();
   }
-  function updateStatus(status,confirmed=false){runtime=status;if(!status)return;if(confirmed)configUncertain=false;syncRunningConfiguration(status);window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['管理方式','Managed by',status.owner==='systemd'?'systemd':status.owner==='temporary'?tr('临时运行','Temporary'):null],['服务状态','Service status',status.service_error||status.service?.substate],['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['KV 块大小','KV block size',o?.block_tokens],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running||configurationLocked()||healthBlocks();root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){chat.hidden=false;chat.href='/chat/';chat.removeAttribute('aria-disabled');}renderLaunchProgress();}
+  function updateStatus(status,confirmed=false){runtime=status;if(!status)return;if(confirmed)configUncertain=false;syncRunningConfiguration(status);window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:status}));const running=['starting','ready'].includes(status.state);const label=root.querySelector('[data-runtime-state]');if(!label)return;const translations={stopped:['未启动','Stopped'],starting:['正在加载模型','Loading model'],ready:['服务已就绪','Ready'],exited:['进程已退出','Process exited']};label.textContent=tr(...(translations[status.state]||translations.stopped));label.dataset.state=status.state;const dl=root.querySelector('[data-runtime-details]');dl.replaceChildren();const p=status.active_config?.parameters,o=status.effective_scoring;for(const [zh,en,value] of [['引擎','Backend',p?names[p.Backend]:null],['模型','Model',p?.Model],['监听地址','Listen address',p?p.ListenHost||'127.0.0.1':null],['本机地址','Local URL',status.url],['进程','PID',status.pid],['退出码','Exit code',status.exit_code],['KV 块大小','KV block size',o?.block_tokens],['评分器','Query scorer',o?.scorer],['聚合','Aggregation',o?.agg],['图传播强度','Graph strength',o?.graph_alpha],['历史累计','LRFU',o?.lrfu===undefined?null:o.lrfu?tr('开启','On'):tr('关闭','Off')],['问题／回放上限','Query / replay limits',o?.query_max_tokens===undefined?null:`${o.query_max_tokens} / ${o.query_replay_max_tokens??'—'}`],['配置确认','Configuration',p?(status.scoring_confirmed?tr('服务已确认','Confirmed by service'):status.scoring_mismatch?tr('与启动计划不一致','Differs from launch plan'):tr('等待完整服务报告','Awaiting full service report')):null],['程序校验值','Worker SHA-256',status.worker?.executable_sha256?.slice(0,12)]]){if(value!==null&&value!==undefined){dl.append(make('dt',{},tr(zh,en)),make('dd',{title:String(value)},zh==='模型'?String(value).split(/[\\/]/).pop():String(value)));}}root.querySelector('[data-action=start]').disabled=busy||running||status.budget_planning||configurationLocked()||healthBlocks();root.querySelector('[data-action=stop]').disabled=busy||!running;const chat=document.querySelector('[data-chat-link]');if(info){chat.hidden=false;chat.href='/chat/';chat.removeAttribute('aria-disabled');}renderLaunchProgress();renderMemoryRecovery();renderBudgetAdjustment();}
+  function renderBudgetAdjustment(){
+    const button=root.querySelector('[data-budget-auto]'),status=root.querySelector('[data-budget-status]');if(!button||!status)return;
+    const gpu=root.querySelector('[data-param=Gpu]'),selection=gpu?.multiple?Array.from(gpu.selectedOptions).map(x=>x.value):(gpu?.value||'').split(',').filter(Boolean);
+    const unavailable=selection.length!==1||root.querySelector('[data-param=TensorParallel]')?.checked;
+    button.disabled=busy||configurationLocked()||runtime?.budget_planning||unavailable;
+    button.dataset.disabledReason=unavailable?tr('请选择一张显卡；自动调整暂支持 NInfer 单卡。','Select one GPU; automatic adjustment currently supports single-GPU NInfer.'):'';
+    button.textContent=budgetPending?tr('测算中…','Planning…'):tr('自动调整','Auto adjust');
+    status.hidden=!budgetAdjustment;status.classList.toggle('l-error',budgetAdjustment?.kind==='error');
+    if(!budgetAdjustment)return;
+    if(budgetPending)status.textContent=tr(`正在加载模型并测算… ${Math.floor((Date.now()-budgetAdjustment.started)/1000)} 秒`,`Loading model and planning… ${Math.floor((Date.now()-budgetAdjustment.started)/1000)} s`);
+    else if(budgetAdjustment.kind==='success')status.textContent=tr(`已调整为 ${budgetAdjustment.budget.toLocaleString()} · 耗时 ${(budgetAdjustment.elapsed/1000).toFixed(1)} 秒；待启动验证。`,`Set to ${budgetAdjustment.budget.toLocaleString()} · ${(budgetAdjustment.elapsed/1000).toFixed(1)} s; startup validation pending.`);
+    else status.textContent=budgetAdjustment.message;
+  }
+  async function adjustBudget(){
+    if(busy||configurationLocked()||runtime?.budget_planning)return;
+    let timer;
+    try{
+      const configuration=launchData(),key=JSON.stringify(configuration);
+      busy=true;budgetPending=true;budgetAdjustment={started:Date.now()};applyConfigurationLock();renderMemoryRecovery();renderBudgetAdjustment();
+      timer=setInterval(renderBudgetAdjustment,1000);
+      const result=await api('adjust-budget',configuration,240000);
+      if(JSON.stringify(launchData())!==key)throw Error(tr('设置已改变，测算结果未应用；请重新测算。','Settings changed; the result was not applied. Run adjustment again.'));
+      const input=root.querySelector('[data-param=Budget]');
+      input.value=String(result.changes.Budget);input.dispatchEvent(new Event('input',{bubbles:true}));
+      budgetAdjustment={kind:'success',budget:result.changes.Budget,elapsed:result.elapsed_ms};
+    }catch(error){budgetAdjustment={kind:'error',message:error.message||String(error)};}
+    finally{clearInterval(timer);budgetPending=false;busy=false;applyConfigurationLock();updateStatus(runtime);renderBudgetAdjustment();}
+  }
+  function rankMemoryOptions(options){
+    const qualityOrder={int8:0,rk8v4:1,nvfp4:2};
+    return [...options].sort((a,b)=>{
+      if(a.available!==b.available)return a.available?-1:1;
+      if(a.available){
+        const aBudget=a.changes.Budget,bBudget=b.changes.Budget;
+        const aMeetsTarget=aBudget>=32768,bMeetsTarget=bBudget>=32768;
+        if(aMeetsTarget!==bMeetsTarget)return aMeetsTarget?-1:1;
+        if(!aMeetsTarget&&aBudget!==bBudget)return bBudget-aBudget;
+      }
+      return qualityOrder[a.id]-qualityOrder[b.id];
+    });
+  }
+  function renderMemoryRecovery(){
+    const box=root.querySelector('[data-memory-recovery]');if(!box)return;
+    const diagnosis=runtime?.memory_diagnosis,trial=runtime?.memory_trial;
+    const instance=runtime?.instance;
+    const renderKey=JSON.stringify([instance,runtime?.state,diagnosis,trial,busy,configurationLocked(),window.monitorI18n.language]);
+    if(box.dataset.renderKey===renderKey)return;box.dataset.renderKey=renderKey;
+    box.hidden=!diagnosis&&!trial;box.dataset.state=diagnosis?'error':'trial';box.replaceChildren();if(box.hidden)return;
+    if(!diagnosis){
+      box.append(make('h2',{class:'s-title'},tr('显存推荐方案','Memory recommendation')),
+        make('p',{},trial.startup_verified?tr('推荐方案已通过启动验证；推理峰值显存尚未验证。','Recommendation passed startup validation; peak inference memory remains unverified.'):runtime.state==='exited'?tr('推荐方案的进程已退出，请检查日志。','The recommended launch exited; check the log.'):tr('正在验证推荐方案，等待服务就绪。','Validating recommendation; waiting for readiness.')));return;
+    }
+    box.append(make('h2',{class:'s-title'},tr('启动时显存不足','Insufficient GPU memory at startup')));
+    const reasons={single_ninfer_only:['暂仅支持 NInfer 单卡推荐。','Recommendations currently support single-GPU NInfer.'],missing_native_plan:['此次失败未生成后端内存规划，暂无法给出可靠的推荐参数。','No native memory plan was produced for this failure; reliable settings are unavailable.'],invalid_native_plan:['后端规划报告与本次启动参数不一致，无法使用该建议。','The native plan does not match this launch; its recommendations cannot be used.']};
+    if(diagnosis.reason){box.append(make('p',{},tr(...(reasons[diagnosis.reason]||reasons.missing_native_plan))));return;}
+    const mib=n=>`${Math.ceil(n/1048576).toLocaleString()} MiB`;
+    box.append(make('p',{},tr(`后端需要 ${mib(diagnosis.required_bytes)}；模型加载后可用 ${mib(diagnosis.available_bytes)}。`,`Runtime requires ${mib(diagnosis.required_bytes)}; ${mib(diagnosis.available_bytes)} available after model loading.`)),
+      make('p',{class:'l-muted'},tr(`后端已分别规划，耗时 ${(diagnosis.planning_us/1000).toFixed(1)} ms；需重新启动验证。格式变化可能影响质量和速度。`,`Native plans computed in ${(diagnosis.planning_us/1000).toFixed(1)} ms; restart to validate. Format changes may affect quality and speed.`)));
+    const options=rankMemoryOptions(diagnosis.options);
+    for(const [index,option] of options.entries()){
+      const card=make('div',{class:'l-memory-option','data-memory-option':option.id});
+      const heading=make('div',{class:'l-memory-heading'});
+      heading.append(make('h3',{},`${index+1}. ${option.id.toUpperCase()} KV`));
+      const recommended=index===0&&option.available;
+      if(recommended){
+        card.dataset.memoryRecommended='true';
+        heading.append(make('span',{class:'l-memory-badge'},tr('推荐','Recommended')));
+      }
+      card.append(heading);
+      if(!option.available){card.append(make('p',{},option.reason==='planning_unavailable'?tr('后端无法完成此格式的规划，此方案暂不可用。','The backend could not plan this format; this option is unavailable.'):tr('最低合法 budget 仍无法容纳，保留 reserve，此方案不可用。','Even the minimum legal budget does not fit with the retained reserve; this option is unavailable.')));box.append(card);continue;}
+      const c=option.changes,old=diagnosis.original;
+      if(recommended)card.append(make('p',{class:'l-memory-reason'},c.Budget>=32768?
+        tr(`budget ≥ 32K，达标方案中 ${option.id.toUpperCase()} 的 KV 精度最高。`,`Budget ≥ 32K; ${option.id.toUpperCase()} is the highest-precision qualifying KV type.`):
+        tr('可用方案均低于 32K，此方案 budget 最大；并列时优先 KV 精度。','All available budgets are below 32K; this has the largest budget, with KV precision breaking ties.')));
+      card.append(make('p',{},`budget ${old.Budget.toLocaleString()} → ${c.Budget.toLocaleString()} · gen reserve ${old.Reserve.toLocaleString()} → ${c.Reserve.toLocaleString()}`));
+      const details=make('details');details.append(make('summary',{},tr('估算详情','Estimate details')),
+        make('p',{class:'l-muted'},tr(`预计运行空间 ${mib(option.estimated_runtime_bytes)}，另留 ${mib(option.safety_bytes)} 余量；不含已加载模型。`,`Estimated runtime ${mib(option.estimated_runtime_bytes)}, plus ${mib(option.safety_bytes)} headroom; excludes loaded weights.`)),
+        make('p',{class:'l-muted'},tr(`prefill ${c.Prefill}；含静态 CUDA 图预留，未额外运行 GPU 探测。`,`prefill ${c.Prefill}; includes static CUDA graph allowance, without additional GPU probes.`)),
+        make('p',{class:'l-muted'},tr('先将超过 4K 的 gen reserve 降到 4096，否则保留原值，再减少 budget。','Cap gen reserve at 4096, retaining smaller values, then reduce budget.')));card.append(details);
+      if(option.id==='nvfp4'&&c.FastPrefill===false)card.append(make('p',{class:'l-muted'},tr('同时关闭快速预填充以匹配 NVFP4。','Also disables fast prefill for NVFP4.')));
+      const button=make('button',{type:'button',class:'s-button l-primary','data-memory-retry':option.id},tr('应用此方案并重新启动','Apply and restart'));
+      button.disabled=busy||configurationLocked();button.onclick=()=>retryMemory(option.id,instance);card.append(button);box.append(card);
+    }
+    box.append(make('p',{class:'l-muted'},tr('推荐基于本次失败配置；修改配置后请重新启动以获取新建议。','Recommendations apply to this failed launch. After editing settings, start again to get new recommendations.')));
+  }
+  async function retryMemory(option,instance){
+    if(busy||configurationLocked())return;
+    try{
+      const configuration=launchData();busy=true;renderMemoryRecovery();applyConfigurationLock();
+      const result=await api('retry-memory',{option,instance,configuration});
+      launchFailure='';updateStatus(result,true);
+      message(tr('已应用推荐并提交启动，等待服务验证。','Recommendation applied and launch submitted; awaiting validation.'));
+    }catch(error){showError(error);try{updateStatus(await api('status'),true);}catch{configUncertain=true;}}
+    finally{busy=false;updateStatus(runtime);}
+  }
   function renderLaunchProgress(){
     const box=root.querySelector('[data-launch-progress]');if(!box)return;
     const state=startPending?'preparing':launchFailure?'failed':runtime?.state;
@@ -1056,7 +1161,7 @@
     phase.textContent=tr(...labels[state]);track.setAttribute('aria-label',phase.textContent);
     track.hidden=state==='failed'||state==='exited';
     if(state==='ready')track.setAttribute('aria-valuenow','100');else track.removeAttribute('aria-valuenow');
-    box.querySelector('[data-launch-help]').textContent=state==='failed'?launchFailure:state==='exited'?tr('请查看下方运行日志中的退出原因。','Check the service log below for the cause.'):state==='ready'?tr('右上角聊天入口已可用。','Chat is available in the top right.'):tr('请稍候。大模型首次加载可能需要较长时间。','Please wait. Loading a large model for the first time may take a while.');
+    box.querySelector('[data-launch-help]').textContent=state==='failed'?launchFailure:state==='exited'?(runtime?.memory_diagnosis?tr('检测到显存不足，请查看紧接下方的调整建议。','GPU memory shortage detected. Review the recommendations immediately below.'):tr('请查看下方运行日志中的退出原因。','Check the service log below for the cause.')):state==='ready'?tr('右上角聊天入口已可用。','Chat is available in the top right.'):tr('请稍候。大模型首次加载可能需要较长时间。','Please wait. Loading a large model for the first time may take a while.');
   }
   function exportDialog(){
     if(busy||configurationLocked())return;

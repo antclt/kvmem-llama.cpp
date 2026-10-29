@@ -29,9 +29,11 @@ from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from console_chat import ChatBridge, MAX_BODY
 from console_hardware import SystemDiskSampler
+from console_memory import diagnose as diagnose_memory, validate_budget_plan
 from model_health import request_parameters, unchecked
 
 ROOT = Path(__file__).resolve().parents[1]
+AUTO_BUDGET_SUPPORTED = os.name == 'nt'
 # Product assets must not inherit OS MIME overrides (notably Windows .js=text/plain).
 # Route allowlists still decide which files may be served.
 CONTENT_TYPES = {
@@ -182,6 +184,9 @@ class Controller:
         self.inspection_slots = threading.BoundedSemaphore(2)
         self.picker_lock = threading.Lock()
         self.process = self.job = self.log = None
+        self.budget_busy = False
+        self.budget_job = None
+        self.budget_cancelled = False
         self.active = None
         self.active_plan = None
         self.worker_cache = {}
@@ -193,6 +198,10 @@ class Controller:
         self.chat = ChatBridge(self)
         self.redactions = set()
         self.exit_code = None
+        self.memory_trial = None
+        self.launch_was_ready = False
+        self.memory_diagnosis = None
+        self.memory_diagnosis_instance = None
         self.draft_path = self.state_dir / 'launch-draft.json'
         self.log_path = self.state_dir / 'service.log'
         self.profiles_root = self.state_dir / 'profiles'
@@ -698,9 +707,17 @@ class Controller:
                     result['state'] = 'stopped'
             result['generated_revision'] = copy.deepcopy(self.active_revision)
             result['planned_scoring'] = copy.deepcopy(self.active_plan.get('resolved_scoring')) if self.active_plan else None
+            result['budget_planning'] = self.budget_busy
             result['effective_scoring'] = dict(self.observed_scoring) or None
             result['worker'] = copy.deepcopy(self.active_plan.get('worker')) if self.active_plan else None
             result['token_settings'] = copy.deepcopy(self.active_plan.get('token_settings')) if self.active_plan else None
+            if AUTO_BUDGET_SUPPORTED and result['state'] == 'exited' and self.exit_code != 0 and self.active and not self.launch_was_ready:
+                if self.memory_diagnosis_instance != self.instance:
+                    plan = self.active_plan or {}
+                    self.memory_diagnosis = diagnose_memory(self.log_tail(), self.active['parameters'],
+                        plan.get('token_settings'))
+                    self.memory_diagnosis_instance = self.instance
+                result['memory_diagnosis'] = copy.deepcopy(self.memory_diagnosis)
             planned = result['planned_scoring']
             result['scoring_confirmed'] = bool(planned and all(
                 key in self.observed_scoring and self.observed_scoring[key] == value for key, value in planned.items()))
@@ -717,10 +734,13 @@ class Controller:
                     with urllib.request.urlopen(target, timeout=0.5) as response:
                         if response.status == 200:
                             result['state'] = 'ready'
+                            self.launch_was_ready = True
                 except urllib.error.HTTPError as error:
                     error.close()
                 except (OSError, urllib.error.URLError):
                     pass
+            if self.memory_trial:
+                result['memory_trial'] = {**self.memory_trial, 'startup_verified': result['state'] == 'ready'}
             return result
 
     def services(self):
@@ -813,6 +833,96 @@ class Controller:
                 self.stop()
             else:
                 self._release()
+
+    def _run_budget_plan(self, plan):
+        env = dict(os.environ); env.update(plan.get('environment', {}))
+        argv = list(plan.get('native_argv', plan['argv'])) + ['--plan-budget']
+        job, process = WindowsJob(), None
+        try:
+            with self.lock:
+                if self.budget_cancelled:
+                    raise ValueError('Budget 测算已取消 / Budget planning cancelled')
+                self.budget_job = job
+                process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--worker-gate'],
+                    cwd=self.backend_root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                job.assign(process)
+            output = process.communicate((json.dumps(argv)+'\n').encode('utf-8'), timeout=180)[0]
+            text = output.decode('utf-8', errors='replace')
+            if process.returncode:
+                raise ValueError('Budget 测算失败 / Budget planning failed: '+self.redact(text[-4000:]))
+            return text
+        except subprocess.TimeoutExpired:
+            raise ValueError('Budget 测算超时，已停止测算进程 / Budget planning timed out; worker stopped') from None
+        finally:
+            with self.lock:
+                job.close()
+                self.budget_job = None
+            if process is not None:
+                process.wait(timeout=10)
+
+    def adjust_budget(self, data):
+        if not AUTO_BUDGET_SUPPORTED:
+            raise ValueError('自动调整暂支持 Windows 控制台 / Automatic budget adjustment currently requires Windows')
+        clean = normalize(data, self.backends)
+        p = clean['parameters']
+        if p['Backend'] != 'ninfer' or not p.get('Gpu') or ',' in p['Gpu'] or p.get('TensorParallel'):
+            raise ValueError('自动调整暂支持 NInfer 单卡，请选择一张显卡 / Auto budget requires single-GPU NInfer')
+        # Budget is the output of this operation, not an input constraint. Use a
+        # legal seed so an oversized or zero current value cannot block planning.
+        p['Budget'] = max(128, (max(1,p.get('SinkTokens',DEFAULTS['SinkTokens'])//64)
+                              + p.get('RecentTokens',DEFAULTS['RecentTokens'])//64)*64,
+                          max(0,256-p.get('Reserve',DEFAULTS['Reserve'])+63)//64*64)
+        with self.lock:
+            if self.budget_busy or (self.process and self.process.poll() is None):
+                raise ValueError('请等待测算完成或停止运行中的服务 / Wait for planning or stop the running service')
+            self.budget_busy = True
+            self.budget_cancelled = False
+        started = time.monotonic()
+        try:
+            health = self.inspect_model(clean, for_launch=True)
+            if not health['can_start']:
+                raise ValueError('模型体检未通过，请先检查配置 / Model inspection blocked budget planning')
+            clean['parameters'].pop('ApiKey', None)
+            plan = self.plan(clean)
+            if plan['worker'].get('budget_planning_version') != 1:
+                raise ValueError('后端尚不支持自动调整 budget，请更新后端 / Update worker to support automatic budget planning')
+            effective = plan['token_settings']['effective']
+            # Omitted fields use the launcher's defaults. Only explicit values
+            # must remain unchanged; report validation uses the effective plan.
+            if any(key in p and effective[key] != p[key] for key in ('Reserve', 'Prefill')):
+                raise ValueError('请先通过检查配置对齐 gen reserve 和 prefill；自动调整只修改 budget / Align reserve and prefill first; auto adjustment changes budget only')
+            result = validate_budget_plan(self._run_budget_plan(plan), p, plan['token_settings'])
+            if self.budget_cancelled:
+                raise ValueError('Budget 测算已取消 / Budget planning cancelled')
+            if not result['available']:
+                raise ValueError('当前设置下最低合法 budget 仍无法容纳；请调整其他设置 / Minimum budget does not fit; adjust other settings')
+            return dict(result, elapsed_ms=round((time.monotonic()-started)*1000))
+        finally:
+            with self.lock:
+                self.budget_busy = False
+
+    def retry_memory(self, data):
+        if not isinstance(data, dict) or set(data) != {'instance', 'option', 'configuration'}:
+            raise ValueError('Expected memory recommendation, launch instance and configuration')
+        with self.lock:
+            status = self.status()
+            if status['state'] != 'exited' or data['instance'] != self.instance:
+                raise ValueError('启动状态已改变，请刷新推荐。 / Launch changed; refresh recommendations.')
+            current = normalize(data['configuration'], self.backends)
+            current['parameters'] = self.prefer_packaged_worker(current['parameters'])
+            if without_secrets(current) != without_secrets(self.active):
+                raise ValueError('配置已改变，请使用当前配置重新启动；旧推荐已失效。 / Settings changed; old recommendations no longer apply.')
+            option = next((x for x in (self.memory_diagnosis or {}).get('options', [])
+                           if x['id'] == data['option'] and x['available']), None)
+            if option is None:
+                raise ValueError('此推荐不可用。 / Recommendation unavailable.')
+            updated = copy.deepcopy(self.active)
+            updated['parameters'].update(option['changes'])
+            # Normal start rechecks model health and canonical launcher constraints.
+            self.start(updated)
+            self.memory_trial = {'format': option['id'], 'changes': option['changes']}
+            return self.status()
 
     def _release(self):
         if self.job:
@@ -962,6 +1072,8 @@ class Controller:
                       for c in health['checks'] if c['status'] == 'error']
             raise ValueError('Model inspection blocked launch: ' + '; '.join(errors))
         with self.lock:
+            if self.budget_busy:
+                raise ValueError('正在测算 budget，请稍后启动 / Budget planning is in progress')
             if self.process and self.process.poll() is None:
                 raise ValueError('A managed service is already running; stop it before starting another')
             self._release()
@@ -1000,6 +1112,10 @@ class Controller:
             except Exception:
                 self._release(); raise
             self.active, self.active_plan, self.exit_code = clean, plan_summary, None
+            self.launch_was_ready = False
+            self.memory_trial = None
+            self.memory_diagnosis = None
+            self.memory_diagnosis_instance = None
             self.instance = secrets.token_hex(12)
             return self.status()
 
@@ -1009,6 +1125,10 @@ class Controller:
             if self.service_selection:
                 self.services().action(**self.service_selection, action='stop')
                 return self.status()
+
+            self.budget_cancelled = True
+            if self.budget_job:
+                self.budget_job.close(); self.budget_job = None
             process = self.process
             if self.job:
                 self.job.close(); self.job = None
@@ -1016,6 +1136,10 @@ class Controller:
                 process.wait(timeout=10)
             self._release(); self.exit_code = None; self.active = None; self.active_plan = None
             self.active_revision = None
+
+            self.memory_trial = None
+            self.memory_diagnosis = None
+            self.memory_diagnosis_instance = None
             self.observed_scoring = {}; self.observed_offset = 0; self.observed_pending = ''
             self.instance = secrets.token_hex(12)
             return self.status()
@@ -1170,6 +1294,7 @@ class Handler(BaseHTTPRequestHandler):
                                 'kv_cache_version': 1,
                                 'query_scoring_version': 2,
                                 'platform': 'windows' if os.name == 'nt' else 'linux',
+                                'budget_adjustment': AUTO_BUDGET_SUPPORTED,
                                 'native_picker': os.name == 'nt',
                                 'script_export_version': 0 if os.name == 'nt' else 1,
                                 'profiles_root': str(self.control.profiles_root),
@@ -1263,13 +1388,16 @@ class Handler(BaseHTTPRequestHandler):
                        '/api/launcher/export': self.control.export_config,
                        '/api/launcher/start-revision': self.control.start_revision,
                        '/api/launcher/service': self.control.service_action,
+
+                       '/api/launcher/adjust-budget': self.control.adjust_budget,
                        '/api/launcher/browse-model': self.control.browse_model,
                        '/api/launcher/browse-template': lambda data: self.control.browse_model(data, template=True),
                        '/api/launcher/browse-model-folder': lambda data: self.control.browse_model(data, folder=True),
                        '/api/launcher/scan-models': self.control.scan_models,
                        '/api/launcher/inspect-model': self.control.inspect_model,
                        '/api/launcher/model-directories': self.control.update_model_directories,
-                       '/api/launcher/start': self.control.start, '/api/launcher/stop': lambda _: self.control.stop()}
+                       '/api/launcher/start': self.control.start, '/api/launcher/retry-memory': self.control.retry_memory,
+                       '/api/launcher/stop': lambda _: self.control.stop()}
             action = actions.get(self.path)
             if action is None:
                 self.reply(404, {'error': 'Not found'}); return

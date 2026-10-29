@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -161,6 +162,23 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(result['status'],'ready'); self.assertEqual(result['model']['files'],2)
         second=self.root/'part.ninfer'; second.unlink()
         self.assertFalse(self.inspect(path,'ninfer')['can_start'])
+
+    def test_isolated_inspector_reads_ninfer(self):
+        path = self.root/'isolated.ninfer'
+        ninfer(path, mutate=lambda d: d['components']['text']['config'].update(
+            num_hidden_layers=4, num_key_value_heads=4, head_dim=256,
+            layer_types=['linear_attention']*3 + ['full_attention']))
+        # Bundled Python uses isolated paths; script-local imports must happen
+        # after the command-line entry point adds its scripts directory.
+        result = subprocess.run(
+            [sys.executable, '-I', str(ROOT/'scripts'/'model_health.py')],
+            input=json.dumps({'schema_version': 1, 'parameters': {
+                'Backend': 'ninfer', 'Model': str(path)}}),
+            cwd=self.root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(report['can_start'], report)
+        self.assertEqual(report['model']['layers'], 4)
 
     def test_ninfer_wrong_uuid_and_truncated_payload(self):
         path=self.root/'text.ninfer'; ninfer(path,parts=2)

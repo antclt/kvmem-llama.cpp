@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "a05247b38cac87589467b6208d82834d8dca63a6",
+    "patched_tree": "f485770ff15c81f1a82139bec85992d938d29382",
     "patches": [
       {
         "id": "kvmem",
@@ -240,6 +240,16 @@
         ],
         "after_tree": "a05247b38cac87589467b6208d82834d8dca63a6",
         "source": "Observe live CPU Vision cache metadata without acquiring the inference execution lock"
+      },
+      {
+        "id": "memory-planning",
+        "path": "backends/patches/ninfer-memory-planning.patch",
+        "sha256": "60a17d2c406333207103e34a4fa168b9e0cf3f98882b5bd716e3d1521df15322",
+        "requires": [
+          "cpu-vision-props"
+        ],
+        "after_tree": "f485770ff15c81f1a82139bec85992d938d29382",
+        "source": "Native single-GPU memory recovery and proactive budget planning with fixed reserve/KV and page-aligned bounds"
       }
     ]
   },

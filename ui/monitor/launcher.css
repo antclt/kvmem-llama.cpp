@@ -319,3 +319,23 @@
 #app .s-launch .l-engine-fields textarea { font:13px/1.7 "Cascadia Code",Consolas,monospace; resize:vertical; min-height:100px; }
 #app .s-launch .l-vision-assets { grid-template-columns:1fr; }
 @media(max-width:700px) { #app .s-launch .l-engine-disclosure .l-engine-fields { grid-template-columns:1fr; } }
+#app .s-launch .l-memory-recovery { overflow-wrap:anywhere; margin:0 0 18px; padding:12px; border:1px solid var(--s-line); border-radius:10px; }
+#app .s-launch .l-memory-recovery[hidden] { display:none; }
+#app .s-launch .l-memory-recovery[data-state=error] { border-color:var(--s-warn); border-left-width:4px; background:var(--s-warn-tint); }
+#app .s-launch .l-memory-recovery[data-state=error] > .s-title { color:var(--s-warn-text); }
+#app .s-launch .l-memory-recovery > p { margin:8px 0; font-size:12px; line-height:1.5; }
+#app .s-launch .l-memory-option { margin-top:10px; padding:10px; border:1px solid var(--s-line); border-radius:8px; background:var(--s-surface); }
+#app .s-launch .l-memory-option h3 { margin:0; font-size:14px; }
+#app .s-launch .l-memory-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+#app .s-launch .l-memory-option[data-memory-recommended=true] { border-color:var(--s-info); box-shadow:inset 3px 0 var(--s-info); }
+#app .s-launch .l-memory-badge { padding:3px 9px; border-radius:6px; background:var(--s-info-tint); color:var(--s-info-text); font-size:12px; font-weight:600; }
+#app .s-launch .l-memory-reason { color:var(--s-info-text); }
+#app .s-launch .l-memory-option p { margin:8px 0; font-size:12px; line-height:1.5; }
+#app .s-launch .l-memory-option details { margin:8px 0; font-size:12px; }
+#app .s-launch .l-memory-option summary { cursor:pointer; color:var(--s-muted); }
+#app .s-launch .l-memory-option button { width:100%; margin-top:4px; white-space:normal; }
+#app .s-launch .l-resource-field .l-budget-value { grid-column:1/-1; display:flex; align-items:center; gap:5px; min-width:0; }
+#app .s-launch .l-budget-value > input { flex:1; width:0; min-width:55px; }
+#app .s-launch .l-budget-value .l-budget-auto { flex:none; padding:5px 7px; min-height:28px; font-size:12px; white-space:nowrap; }
+#app .s-launch .l-budget-value .l-help { margin-left:0; }
+#app .s-launch [data-budget-status] { grid-column:1/-1; line-height:1.5; overflow-wrap:anywhere; }

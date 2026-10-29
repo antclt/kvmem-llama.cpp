@@ -1,0 +1,523 @@
+diff --git a/apps/serve/main.cpp b/apps/serve/main.cpp
+index 1abfc6909b04cb0fb0303d84976a0ce4c460d315..907e32fd864bd1fc7cb03bd451f7d5307fe3b492 100644
+--- a/apps/serve/main.cpp
++++ b/apps/serve/main.cpp
+@@ -13,6 +13,7 @@
+ #include "serve/stop_control.h"
+ 
+ #include <spdlog/logger.h>
++#include <nlohmann/json.hpp>
+ 
+ #include <chrono>
+ #include <condition_variable>
+@@ -218,13 +219,22 @@ std::string binary_identity() {
+ 
+ int main(int argc, char** argv) {
+     if (argc == 2 && std::string(argv[1]) == "--kvmem-capabilities") {
+-        std::cout << kvmem::launch_capabilities("ninfer") << '\n';
++        auto capabilities = nlohmann::json::parse(kvmem::launch_capabilities("ninfer"));
++        capabilities["budget_planning_version"] = 1;
++        std::cout << capabilities.dump() << '\n';
+         return 0;
+     }
++    // This process-only action never constructs or binds an HTTP server.
++    bool plan_budget = false;
++    std::vector<char*> launch_args{argv[0]};
++    for (int i = 1; i < argc; ++i) {
++        if (std::string_view(argv[i]) == "--plan-budget") plan_budget = true;
++        else launch_args.push_back(argv[i]);
++    }
+     std::set_terminate(log_terminate);
+     ninfer::serve::ServeOptions options;
+     try {
+-        options = ninfer::serve::parse_serve_options(argc, argv);
++        options = ninfer::serve::parse_serve_options(static_cast<int>(launch_args.size()), launch_args.data());
+     } catch (const std::invalid_argument& exception) {
+         std::cerr << "ninfer-serve: " << exception.what() << '\n';
+         std::cerr << ninfer::serve::serve_usage_text(argv[0]);
+@@ -235,6 +245,7 @@ int main(int argc, char** argv) {
+     }
+     if (options.help_requested) {
+         std::cout << ninfer::serve::serve_usage_text(argv[0]);
++        std::cout << "  --plan-budget                 load once, quote maximum KVMem budget, then exit; no server\n";
+         return 0;
+     }
+     options.build_version = std::string(NINFER_VERSION) + "+" + NINFER_BUILD_ID;
+@@ -265,6 +276,27 @@ int main(int argc, char** argv) {
+                      options.max_concurrency);
+     }
+     ninfer::product::StartupLogRenderer startup_log(logging);
++    if (plan_budget) {
++        try {
++            if (options.router()) throw std::invalid_argument("Budget planning does not support model router mode");
++            auto engine_options = ninfer::serve::make_engine_options(options);
++            engine_options.startup_observer = startup_log.observer();
++            engine_options.diagnostic_observer = ninfer::product::engine_diagnostic_observer(logger);
++            const auto plan = ninfer::Engine::plan_kvmem_budget(std::move(engine_options));
++            const nlohmann::json report = {
++                {"version", 1}, {"available", plan.available}, {"budget", plan.budget},
++                {"minimum_budget", plan.minimum_budget}, {"maximum_budget", plan.maximum_budget},
++                {"reserve", plan.reserve}, {"prefill", plan.prefill}, {"context", plan.context},
++                {"concurrency", plan.concurrency}, {"kv_storage", static_cast<unsigned>(plan.kv_cache)},
++                {"available_bytes", plan.available_bytes}, {"runtime_bytes", plan.runtime_bytes},
++                {"safety_bytes", plan.safety_bytes}, {"planning_us", plan.planning_us}};
++            std::cout << "KVMEM_BUDGET_PLAN " << report.dump() << '\n';
++            return 0;
++        } catch (const std::exception& error) {
++            logger->error("Budget planning failed: {}", error.what());
++            return 1;
++        }
++    }
+     ninfer::serve::OperationalLog operational_log(logger);
+     // Stop prompts use the transient bottom line beneath the statistics panel; output without one
+     // (redirected, or not a terminal) logs them instead.
+diff --git a/include/ninfer/budget_plan.h b/include/ninfer/budget_plan.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad9a995cdb32467a75fb74bc9bbe3aadc8a34a7c
+--- /dev/null
++++ b/include/ninfer/budget_plan.h
+@@ -0,0 +1,17 @@
++#pragma once
++#include "ninfer/engine_options.h"
++#include <cstddef>
++#include <cstdint>
++
++namespace ninfer {
++// A static native reservation quote after loading weights. No runtime arenas or
++// CUDA graphs are allocated; readiness and peak inference memory remain untested.
++struct KvmemBudgetPlan {
++    bool available = false;
++    std::uint32_t budget = 0, minimum_budget = 0, maximum_budget = 0;
++    std::uint32_t reserve = 0, prefill = 0, context = 0, concurrency = 0;
++    KvCacheStorage kv_cache = KvCacheStorage::Int8Group64;
++    std::size_t available_bytes = 0, runtime_bytes = 0, safety_bytes = 0;
++    std::uint64_t planning_us = 0;
++};
++} // namespace ninfer
+diff --git a/include/ninfer/engine.h b/include/ninfer/engine.h
+index 541ab6473268df732d821d98e1267e800ac3cd31..95873b3100fd94c5d580805ce0686a426724de89 100644
+--- a/include/ninfer/engine.h
++++ b/include/ninfer/engine.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "ninfer/types.h"
++#include "ninfer/budget_plan.h"
+ 
+ #include <chrono>
+ #include <cstddef>
+@@ -85,6 +86,9 @@ inline constexpr std::size_t kMaximumGenerationBranches = 1024;
+ 
+ class Engine {
+ public:
++    // Loads weights once, quotes the largest fitting KVMem budget with all other
++    // settings fixed, then releases the model. Does not create a serving Engine.
++    [[nodiscard]] static KvmemBudgetPlan plan_kvmem_budget(EngineOptions options);
+     explicit Engine(EngineOptions options);
+     ~Engine();
+ 
+diff --git a/src/runtime/CMakeLists.txt b/src/runtime/CMakeLists.txt
+index 8b745a42a53a113523c2211b25e8934b85c9091b..5c0c39a148826583124e1ec475e70e5c790f9483 100644
+--- a/src/runtime/CMakeLists.txt
++++ b/src/runtime/CMakeLists.txt
+@@ -48,6 +48,7 @@ ninfer_stamp_build_id(ninfer_runtime_support)
+ 
+ # Public Engine and common contracts; model execution remains in the model layer.
+ add_library(ninfer_engine STATIC
++  engine/budget_plan.cpp
+   engine/model_instance.cpp
+   engine/qwen4_exp_core.cpp
+   engine/gemma4_core.cpp
+diff --git a/src/runtime/engine/budget_plan.cpp b/src/runtime/engine/budget_plan.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..643e232e2799755883dc9d21bab65e8fdda478da
+--- /dev/null
++++ b/src/runtime/engine/budget_plan.cpp
+@@ -0,0 +1,29 @@
++#include "ninfer/engine.h"
++#include "core/device.h"
++#include "core/startup.h"
++#include "runtime/engine/model_instance.h"
++#include "runtime/engine/gemma4_core.h"
++#include "runtime/engine/flint_core.h"
++#include "runtime/engine/qwen4_exp_core.h"
++#include <stdexcept>
++#include <utility>
++
++namespace ninfer {
++KvmemBudgetPlan Engine::plan_kvmem_budget(EngineOptions options) {
++    if (options.devices.size() > 1 || options.tensor_parallel ||
++        options.purpose != EnginePurpose::Generation || !options.kvmem.selected_tokens ||
++        options.cuda_memory_policy != CudaMemoryPolicy::DriverDefault ||
++        options.expert_residency != ExpertResidency::Device ||
++        options.suspend.enabled || !options.grafts.empty() ||
++        runtime::is_gemma4_artifact(options.artifact_path) ||
++        runtime::is_flint_artifact(options.artifact_path) ||
++        runtime::is_qwen4_exp_artifact(options.artifact_path)) {
++        throw std::invalid_argument("Budget planning requires single-GPU Qwen3.5-family KVMem with device-resident weights and ordinary CUDA memory");
++    }
++    options = runtime::normalize_engine_options(std::move(options));
++    StartupPhaseScope phase(options.startup_observer, StartupPhase::CudaInitialize);
++    DeviceContext device(options.devices.empty() ? options.device : options.devices.front());
++    phase.complete();
++    return runtime::plan_model_budget(options, device);
++}
++} // namespace ninfer
+diff --git a/src/runtime/engine/memory_recovery.h b/src/runtime/engine/memory_recovery.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..26af430c476782e46d56d2b22802a3ed66849545
+--- /dev/null
++++ b/src/runtime/engine/memory_recovery.h
+@@ -0,0 +1,124 @@
++#pragma once
++
++#include "ninfer/engine_options.h"
++#include "ninfer/budget_plan.h"
++#include <stdexcept>
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <cstddef>
++#include <cstdint>
++#include <optional>
++#include <sstream>
++
++namespace ninfer::runtime {
++template<class Quote>
++KvmemBudgetPlan maximum_memory_budget(const EngineOptions& original, std::size_t available,
++                                      std::uint32_t maximum, Quote&& quote) {
++    const auto started = std::chrono::steady_clock::now();
++    KvmemBudgetPlan out;
++    out.reserve = original.kvmem.reserve_tokens;
++    out.prefill = original.prefill_chunk;
++    out.context = original.max_context;
++    out.concurrency = original.max_concurrency;
++    out.kv_cache = original.kv_cache;
++    out.available_bytes = available;
++    out.safety_bytes = std::max<std::size_t>(128ULL << 20, available / 20);
++    out.minimum_budget = std::max({128U,
++        (original.kvmem.sink_blocks() + original.kvmem.recent_blocks()) * 64,
++        out.reserve < 256 ? 256 - out.reserve : 0U});
++    out.maximum_budget = (out.context > out.reserve ?
++        std::min(maximum, out.context - out.reserve) : 0U) / 64 * 64;
++    if (out.maximum_budget >= out.minimum_budget && available > out.safety_bytes) {
++        const auto limit = available - out.safety_bytes;
++        auto candidate = original;
++        auto measure = [&](std::uint32_t budget) {
++            candidate.kvmem.selected_tokens = budget;
++            const auto tokens = std::uint64_t(candidate.kvmem.device_tokens()) * candidate.max_concurrency;
++            if (tokens > UINT32_MAX) throw std::overflow_error("KVMem capacity exceeds uint32");
++            candidate.kv_capacity = KvCapacityPolicy::explicit_capacity(static_cast<std::uint32_t>(tokens));
++            return quote(candidate);
++        };
++        auto low = out.minimum_budget / 64, high = out.maximum_budget / 64;
++        auto needed = measure(low * 64);
++        if (needed <= limit) {
++            out.available = true; out.budget = low * 64; out.runtime_bytes = needed;
++            while (low < high) {
++                const auto middle = low + (high - low + 1) / 2;
++                needed = measure(middle * 64);
++                if (needed <= limit) {
++                    low = middle; out.budget = middle * 64; out.runtime_bytes = needed;
++                } else { high = middle - 1; }
++            }
++        }
++    }
++    out.planning_us = std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::steady_clock::now() - started).count();
++    return out;
++}
++
++struct MemoryRecoveryOption {
++    const char* id;
++    bool available = false;
++    std::uint32_t budget = 0, reserve = 0, prefill = 0;
++    bool fast_prefill = false;
++    std::size_t required = 0;
++    const char* reason = "minimum_does_not_fit";
++};
++
++// Quote must build the native layout only: no Program, graph capture or allocation.
++// Search page-aligned B with R fixed. Re-quote every candidate because workspace,
++// draft state and graph bounds need not be affine in the history window.
++template<class Quote>
++std::string memory_recovery_plan(const EngineOptions& original, std::size_t available,
++                                 std::size_t failed_required, Quote&& quote) {
++    const auto started = std::chrono::steady_clock::now();
++    const std::size_t margin = std::max<std::size_t>(128ULL << 20, available / 20);
++    const auto reserve = std::min(original.kvmem.reserve_tokens, 4096U);
++    const auto prefill = std::min(original.prefill_chunk, reserve) / 128 * 128;
++    std::array<MemoryRecoveryOption, 3> choices{{{"int8"}, {"nvfp4"}, {"rk8v4"}}};
++    constexpr std::array formats{KvCacheStorage::Int8Group64, KvCacheStorage::Nvfp4Group16,
++                                KvCacheStorage::RotatedInt8KeyInt4ValueGroup64};
++    for (std::size_t index = 0; index < choices.size(); ++index) {
++        auto& out = choices[index];
++        auto candidate = original;
++        candidate.kv_cache = formats[index];
++        candidate.kvmem.reserve_tokens = out.reserve = reserve;
++        candidate.prefill_chunk = out.prefill = prefill;
++        candidate.fast_prefill_kernel = out.fast_prefill = index != 1 && original.fast_prefill_kernel;
++        // Recompute each format's static graph allowance. A measurement from the
++        // failing configuration is not transferable to another format/window.
++        candidate.cuda_graph_allowance_bytes = 0;
++        if (prefill == 0) { continue; }
++        try {
++            const auto plan = maximum_memory_budget(candidate, available, original.kvmem.selected_tokens, quote);
++            if (!plan.available) { continue; }
++            out.available = true; out.reason = ""; out.budget = plan.budget; out.required = plan.runtime_bytes;
++        } catch (const std::exception&) {
++            // Recommendation failure must not replace the original startup error.
++            out.available = false; out.budget = 0; out.required = 0;
++            out.reason = "planning_unavailable";
++        }
++    }
++    const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::steady_clock::now() - started).count();
++    std::ostringstream json;
++    json << "{\"version\":1,\"required_bytes\":" << failed_required
++         << ",\"available_bytes\":" << available << ",\"safety_bytes\":" << margin
++         << ",\"planning_us\":" << micros << ",\"original\":{\"Budget\":" << original.kvmem.selected_tokens
++         << ",\"Reserve\":" << original.kvmem.reserve_tokens << ",\"Prefill\":" << original.prefill_chunk
++         << ",\"Context\":" << original.max_context << ",\"Concurrency\":" << original.max_concurrency
++         << ",\"kv_storage\":" << static_cast<unsigned>(original.kv_cache) << "},\"options\":[";
++    for (std::size_t i = 0; i < choices.size(); ++i) {
++        const auto& c = choices[i];
++        if (i) { json << ','; }
++        json << "{\"id\":\"" << c.id << "\",\"available\":" << (c.available ? "true" : "false")
++             << ",\"reason\":\"" << c.reason << "\",\"budget\":" << c.budget
++             << ",\"reserve\":" << c.reserve << ",\"prefill\":" << c.prefill
++             << ",\"fast_prefill\":" << (c.fast_prefill ? "true" : "false")
++             << ",\"runtime_bytes\":" << c.required << '}';
++    }
++    json << "]}";
++    return json.str();
++}
++} // namespace ninfer::runtime
+diff --git a/src/runtime/engine/model_instance.cpp b/src/runtime/engine/model_instance.cpp
+index 805af65834debbf3171ae32f27d6dddc83868681..ef247a7bc6049dd40c6af013d770da5c66493a3a 100644
+--- a/src/runtime/engine/model_instance.cpp
++++ b/src/runtime/engine/model_instance.cpp
+@@ -22,6 +22,7 @@
+ #include "models/qwen3_5/measurement.h"
+ #include "runtime/engine/host_memory.h"
+ #include "runtime/engine/graph_probe.h"
++#include "runtime/engine/memory_recovery.h"
+ #include "runtime/contract/rope_scaling.h"
+ 
+ #include <algorithm>
+@@ -811,7 +812,8 @@ ResidencyTransition ModelInstance::resume(DeviceContext& device, DeviceSnapshot&
+     return out;
+ }
+ 
+-ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& device) {
++static ConstructedModel construct_model_impl(const EngineOptions& requested, DeviceContext& device,
++                                             KvmemBudgetPlan* budget_plan) {
+     validate_options(requested);
+     install_device_route_profile_for(requested, device);
+     std::shared_ptr<core::ResidentMemorySession> residency;
+@@ -927,6 +929,20 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
+     }
+     EngineOptions planning_options =
+         artifact_scoped_disk_tier(options, instance->model->info().artifact_id);
++    if (budget_plan) {
++        const auto available = free_bytes_by_rank(device, options.wddm_evictable_budget,
++            instance->model->storage_stats().device_capacity_bytes).front();
++        *budget_plan = maximum_memory_budget(planning_options, available,
++            planning_options.max_context - planning_options.kvmem.reserve_tokens,
++            [&](const EngineOptions& candidate) {
++                const auto planner = models::qwen3_5::make_sequence_planner(
++                    instance->parameters, device, candidate, graft_main_pages);
++                const auto pages = (candidate.kv_capacity.explicit_tokens + 63ULL) / 64 + graft_main_pages;
++                return planner.capacity_curve().reservation_bytes(static_cast<std::uint32_t>(pages));
++            });
++        planning.complete();
++        return {}; // Destroy the loaded model; do not allocate a Program or run a graph probe.
++    }
+     // Calibrate dense single-device execution uniformly, including MTP and DFlash2.
+     // Expert streaming, grafts and suspend need separate qualification of
+     // temporary Program ownership. Do not reopen production disk stores in a probe.
+@@ -988,11 +1004,37 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
+                 ? physical_upper_bound - options.cuda_vram_reserve_bytes : 0;
+         }
+     }
+-    auto resolution = options.cuda_memory_policy == CudaMemoryPolicy::Mixed
++    auto resolve_capacity = [&] { return options.cuda_memory_policy == CudaMemoryPolicy::Mixed
+         ? resolve_mixed_kv_capacity(capacity_policy, curve, options.max_context,
+                                    options.max_concurrency, free_by_rank.front())
+         : resolve_kv_capacity(capacity_policy, curve, free_by_rank.front(),
+-                              std::span<const std::size_t>(free_by_rank).subspan(1));
++                              std::span<const std::size_t>(free_by_rank).subspan(1)); };
++    auto resolution = [&] {
++        try { return resolve_capacity(); }
++        catch (const std::invalid_argument& error) {
++            const std::string cause = error.what();
++            if (device.size() != 1 || !options.kvmem.selected_tokens ||
++                options.cuda_memory_policy != CudaMemoryPolicy::DriverDefault ||
++                options.kv_capacity.mode != KvCapacityMode::Explicit ||
++                cause.find("requested Engine runtime reservation requires ") != 0) { throw; }
++            std::string report;
++            try {
++                const auto requested_pages = (options.kv_capacity.explicit_tokens + 63ULL) / 64 + graft_main_pages;
++                report = memory_recovery_plan(planning_options, free_by_rank.front(),
++                    curve.reservation_bytes(static_cast<std::uint32_t>(requested_pages)),
++                    [&](const EngineOptions& candidate) {
++                        const auto candidate_planner = models::qwen3_5::make_sequence_planner(
++                            instance->parameters, device, candidate, graft_main_pages);
++                        const auto& candidate_curve = candidate_planner.capacity_curve();
++                        const auto pages = (candidate.kv_capacity.explicit_tokens + 63ULL) / 64 + graft_main_pages;
++                        return candidate_curve.reservation_bytes(static_cast<std::uint32_t>(pages));
++                    });
++            } catch (const std::exception&) { throw std::invalid_argument(cause); }
++            // Keep the report on the same terminal failure so old probe errors
++            // and previous attempts cannot supply recommendations for this run.
++            throw std::invalid_argument(cause + " | KVMEM_MEMORY_PLAN " + report);
++        }
++    }();
+     std::unique_ptr<models::qwen3_5::execution::NativeExpertRuntime> experts;
+     if (!instance->model->expert_sources().layers.empty()) {
+         // Price startup with the real allocations before the KV plan is finalized: the delivery
+@@ -1220,4 +1262,14 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext&
+             std::move(context_cost.model), std::move(resolved)};
+ }
+ 
++ConstructedModel construct_model(const EngineOptions& options, DeviceContext& device) {
++    return construct_model_impl(options, device, nullptr);
++}
++
++KvmemBudgetPlan plan_model_budget(const EngineOptions& options, DeviceContext& device) {
++    KvmemBudgetPlan result;
++    (void)construct_model_impl(options, device, &result);
++    return result;
++}
++
+ } // namespace ninfer::runtime
+diff --git a/src/runtime/engine/model_instance.h b/src/runtime/engine/model_instance.h
+index 53c6adac16c5487790f19fd6b1aaae9517fbc49a..5b22415acb08cad68f313fb8b97b60bd9897e701 100644
+--- a/src/runtime/engine/model_instance.h
++++ b/src/runtime/engine/model_instance.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include "ninfer/budget_plan.h"
+ 
+ #include "core/device_snapshot.h"
+ #include "models/qwen3_5/model.h"
+@@ -67,5 +68,6 @@ struct ConstructedModel {
+ };
+ 
+ [[nodiscard]] ConstructedModel construct_model(const EngineOptions& options, DeviceContext& device);
++[[nodiscard]] KvmemBudgetPlan plan_model_budget(const EngineOptions& options, DeviceContext& device);
+ 
+ } // namespace ninfer::runtime
+diff --git a/tests/cmake/RuntimeTests.cmake b/tests/cmake/RuntimeTests.cmake
+index 7c76899bbfc226b714146d6e367eff58a81d4051..3eb82d4c99ef31078849c127f6c8e761732233fe 100644
+--- a/tests/cmake/RuntimeTests.cmake
++++ b/tests/cmake/RuntimeTests.cmake
+@@ -57,3 +57,7 @@ ninfer_add_test(ninfer_engine_logprobs_real_test
+   SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_engine_logprobs_real.cpp"
+   LIBRARIES ninfer_engine)
+ set_tests_properties(ninfer_engine_logprobs_real_test PROPERTIES SKIP_RETURN_CODE 77)
++
++ninfer_add_test(ninfer_memory_recovery_test
++  SOURCES "${CMAKE_CURRENT_LIST_DIR}/../test_memory_recovery.cpp"
++  LIBRARIES ninfer_engine ninfer::json)
+diff --git a/tests/test_memory_recovery.cpp b/tests/test_memory_recovery.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..3d68efb1990bca2e1b46288c702cdb4be379d8ad
+--- /dev/null
++++ b/tests/test_memory_recovery.cpp
+@@ -0,0 +1,95 @@
++#include "runtime/engine/memory_recovery.h"
++#include <nlohmann/json.hpp>
++#include <iostream>
++#include <stdexcept>
++
++void require(bool value) { if (!value) { throw std::runtime_error("memory recovery invariant failed"); } }
++int main() {
++    try {
++        ninfer::EngineOptions options;
++        options.max_context = 262144;
++        options.max_concurrency = 2;
++        options.kvmem.selected_tokens = 65536;
++        options.kvmem.sink_tokens = 12288;
++        options.kvmem.recent_tokens = 1024;
++        options.kv_cache = ninfer::KvCacheStorage::Int8Group64;
++        options.fast_prefill_kernel = true;
++        options.cuda_graph_allowance_bytes = 123;
++        constexpr std::size_t MiB = 1ULL << 20;
++        std::size_t calls = 0;
++        auto cost = [](const ninfer::EngineOptions& c) {
++            // Independent monotone layout with a discrete workspace jump; an
++            // affine subtraction of the old KV payload gives the wrong boundary.
++            const std::size_t stride = c.kv_cache == ninfer::KvCacheStorage::Int8Group64 ? 32768 :
++                c.kv_cache == ninfer::KvCacheStorage::Nvfp4Group16 ? 18432 : 24576;
++            return 400 * MiB + c.kvmem.device_tokens() * c.max_concurrency * stride
++                + (c.kvmem.selected_tokens >= 32768 ? 96 * MiB : 0);
++        };
++        for (const auto reserve : {1024U, 4096U, 8192U}) {
++            options.kvmem.reserve_tokens = reserve;
++            options.prefill_chunk = reserve;
++            auto report = nlohmann::json::parse(ninfer::runtime::memory_recovery_plan(
++                options, 2400 * MiB, 5000 * MiB, [&](const auto& c) {
++                    ++calls;
++                    require(c.cuda_graph_allowance_bytes == 0);
++                    require(c.kv_capacity.explicit_tokens == c.kvmem.device_tokens() * c.max_concurrency);
++                    require(c.kvmem.reserve_tokens == std::min(reserve, 4096U));
++                    require(c.prefill_chunk == std::min(reserve, 4096U));
++                    return cost(c);
++                }));
++            for (const auto& result : report["options"]) {
++                require(result["available"].get<bool>());
++                auto chosen = options;
++                chosen.kvmem.selected_tokens = result["budget"];
++                chosen.kvmem.reserve_tokens = result["reserve"];
++                chosen.kv_cache = result["id"] == "int8" ? ninfer::KvCacheStorage::Int8Group64 :
++                    result["id"] == "nvfp4" ? ninfer::KvCacheStorage::Nvfp4Group16 : ninfer::KvCacheStorage::RotatedInt8KeyInt4ValueGroup64;
++                require(chosen.kvmem.selected_tokens % 64 == 0);
++                require(chosen.kvmem.selected_tokens >= 13312);
++                require(cost(chosen) + report["safety_bytes"].get<std::size_t>() <= 2400 * MiB);
++                require(result["runtime_bytes"].get<std::size_t>() == cost(chosen));
++                chosen.kvmem.selected_tokens += 64;
++                require(chosen.kvmem.selected_tokens > options.kvmem.selected_tokens ||
++                    cost(chosen) + report["safety_bytes"].get<std::size_t>() > 2400 * MiB);
++                require(result["fast_prefill"].get<bool>() == (result["id"] != "nvfp4"));
++            }
++        }
++        require(calls <= 108); // bounded page search, never a model-loading loop
++        auto none = nlohmann::json::parse(ninfer::runtime::memory_recovery_plan(
++            options, 64 * MiB, 5000 * MiB, cost));
++        require(!none["options"][0]["available"].get<bool>());
++        auto failed = nlohmann::json::parse(ninfer::runtime::memory_recovery_plan(
++            options, 2400 * MiB, 5000 * MiB, [](const auto&) -> std::size_t { throw std::runtime_error("unsupported"); }));
++        require(failed["options"][0]["reason"] == "planning_unavailable");
++        require(!failed["options"][1]["available"].get<bool>());
++        // Proactive planning keeps R/KV/prefill fixed and can grow beyond old B.
++        options.kvmem.selected_tokens = 13312;
++        for (auto format : {ninfer::KvCacheStorage::Int8Group64, ninfer::KvCacheStorage::Nvfp4Group16,
++                            ninfer::KvCacheStorage::RotatedInt8KeyInt4ValueGroup64}) {
++            options.kv_cache = format;
++            for (auto reserve : {1024U, 4096U, 8192U}) {
++                options.kvmem.reserve_tokens = reserve;
++                options.prefill_chunk = 256;
++                const auto plan = ninfer::runtime::maximum_memory_budget(options, 2400 * MiB, options.max_context,
++                    [&](const auto& c) {
++                        require(c.kvmem.reserve_tokens == reserve && c.kv_cache == format);
++                        require(c.prefill_chunk == options.prefill_chunk && c.fast_prefill_kernel == options.fast_prefill_kernel);
++                        require(c.cuda_graph_allowance_bytes == options.cuda_graph_allowance_bytes);
++                        return cost(c);
++                    });
++                require(plan.available && plan.budget > options.kvmem.selected_tokens);
++                auto chosen = options; chosen.kvmem.selected_tokens = plan.budget;
++                require(cost(chosen) + plan.safety_bytes <= plan.available_bytes);
++                chosen.kvmem.selected_tokens += 64;
++                require(cost(chosen) + plan.safety_bytes > plan.available_bytes);
++            }
++        }
++        options.max_context = 32768;
++        const auto capped = ninfer::runtime::maximum_memory_budget(options, 100000 * MiB, options.max_context, cost);
++        require(capped.budget == options.max_context - options.kvmem.reserve_tokens);
++        const auto too_small = ninfer::runtime::maximum_memory_budget(options, 64 * MiB, options.max_context, cost);
++        require(!too_small.available && too_small.budget == 0);
++        std::cout << "PASS: recovery and proactive budget bounds, next-page boundary, fixed reserve/format/prefill, context ceiling, failure handling\n";
++        return 0;
++    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
++}
