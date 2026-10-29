@@ -75,7 +75,7 @@ RTX 5050 Laptop 已通过 [超过 R 的真实输出验证](reserve-output-5050-v
 | API 模型名 | `-a` / `--alias NAME` | `--model-id ID` |
 | 聊天模板 | `--chat-template` 接收 Jinja 正文，`--chat-template-file` 接收文件；提供 `--chat-template-kwargs` | `--chat-template` 接收文件路径；同名参数的输入类型不同 |
 | 主模型设备 | `--device CUDA0,CUDA1,...` 等原生设备名；支持相应的设备与切分配置 | `--device N` 选择一张 `CUDA_VISIBLE_DEVICES` 内的设备。多卡用 `--devices A,B,...`（2–8 张），与 `--device` 互斥 |
-| 多卡切分 | 当前 KVMem 开放相应的 layer/tensor 路径，具体组合受模型、MTP 和 lane 配置约束 | 源码使用上游 layer pipeline，不是 TP 或 NCCL。启动器 `-Gpu` 的 UUID 顺序就是 stage 顺序；第一张卡承担 embedding、head、MTP 和 resident Vision，CPU Vision 仍走 Host 编码。可选 `--stage-layers` 或 `-StageLayers`，省略时按各卡空闲内存规划。各卡 compute capability 必须相同，显存可以不同。一份逻辑历史、一份选页结果和一份 B/R/H；各卡只持有自己层的 KV。`mixed`/`strict` 显存策略仍要求单卡。overlay Vision、DFlash、并行 prefill 和冷快照不因多卡而开放。验收见 [多卡验收](ninfer-multigpu-validation-20261006.md) |
+| 多卡切分 | 当前 KVMem 开放相应的 layer/tensor 路径，具体组合受模型、MTP 和 lane 配置约束 | 源码使用上游 layer pipeline，不是 TP 或 NCCL。启动器 `-Gpu` 的 UUID 顺序就是 stage 顺序；第一张卡承担 embedding、head、MTP 和 resident Vision，CPU Vision 仍走 Host 编码。可选 `--stage-layers` 或 `-StageLayers`，省略时按各卡空闲内存规划。各卡 compute capability 必须相同，显存可以不同。一份逻辑历史、一份选页结果和一份 B/R/H；各卡只持有自己层的 KV。`mixed`/`strict` 显存策略仍要求单卡。DFlash2 可组合按层拆分，草稿及局部状态在第一张卡，见 [双卡验证](dflash2-pipeline-validation-20261029.md)；0.19-rc1 已发布 worker 仍限单卡。overlay Vision、原始 DFlash、并行 prefill 和冷快照不因多卡而开放。验收见 [多卡验收](ninfer-multigpu-validation-20261006.md) |
 | 长上下文位置缩放 | 当前自定义 worker 没有开放 RoPE/YaRN 启动覆盖项，沿用原生配置和模型元数据 | 开放 `--rope-yarn`、`--rope-yarn-factor`、`--rope-scaling-factor` 等原生选项；增大 context 与启用位置缩放是不同设置 |
 
 KV 格式名称代表不同字节布局和量化方法。例如 ninfer int8 与 llama q8_0 都包含 8-bit 数据，但不能视为相同格式或直接互换 KV。跨后端 KV 迁移不支持。
@@ -106,6 +106,7 @@ KV 格式名称代表不同字节布局和量化方法。例如 ninfer int8 与 
 |---|---|---|
 | MTP 启用 | `--spec-type draft-mtp`；默认 none | `--spec mtp`；默认关闭；原生 DFlash 选项在 KVMem 组合中被拒绝 |
 | 草稿长度 | `--spec-draft-n-max`，默认 3；当前 KVMem replay 模式要求 1..5 | `--draft-tokens`，KVMem 开放固定或自适应 MTP1..15 |
+| DFlash2 | 公共入口使用独立 GGUF；仍限单 GPU | `--spec dflash2` 使用内置草稿；支持单卡或 2–8 卡按层拆分，不支持当前基线的 tensor parallel；需配套新 worker |
 | MTP 状态策略 | `--kvmem-mtp-state snapshots\|auto\|replay`；默认 replay；tensor 路径只开放 snapshots | 使用 ninfer 的原生状态与事务流程，没有对应策略选项 |
 | 自适应 MTP | 当前 worker 未开放对应参数 | `--adaptive-mtp`，必须启用 MTP，并遵守各组合限制 |
 | ngram 草稿 | 当前 worker 未开放 ninfer 的对应参数 | `--ngram-draft-tokens` / `--ngram-min-match`；KVMem 要求 MTP；1..8路可用，启动并发大于1时，配置的16..63自动降至15并提示；单路保留宽度，文本及 resident/CPU 图片均放行九种原生 KV |

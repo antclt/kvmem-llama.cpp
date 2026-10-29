@@ -18,7 +18,7 @@ The console offers Off, MTP and DFlash2, a draft length, a fixed/adaptive policy
 | Backend | MTP | DFlash2 |
 |---|---|---|
 | llama.cpp common launcher | Fixed 1-5; embedded or sidecar head | Fixed 1-5; separate GGUF; up to eight requests on one GPU; no n-gram |
-| NInfer common launcher | Fixed/adaptive 1-15; embedded component; native n-gram options | Fixed 1-15; embedded component; up to eight requests on one GPU; native n-gram options |
+| NInfer common launcher | Fixed/adaptive 1-15; embedded component; native n-gram options | Fixed 1-15; embedded component; up to eight requests; one GPU or 2–8 layer-pipeline devices; native n-gram options |
 
 Other existing restrictions still apply, including llama.cpp concurrency versus GPU split and cache settings. The common llama.cpp width limit of five follows the default ReplaySSM profile. Advanced native snapshot configurations have their own limits and are not enabled by increasing the common UI limit. Actual effective width can be smaller because of native model block limits. DFlash2 has no adaptive-width mode in this integration.
 
@@ -32,6 +32,15 @@ Example using a separately built llama.cpp worker:
 ```
 
 For a NInfer artifact already containing the matching DFlash2 component, use `-Backend ninfer` with the same mode, width and policy and omit `-DraftModel`. `start-dflash2.ps1` retains the previously qualified NInfer 36K+10K, FP16 GDN, n-gram-off profile. General 0.18 launch defaults remain unchanged.
+
+NInfer DFlash2 also accepts `-Gpu 'GPU-first-uuid,GPU-second-uuid'` and optional
+`-StageLayers 40,24`. The main model owns whole layers on each device; the drafter,
+its local KV and feature buffers stay on the first GPU. B/R/H remain logical
+per-request/shared budgets, not budgets multiplied by the number of cards.
+This requires a worker built with the layer-pipeline integration; the published
+0.19-rc1 worker still rejects multiple DFlash2 devices. Tensor parallelism with
+DFlash2 remains unsupported on the pinned backend. Physical two-GPU validation
+and its hardware/model limits are recorded in [the pipeline validation](dflash2-pipeline-validation-20261029.md).
 
 The mappings preserve native names: llama.cpp receives `--spec-type draft-dflash --spec-draft-n-max N --spec-draft-model PATH`; NInfer receives `--spec dflash2 --draft-tokens N`. Do not duplicate named speculative options in `WorkerArgs`. Updated scripts require workers built from this integration; existing release binaries do not gain DFlash2 support from a new UI alone.
 
