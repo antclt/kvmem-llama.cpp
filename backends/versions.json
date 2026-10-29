@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "d976d3f8b2069f1c6255b803a70466360a107288",
+    "patched_tree": "71f47f722a9f23f2f0db661eb903864dfc759583",
     "patches": [
       {
         "id": "kvmem",
@@ -260,6 +260,17 @@
         ],
         "after_tree": "d976d3f8b2069f1c6255b803a70466360a107288",
         "source": "Remove duplicate resident Vision binding in automatic pipeline sizing; regress single head-stage byte charge and CPU/text-only selection"
+      },
+      {
+        "id": "t5-sm75-prefill",
+        "path": "backends/patches/ninfer-t5-sm75-prefill.patch",
+        "sha256": "599d51daf54502c8faa0b523574aca0553c415bd77001bd7c3e62c4499723783",
+        "requires": [
+          "t5-performance",
+          "multigpu-resident-vision"
+        ],
+        "after_tree": "71f47f722a9f23f2f0db661eb903864dfc759583",
+        "source": "T5 prefill shared-memory admission for SM75, with FP64 boundary and graph regression coverage"
       }
     ]
   },
