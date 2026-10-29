@@ -1819,6 +1819,7 @@ int main(int argc, char ** argv) {
             return;
         }
         ChatRequest cr;
+        monitor.update(monitor_id, {{"has_media", !media_files.empty()}});
         cr.max_tokens = st.n_predict_default;
         cr.enable_thinking = st.enable_thinking_default;
         cr.template_kwargs = st.template_kwargs;
@@ -1851,6 +1852,7 @@ int main(int argc, char ** argv) {
         auto ticket = lane_pool.enqueue(cr.conversation_id);
         auto cache_reference = lane_conversations ? lane_conversations->pin(cr.conversation_id) : nullptr;
         if (!lane_pool.wait_turn(ticket, cancelled)) return;
+        monitor.update(monitor_id, {{"status", "processing"}});
 
         common_chat_templates_inputs inputs;
         inputs.messages = cr.msgs;
@@ -1955,6 +1957,7 @@ int main(int argc, char ** argv) {
         try {
             for (;;) {
                 if (st.vision && parsed_prompt->has_media()) st.vision->prepare(*parsed_prompt, prepare_begin, cancelled);
+                monitor.update(monitor_id, {{"status", "queued"}});
                 lease = lane_pool.acquire(ticket, cancelled, [&](const std::vector<bool> & busy, bool reserve) {
                     if (lane_conversations) return lane_conversations->select(*parsed_prompt, cr.conversation_id,
                             body.value("cache_reset", false), busy, reserve, *operation);
@@ -1963,6 +1966,7 @@ int main(int argc, char ** argv) {
                 });
                 if (lease || cancelled()) break;
                 prepare_begin = operation->prepare_begin;
+                monitor.update(monitor_id, {{"status", "processing"}});
             }
         } catch (const std::exception & e) {
             if (cancelled()) return;

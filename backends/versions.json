@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "71f47f722a9f23f2f0db661eb903864dfc759583",
+    "patched_tree": "8d79a97c26ed725ab897faebcd6f73c08d6692f5",
     "patches": [
       {
         "id": "kvmem",
@@ -271,6 +271,15 @@
         ],
         "after_tree": "71f47f722a9f23f2f0db661eb903864dfc759583",
         "source": "T5 prefill shared-memory admission for SM75, with FP64 boundary and graph regression coverage"
+      },
+      {
+        "id": "monitor-image-input",
+        "path": "backends/patches/ninfer-monitor-image-input.patch",
+        "sha256": "7215953bbb7c5a6c18d35463da28a1df19dccb016d68844a5ad740eb564be3f0",
+        "requires": [
+          "t5-sm75-prefill"
+        ],
+        "after_tree": "8d79a97c26ed725ab897faebcd6f73c08d6692f5"
       }
     ]
   },
@@ -280,7 +289,7 @@
     "base_commit": "bfd8911efbb8c27214d5aabc511907c6149171e7",
     "license_file": "backends/polystrata/LICENSE",
     "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 32); shutdown releases the frontend's shared log handles so Windows removes their temporary directory; ROCm/HIP builds compile the portable KVMem core and its query scorer through hip_compat; poly.5's Kolibri1 engine is linked into the KVMem regression test targets; an assistant-final image prompt keeps its (0,0) no-Query sentinel out of the image expansion; CUDA driver test links explicitly; HIP query scorer is shared by all KVMem consumers",
-    "patched_tree": "e2a8c1de21c0060b3dcfa71e59f5df6983123b64",
+    "patched_tree": "57a642c231acd590089bd0cf8ca4c1e6f25b34a9",
     "source_tag": "v0.1.45-poly.5",
     "patches": [
       {
@@ -389,6 +398,15 @@
           "kolibri-test-link"
         ],
         "after_tree": "e2a8c1de21c0060b3dcfa71e59f5df6983123b64"
+      },
+      {
+        "id": "monitor-image-input",
+        "path": "backends/patches/polystrata-monitor-image-input.patch",
+        "sha256": "302a7eb75c0e63f874528ff96dfd0ae5ee9e1c1c04c8eef989d6188692db6ec7",
+        "requires": [
+          "kvmem-image-query-span"
+        ],
+        "after_tree": "57a642c231acd590089bd0cf8ca4c1e6f25b34a9"
       }
     ]
   }

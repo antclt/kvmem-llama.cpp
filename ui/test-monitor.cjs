@@ -90,10 +90,10 @@ const server = http.createServer((req, res) => {
               server_instance: instance,
               backend: fixture.backend || "llamacpp",
               sampled_at_ms: Date.now(),
-              active: fixture.idle || fixture.empty ? [] : [{...record(), ...(fixture.nativeRequestMetrics || {}), ...(fixture.liveLlama ? {
+              active: fixture.active ?? (fixture.idle || fixture.empty ? [] : [{...record(), ...(fixture.nativeRequestMetrics || {}), ...(fixture.liveLlama ? {
                 decode_tps_live:23.5, decode_tps_mean:8, decode_tps_window_ms:3000,
                 decode_tps_sampled_at_ms:Date.now()-(fixture.staleSpeed ? 10000 : 100),
-              } : {})}],
+              } : {})}]),
               recent: fixture.empty ? [] : fixture.idle ? [{...record(), status:"completed"}] : recent,
               hardware: {
                 sampled_at_ms: Date.now() - (fixture.stale ? 10000 : 0),
@@ -177,6 +177,46 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     );
     assert.equal(await page.locator("#app").getAttribute("data-theme"), "dark");
     assert.equal(await page.locator('[data-gpu="power"]').textContent(), "—");
+    for (const backend of ['llamacpp', 'ninfer', 'polystrata']) {
+      const media = {has_media:true, status:'processing', generated_tokens:0};
+      fixtureScenario = {backend,nativeRequestMetrics:media};
+      await page.locator('[data-media-hint]').waitFor({state:'visible'});
+      assert.match(await page.locator('[data-service-state]').textContent(), /处理图像输入/);
+      assert.match(await page.locator('[data-requests]').textContent(), /处理图像输入/);
+      fixtureScenario.nativeRequestMetrics = {...media,status:'queued'};
+      await page.locator('[data-media-hint]').waitFor({state:'hidden'});
+      assert.match(await page.locator('[data-service-state]').textContent(), /排队/);
+      fixtureScenario.nativeRequestMetrics = {...media,status:'reading'};
+      await page.locator('[data-media-hint]').waitFor({state:'visible'});
+      fixtureScenario.nativeRequestMetrics = {...media,status:'generating',generated_tokens:1};
+      await page.locator('[data-media-hint]').waitFor({state:'hidden'});
+      fixtureScenario.nativeRequestMetrics = {...media,has_media:false};
+      await page.waitForFunction(() => document.querySelector('[data-service-state]').textContent === '处理中');
+      assert.equal(await page.locator('[data-media-hint]').isVisible(), false);
+    }
+    fixtureScenario = {model:'Qwen3.8 · 图像输入示例',active:[{...record(),id:'image',has_media:true,status:'reading',generated_tokens:0,decode_tps:null,prefill_tps:null},
+      {...record(),id:'text'}]};
+    await page.locator('[data-media-hint]').waitFor({state:'visible'});
+    assert.match(await page.locator('[data-service-state]').textContent(), /生成中/);
+    assert.match(await page.locator('[data-media-hint]').textContent(), /1 个请求/);
+    await page.selectOption('[data-language-select]', 'en');
+    assert.match(await page.locator('[data-media-hint]').textContent(), /Processing input containing images/);
+    await page.selectOption('[data-language-select]', 'zh-CN');
+    if (process.env.MONITOR_SCREENSHOT_DIR) {
+      await page.screenshot({path:path.join(process.env.MONITOR_SCREENSHOT_DIR,'monitor-image-desktop.png')});
+      await page.locator('.s-state').screenshot({path:path.join(process.env.MONITOR_SCREENSHOT_DIR,'monitor-image-card.png')});
+      await page.locator('.s-cpu').screenshot({path:path.join(process.env.MONITOR_SCREENSHOT_DIR,'monitor-cpu-card.png')});
+      await page.setViewportSize({width:390,height:844});
+      await page.screenshot({path:path.join(process.env.MONITOR_SCREENSHOT_DIR,'monitor-image-mobile.png')});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      await page.setViewportSize({width:1440,height:1100});
+    }
+    fixtureScenario.failure = 503;
+    await page.waitForFunction(() => document.querySelector('.s-state').dataset.stale === 'true');
+    assert.equal(await page.locator('.s-media-spinner').evaluate(e => getComputedStyle(e).animationPlayState), 'paused');
+    fixtureScenario = {idle:true};
+    await page.locator('[data-media-hint]').waitFor({state:'hidden'});
+    fixtureScenario = {};
     for (const backend of ['llamacpp', 'ninfer', 'polystrata']) {
       fixtureScenario = {backend,sharedDisk:true};
       await page.waitForFunction(() => document.querySelector('[data-value="system-disk"]').textContent === '12.5');

@@ -42,9 +42,29 @@ plus up to 512 active records; excess records are counted explicitly. It stores 
 prompt, reply, sampling parameters or key. Restarting the server resets the history.
 Streaming request progress is sampled from accepted-token and prefill observations;
 NInfer aggregate responses expose final token/timing statistics when complete.
+
+For image-bearing input, all three backends publish the optional `has_media`
+request flag. The model-status card and request row show a short image-input
+hint while the request is processing/reading and has not started generating.
+Queued requests retain their queue label. This is an input-processing hint,
+not encoder progress, a percentage, or a remaining-time estimate; it can include
+image preparation, prefix reuse and text prefill. Video frames use the same hint.
+NInfer registers media requests before preparation on Chat Completions, Responses
+and Messages; llama.cpp reports the flag on its shared chat/responses path.
+PolyStrata exposes an in-flight preparation record and reuses its identity when
+generation starts, retaining its existing execution timing boundary. Preparation
+records leave engine prefill metrics unavailable so previous requests' readings
+are not attributed to the new input.
+Finishing or failing a request removes the active hint. A stale snapshot pauses
+the indicator and retains the existing connection warning. Older servers without
+the flag keep their ordinary status labels.
 NInfer history follows its generation lifecycle: authentication, protocol parsing,
 and unknown-model failures before that lifecycle are not recorded as generation requests.
 Live readings are not a benchmark. CPU/RAM telemetry supports Windows and Linux.
+CPU usage is shown in its own card below the GPU section, with a percentage and
+usage bar. It uses the existing hardware sampler on all three backends and covers
+the whole system, including other applications. Missing or stale samples show
+an unavailable value and an empty bar; connection failures mark the card stale.
 NVIDIA telemetry uses the optional driver NVML library when the CUDA SDK headers
 are available at build time. Unsupported fields are null, never substituted with
 demonstration values. Device identity follows inference placement; monitoring does not
