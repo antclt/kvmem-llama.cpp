@@ -38,7 +38,7 @@
       "adaptive": false,
       "ngram": true,
       "max_concurrency": 8,
-      "max_devices": 1,
+      "max_devices": 8,
       "draft_asset": "embedded"
     }
   },

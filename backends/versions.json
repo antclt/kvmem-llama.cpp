@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "31eae2050c4d316207dde0a3762dc55ff05bab3d",
+    "patched_tree": "a955693ea2bda1cd0232ada1d5f42f4b42b049a0",
     "patches": [
       {
         "id": "kvmem",
@@ -220,6 +220,16 @@
         ],
         "after_tree": "31eae2050c4d316207dde0a3762dc55ff05bab3d",
         "source": "Bound KVMem automatic output by logical context and attainable RAM/SSD history; preserve explicit cap admission"
+      },
+      {
+        "id": "dflash2-layer-pipeline",
+        "path": "backends/patches/ninfer-dflash2-layer-pipeline.patch",
+        "sha256": "c189afb1e85d5f740a6a89aec371e8cea43a8e77ba9a04235f96ebe82baef2b8",
+        "requires": [
+          "output-budget"
+        ],
+        "after_tree": "a955693ea2bda1cd0232ada1d5f42f4b42b049a0",
+        "source": "KVMem DFlash2 layer-pipeline admission, native capabilities and configuration regressions; pinned upstream feature transport and StateImage execution retained"
       }
     ]
   },

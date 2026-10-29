@@ -134,6 +134,21 @@ class PlanTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_plan(data)
 
+    def test_dflash2_pipeline_preserves_devices_and_drafts(self):
+        data = self.config(SpeculativeMode='dflash2', DraftTokens=5,
+                           StageLayers=[40, 24], Concurrency=2)
+        data['parameters']['Gpu'] = GPU + ',GPU-00000000-0000-0000-0000-000000000002'
+        plan = build_plan(data)
+        argv = plan['argv']
+        self.assertEqual(plan['environment']['CUDA_VISIBLE_DEVICES'], data['parameters']['Gpu'])
+        for flag, value in [('--devices', '0,1'), ('--stage-layers', '40,24'),
+                            ('--spec', 'dflash2'), ('--draft-tokens', '5')]:
+            self.assertEqual(argv[argv.index(flag) + 1], value)
+        data['parameters'].update(Backend='llamacpp', Model=str(self.models['llamacpp']),
+                                  DraftModel=str(self.models['llamacpp']))
+        with self.assertRaises(ValueError):
+            build_plan(data)
+
     def test_mixed_quantized_kv_and_literal_metadata(self):
         alias = 'model "quoted" $x `echo forbidden` ; 中文'
         plan = self.plan('llamacpp', KvTypeK='q8', KvTypeV='q4', ModelAlias=alias,

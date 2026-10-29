@@ -1,0 +1,129 @@
+diff --git a/src/runtime/engine/model_instance.cpp b/src/runtime/engine/model_instance.cpp
+index 1e527a1388574931cb08ff97fea55968cb085c14..805af65834debbf3171ae32f27d6dddc83868681 100644
+--- a/src/runtime/engine/model_instance.cpp
++++ b/src/runtime/engine/model_instance.cpp
+@@ -352,9 +352,10 @@ EngineOptions normalize_engine_options(EngineOptions options) {
+         const bool fixed_mtp = memory_mtp && options.speculative.mtp_policy == MtpDraftPolicy::Fixed;
+         const bool adaptive_mtp = memory_mtp &&
+             options.speculative.mtp_policy == MtpDraftPolicy::Adaptive;
+-        // DFlash2 uses the native lane capacity; target/draft execution stays on one GPU.
++        // Layer stages return target features to the rank-0 drafter. The pinned
++        // tensor-parallel executor does not implement these feature taps.
+         const bool memory_dflash2 = options.speculative.backend == SpeculativeBackend::DFlash2 &&
+-            options.max_concurrency <= kMaximumConcurrency && options.devices.size() <= 1 &&
++            options.max_concurrency <= kMaximumConcurrency && !options.tensor_parallel &&
+             options.speculative.draft_tokens >= 1 && options.speculative.draft_tokens <= 15;
+         const bool memory_ngram_supported = options.speculative.ngram_draft_tokens == 0 ||
+             ((memory_mtp || memory_dflash2) && (options.max_concurrency == 1 || options.speculative.ngram_draft_tokens <= 15) &&
+@@ -395,7 +396,7 @@ EngineOptions normalize_engine_options(EngineOptions options) {
+              options.kv_cache != KvCacheStorage::RotatedInt4KeyInt4ValueE8 &&
+              options.kv_cache != KvCacheStorage::RotatedE8RootKeyInt4Value)) {
+             throw std::invalid_argument("KVMem requires explicit B+R page-aligned "
+-                "capacity per lane, nonzero global H, aligned prefill <= R, BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8, 1..8 text or resident/CPU-vision lanes, ordinary/fixed/adaptive MTP1..15 or single-GPU DFlash2 1..15 with 1..8 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
++                "capacity per lane, nonzero global H, aligned prefill <= R, BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8, 1..8 text or resident/CPU-vision lanes, ordinary/fixed/adaptive MTP1..15 or single-GPU/layer-pipeline DFlash2 1..15 with 1..8 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
+                 "and disabled prefix cache");
+         }
+     }
+diff --git a/src/serve/http_server.cpp b/src/serve/http_server.cpp
+index 571c4e63295f99be78f629656f9216227633fae1..a2c31616452bb32a1900d05988f9e5e22fe6e295 100644
+--- a/src/serve/http_server.cpp
++++ b/src/serve/http_server.cpp
+@@ -1109,7 +1109,7 @@ void HttpServer::handle_props(const httplib::Request& req, httplib::Response& re
+     spec.ngram_draft_tokens = options.speculative.ngram_draft_tokens;
+     props["speculative"] = kvmem::speculative_json<nlohmann::json>(spec,
+         {{kvmem::SpeculativeAlgorithm::Mtp, 15, true, true, 8, 8, "embedded"},
+-         {kvmem::SpeculativeAlgorithm::DFlash2, 15, false, true, kMaximumConcurrency, 1, "embedded"}}, metrics_.speculative_statistics());
++         {kvmem::SpeculativeAlgorithm::DFlash2, 15, false, true, kMaximumConcurrency, 8, "embedded"}}, metrics_.speculative_statistics());
+     const auto& execution = service.engine_options();
+     props["execution"] = {{"mode", execution.devices.size() > 1 ? "layer" : "single"},
+         {"devices", execution.devices.empty() ? std::vector<int>{execution.device} : execution.devices},
+diff --git a/src/serve/serve_options.cpp b/src/serve/serve_options.cpp
+index 59cf2e462b296055bc607cf9f0df1c4944919469..05f0fe1fcc86cf1e76f95b31b0b2d2e5b87089e0 100644
+--- a/src/serve/serve_options.cpp
++++ b/src/serve/serve_options.cpp
+@@ -1959,9 +1959,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+         const bool fixed_mtp = memory_mtp && options.speculative.mtp_policy == MtpDraftPolicy::Fixed;
+         const bool adaptive_mtp = memory_mtp &&
+             options.speculative.mtp_policy == MtpDraftPolicy::Adaptive;
+-        // DFlash2 uses the native lane capacity; target/draft execution stays on one GPU.
++        // Layer stages return target features to the rank-0 drafter. The pinned
++        // tensor-parallel executor does not implement these feature taps.
+         const bool memory_dflash2 = options.speculative.backend == SpeculativeBackend::DFlash2 &&
+-            options.max_concurrency <= kMaximumConcurrency && options.devices.size() <= 1 &&
++            options.max_concurrency <= kMaximumConcurrency && !options.tensor_parallel &&
+             options.speculative.draft_tokens >= 1 && options.speculative.draft_tokens <= 15;
+         const bool memory_ngram_supported = options.speculative.ngram_draft_tokens == 0 ||
+             ((memory_mtp || memory_dflash2) && (options.max_concurrency == 1 || options.speculative.ngram_draft_tokens <= 15) &&
+@@ -1992,7 +1993,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
+              options.kv_cache != KvCacheStorage::RotatedLloyd4KeyInt4Value &&
+              options.kv_cache != KvCacheStorage::RotatedInt4KeyInt4ValueE8 &&
+              options.kv_cache != KvCacheStorage::RotatedE8RootKeyInt4Value)) {
+-            throw std::invalid_argument("KVMem requires ordinary/fixed/adaptive MTP1..15 or single-GPU DFlash2 1..15 with 1..8 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), single-GPU or layer-pipeline BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 generation, 1..8 text or resident/CPU-vision lanes, INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
++            throw std::invalid_argument("KVMem requires ordinary/fixed/adaptive MTP1..15 or single-GPU/layer-pipeline DFlash2 1..15 with 1..8 lanes, ngram1..63 (automatically capped at 15 with 2..8 lanes), single-GPU or layer-pipeline BF16/INT8/FP8/NVFP4/K8V4/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 generation, 1..8 text or resident/CPU-vision lanes, INT8/RK8V4/RK4V4/RK4V4-E8/RK2V4-E8 fast prefill, "
+                 "and exclusive ownership of history caching");
+         }
+         if (options.kvmem.recent_blocks() == 0) {
+diff --git a/tests/experimental/p1_options.cpp b/tests/experimental/p1_options.cpp
+index 06d2a1bf8af6571a9c05ad83f09f654805c028cb..4297df728372da00322905058c1b9a0a400cd72c 100644
+--- a/tests/experimental/p1_options.cpp
++++ b/tests/experimental/p1_options.cpp
+@@ -124,6 +124,26 @@ int main() {
+                 throw std::runtime_error("KVMem normalization changed per-request working capacity");
+             }
+         }
++        for (const auto lanes : {1U, 2U, 8U}) {
++            auto staged = base;
++            staged.devices = {1, 0};
++            staged.stage_layers = {40, 24};
++            staged.max_concurrency = lanes;
++            staged.kv_capacity = ninfer::KvCapacityPolicy::explicit_capacity(256 * lanes);
++            staged.speculative.backend = ninfer::SpeculativeBackend::DFlash2;
++            staged.speculative.draft_tokens = 5;
++            const auto accepted = ninfer::runtime::normalize_engine_options(staged);
++            if (accepted.devices != staged.devices || accepted.stage_layers != staged.stage_layers ||
++                accepted.speculative.backend != ninfer::SpeculativeBackend::DFlash2 ||
++                accepted.kvmem.device_tokens() != 256)
++                throw std::runtime_error("KVMem DFlash2 layer pipeline changed its placement or window");
++            staged.stage_layers.clear();
++            staged.tensor_parallel = true;
++            bool rejected = false;
++            try { (void)ninfer::runtime::normalize_engine_options(staged); }
++            catch (const std::invalid_argument&) { rejected = true; }
++            if (!rejected) throw std::runtime_error("KVMem DFlash2 accepted unsupported tensor parallelism");
++        }
+         auto vision = base;
+         vision.enable_vision = true;
+         vision.vision_residency = ninfer::VisionResidency::Resident;
+diff --git a/tests/test_serve_options.cpp b/tests/test_serve_options.cpp
+index e05cd57277de7ba0885e4f7936fe88636d114d8d..3cbbca5887d13ab4f6d1ccf7f926289a5ac32bbd 100644
+--- a/tests/test_serve_options.cpp
++++ b/tests/test_serve_options.cpp
+@@ -378,7 +378,7 @@ int run_serve_option_tests() {
+         }
+     }
+     for (const auto& extra : std::vector<std::vector<std::string>>{
+-             {"--max-concurrency", "9"}, {"--devices", "0,1"},
++             {"--max-concurrency", "9"}, {"--devices", "0,1", "--tensor-parallel"},
+              {"--draft-tokens", "0"}, {"--draft-tokens", "16"}}) {
+         auto args = memory_args;
+         args.insert(args.end(), {"--spec", "dflash2", "--draft-tokens", "3", "--ngram-draft-tokens", "0"});
+@@ -387,6 +387,19 @@ int run_serve_option_tests() {
+         try { (void)parse(args); } catch (const std::invalid_argument&) { rejected = true; }
+         failures += check(rejected, "unsupported KVMem DFlash2 configuration accepted");
+     }
++    for (const auto lanes : {1U, 2U, 8U}) {
++        auto args = memory_args;
++        args.insert(args.end(), {"--spec", "dflash2", "--draft-tokens", "5",
++            "--devices", "1,0", "--stage-layers", "40,24",
++            "--max-concurrency", std::to_string(lanes)});
++        const auto parsed = make_engine_options(parse(args));
++        failures += check(parsed.devices == std::vector<int>({1, 0}) &&
++            parsed.stage_layers == std::vector<std::uint32_t>({40, 24}) &&
++            parsed.speculative.backend == ninfer::SpeculativeBackend::DFlash2 &&
++            parsed.speculative.draft_tokens == 5 && !parsed.tensor_parallel &&
++            parsed.kv_capacity.explicit_tokens == lanes * 512,
++            "KVMem DFlash2 layer pipeline lost device order, split, drafts or logical capacity");
++    }
+     for (const auto& extra : std::vector<std::vector<std::string>>{
+              {"--spec", "mtp", "--draft-tokens", "0"},
+              {"--spec", "mtp", "--draft-tokens", "16"},
