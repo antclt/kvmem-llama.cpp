@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "f485770ff15c81f1a82139bec85992d938d29382",
+    "patched_tree": "d976d3f8b2069f1c6255b803a70466360a107288",
     "patches": [
       {
         "id": "kvmem",
@@ -250,6 +250,16 @@
         ],
         "after_tree": "f485770ff15c81f1a82139bec85992d938d29382",
         "source": "Native single-GPU memory recovery and proactive budget planning with fixed reserve/KV and page-aligned bounds"
+      },
+      {
+        "id": "multigpu-resident-vision",
+        "path": "backends/patches/ninfer-multigpu-resident-vision.patch",
+        "sha256": "c361365ab9c65086f4413aabd405971686236080c5bf85032733e2602ab4a515",
+        "requires": [
+          "memory-planning"
+        ],
+        "after_tree": "d976d3f8b2069f1c6255b803a70466360a107288",
+        "source": "Remove duplicate resident Vision binding in automatic pipeline sizing; regress single head-stage byte charge and CPU/text-only selection"
       }
     ]
   },
