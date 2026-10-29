@@ -35,10 +35,17 @@
     reading: "预填充",
     generating: "生成中",
     processing: "处理中",
+    media: "处理图像输入",
     completed: "已完成",
     disconnected: "已断开",
     error: "失败",
   }, { get: (map, name) => t(map[name] || "处理中") });
+  // A request-level hint, not a claim about the encoder's current stage.
+  function processingMedia(row) {
+    return row?.has_media === true && ["processing", "reading"].includes(row.status) &&
+      !(row.generated_tokens > 0) && !["thinking", "answering"].includes(row.phase);
+  }
+  function displayState(row) { return processingMedia(row) ? "media" : row.status; }
   function requestStatus(row) {
     if (row.finish_reason === "length") return t(row.finish_phase === "thinking" ? "思考阶段达到输出上限" : "达到输出上限");
     if (["cancel", "cancelled"].includes(row.finish_reason)) return t("已停止");
@@ -48,7 +55,7 @@
     if (row.finish_reason === "tool_calls") return t("工具调用");
     if (row.phase === "thinking") return t("思考中");
     if (row.phase === "answering") return t("输出正文");
-    return statuses[row.status];
+    return statuses[displayState(row)];
   }
   function meanSpeed(row) { return row?.decode_tps_mean ?? row?.decode_tps; }
   // NInfer's operational log reports engine throughput for the preceding interval.
@@ -239,7 +246,7 @@
       td = document.createElement("td");
       const badge = document.createElement("span");
       badge.className = "s-badge";
-      badge.dataset.kind = row.status;
+      badge.dataset.kind = displayState(row);
       badge.textContent = requestStatus(row);
       td.append(badge);
       tr.append(td);
@@ -787,7 +794,7 @@
         ["", t("自动跟随最新请求")],
         ...allRecords.map((x) => [
           x.id,
-          `#${x.id} · ${statuses[x.status] || t("处理中")}`,
+          `#${x.id} · ${requestStatus(x)}`,
         ]),
       ],
       followLatest ? "" : selected,
@@ -797,12 +804,16 @@
       "model",
       `${model} · ${{ninfer: "NInfer", polystrata: "PolyStrata", llamacpp: "llama.cpp"}[state.backend] || state.backend}`,
     );
-    const activeStates = new Set(state.active.map((r) => r.status));
+    const activeStates = new Set(state.active.map(displayState));
     const serviceStatus = !state.active.length ? "idle" :
-      ["generating", "reading", "processing", "queued"].find((s) => activeStates.has(s)) || "processing";
+      ["generating", "media", "reading", "processing", "queued"].find((s) => activeStates.has(s)) || "processing";
     const serviceBadge = $("[data-service-state]");
     serviceBadge.dataset.kind = serviceStatus;
     serviceBadge.textContent = statuses[serviceStatus] + (state.active.length > 1 ? t(" · {0} 个请求", state.active.length) : "");
+    const mediaRequests = state.active.filter(processingMedia);
+    $("[data-media-hint]").hidden = !mediaRequests.length;
+    text("media-hint", t("正在处理含图片的输入，请稍候。") +
+      (state.active.length > 1 ? t(" · {0} 个请求", mediaRequests.length) : ""));
     const liveRequest = state.active.some((x) => x.id === r?.id);
     const requestScope = !r ? t("暂无请求") : liveRequest ? t("当前请求") : followLatest ? t("上次请求") : t("历史请求");
     text("request-scope", r ? `${requestScope} #${r.id} · ${requestStatus(r)}` : requestScope);
@@ -854,7 +865,9 @@
       number(hardware.sampled_at_ms) &&
       state.sampled_at_ms - hardware.sampled_at_ms < 5000;
     renderGpus(gpus, hardwareFresh, append);
-    text("cpu", fmt(hardwareFresh ? hardware.cpu_percent : null));
+    const cpu = hardwareFresh ? hardware.cpu_percent : null;
+    text("cpu", fmt(cpu));
+    bar("cpu", cpu);
     const available=hardware.ram_available_bytes ?? (number(hardware.ram_total_bytes)&&number(hardware.ram_used_bytes)?hardware.ram_total_bytes-hardware.ram_used_bytes:null);
     text("ram-available",fmt(hardwareFresh&&number(available)?available/GiB:null,2));
     // The console owns system I/O. Standalone/older servers retain native readings.
@@ -1053,7 +1066,7 @@
       lastError = error;
       renderConnection();
       renderRuntimeConfiguration();
-      $$(".s-state,.s-metrics,.s-gpus,.s-bottom,.s-cache")
+      $$(".s-state,.s-metrics,.s-cpu,.s-gpus,.s-bottom,.s-cache")
         .filter((e) => e.closest('[data-view="monitor"]'))
         .forEach((e) => (e.dataset.stale = "true"));
       previousDisk = null;

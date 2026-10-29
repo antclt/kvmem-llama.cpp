@@ -1,0 +1,89 @@
+diff --git a/serve/kvmem_monitor.py b/serve/kvmem_monitor.py
+index 0406723ca313f9ad5b7083691f3f7740c18694a2..792376bad0382483f8ea6c64381bc9dd7f2dfb8a 100644
+--- a/serve/kvmem_monitor.py
++++ b/serve/kvmem_monitor.py
+@@ -4,6 +4,29 @@ import os
+ import re
+ import threading
+ import time
++import uuid
++from contextlib import contextmanager
++
++
++@contextmanager
++def media_preparation(service, has_media):
++    """Expose slow image preparation without changing native execution or timing."""
++    service.embeddings.kvmem_monitor_id = None
++    if not has_media or not getattr(service, 'kvmem_monitor_gpu_uuid', None):
++        yield
++        return
++    key = uuid.uuid4().hex[:12]
++    service.embeddings.kvmem_monitor_id = key
++    row = {'kvmem_monitor_id': key, 'started': time.time(), 'has_media': True, 'preparing_media': True}
++    with service.status_lock:
++        if not hasattr(service, 'kvmem_media_preparing'):
++            service.kvmem_media_preparing = {}
++        service.kvmem_media_preparing[key] = row
++    try:
++        yield
++    finally:
++        with service.status_lock:
++            service.kvmem_media_preparing.pop(key, None)
+ 
+ 
+ def number(value):
+@@ -60,6 +83,7 @@ def snapshot(service):
+         live = [(dict(st), list(rate)) for st, rate in service.live_reqs.values()]
+         if not live and service.status.get('busy'):
+             live = [(dict(service.status), list(service.rate))]
++        live.extend((dict(st), []) for st in getattr(service, 'kvmem_media_preparing', {}).values())
+         history = list(service.history)
+         totals = dict(service.totals)
+         queued = service.status.get('queued', 0)
+@@ -73,16 +97,17 @@ def snapshot(service):
+                        'client_request_id': st.get('kvmem_client_request_id'),
+                        'started_at_ms': started * 1000, 'elapsed_ms': max(0, (now-started)*1000),
+                        'status': 'generating' if generating else 'reading', 'phase': st.get('phase'),
++                       'has_media': bool(st.get('has_media')),
+                        'endpoint': 'generation', 'prompt_tokens': st.get('prompt_tokens'),
+                        'generated_tokens': count,
+                        'cached_tokens': getattr(service.engine, 'reused', None) if solo and generating else None,
+                        'limit': st.get('max_tokens'),
+                        'ttft_ms': (st['first_token']-started)*1000 if generating else None,
+                        'ttft_scope': 'execution',
+-                       'prefill_ms': getattr(service.engine, 'progress_ms', None) if solo else None,
++                       'prefill_ms': getattr(service.engine, 'progress_ms', None) if solo and not st.get('preparing_media') else None,
+                        'decode_tps': service._rate_of(st, rate) if generating and count > 1 else None,
+                        'decode_tps_mean': count / max(1e-6, now-st['first_token']) if generating and count > 1 else None,
+-                       'prefill_tps': getattr(service.engine, 'prefill_tok_s_mean', None) if solo else None})
++                       'prefill_tps': getattr(service.engine, 'prefill_tok_s_mean', None) if solo and not st.get('preparing_media') else None})
+     recent = []
+     for row in reversed(history):
+         started = row['time']
+diff --git a/serve/server.py b/serve/server.py
+index 66d728e73c62929213913c78777bc6b14cc903d8..564f99e27c3bfa388b550d0e5a30f4bb560d7cdd 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -4483,6 +4483,11 @@ class Service:
+ 
+ 
+     def prepare(self, messages, tools, kwargs, max_new=None, force=None, req=None, cancel=None):
++        from serve.kvmem_monitor import media_preparation
++        with media_preparation(self, bool(images_of(messages))):
++            return self._prepare(messages, tools, kwargs, max_new, force, req, cancel)
++
++    def _prepare(self, messages, tools, kwargs, max_new=None, force=None, req=None, cancel=None):
+         """-> (ids, thinking, max_new). An unset or non-positive max_new (some clients send -1) means "unlimited":
+         the rest of the context.  `force` (forced_call): without thinking the reply starts with it, so it ends the
+         prompt; with thinking, Service.run writes it once the thinking is over."""
+@@ -4929,8 +4934,9 @@ class Service:
+                                   generated=0, started=time.time(), first_token=None, tool=None, tail="",
+                                   max_tokens=max_new, reasoning_recoveries=0, thinking_budget=budget)
+                         if getattr(self, 'kvmem_monitor_gpu_uuid', None):
+-                            st['kvmem_monitor_id'] = uuid.uuid4().hex[:12]
++                            st['kvmem_monitor_id'] = getattr(self.embeddings, 'kvmem_monitor_id', None) or uuid.uuid4().hex[:12]
+                             st['kvmem_client_request_id'] = (sampling or {}).get('_kvmem_request_id')
++                        st['has_media'] = bool(emb)
+                         if par:
+                             self.live_reqs[id(st)] = (st, rate)
+                             self.status.update(st)

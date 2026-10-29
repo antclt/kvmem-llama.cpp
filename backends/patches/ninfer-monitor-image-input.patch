@@ -1,0 +1,65 @@
+diff --git a/src/serve/anthropic_messages_http.cpp b/src/serve/anthropic_messages_http.cpp
+index 56579e6fed6b6c8cbf775b2acc1d3af58a9e216e..922b3ca17d06610665d7a67a5773217e600bb328 100644
+--- a/src/serve/anthropic_messages_http.cpp
++++ b/src/serve/anthropic_messages_http.cpp
+@@ -74,6 +74,7 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
+                                       .stream                 = request.stream,
+                                       .output_tokens_explicit = request.output_tokens_explicit};
+     PreparedRequest prepared;
++    monitor_media_input(req_id, "anthropic_messages", request.generation);
+     try {
+         prepared            = service->prepare(request.generation,
+                                                request.stream ? GenerationConsumerMode::Streaming
+diff --git a/src/serve/http_server.cpp b/src/serve/http_server.cpp
+index e6ea6f52cebc502855b46cd9a80082349c6cdaee..2ed360f4c9696c7c6b7ec4ff57eab8a46252e83d 100644
+--- a/src/serve/http_server.cpp
++++ b/src/serve/http_server.cpp
+@@ -357,6 +357,12 @@ void HttpServer::RequestLifecycle::response_failure(const RequestFailure& failur
+     owner_->record_response_failure(context_.id, failure);
+ }
+ 
++void HttpServer::monitor_media_input(std::uint64_t id, const char* endpoint, const GenerationRequest& request) {
++    if (request.media_item_count() == 0) return;
++    const auto key = monitor_->begin(endpoint, std::to_string(id));
++    monitor_->update(key, {{"has_media", true}});
++}
++
+ std::shared_ptr<HttpServer::RequestLifecycle> HttpServer::begin_request(RequestLogContext context, PreparedRequest& prepared) {
+     auto lifecycle = std::make_shared<RequestLifecycle>(*this, context);
+     const auto id = std::to_string(context.id);
+diff --git a/src/serve/http_server.h b/src/serve/http_server.h
+index a4558df954ca29fffbe1ff66347d3e6a6f4fc882..4cf31e9b6c7546c71ad58adee43761a3400741b1 100644
+--- a/src/serve/http_server.h
++++ b/src/serve/http_server.h
+@@ -138,6 +138,7 @@ private:
+     };
+ 
+     [[nodiscard]] std::shared_ptr<RequestLifecycle> begin_request(RequestLogContext context, PreparedRequest& prepared);
++    void monitor_media_input(std::uint64_t id, const char* endpoint, const GenerationRequest& request);
+ 
+     [[nodiscard]] httplib::Server::HandlerResponse pre_route(const httplib::Request& req,
+                                                              httplib::Response& res) const;
+diff --git a/src/serve/openai_chat_http.cpp b/src/serve/openai_chat_http.cpp
+index 7683ba6d0edeb108f85f26ba7983fe48b2072711..5d95d20a3645fbf40f469308a10c04d00fc298af 100644
+--- a/src/serve/openai_chat_http.cpp
++++ b/src/serve/openai_chat_http.cpp
+@@ -43,6 +43,7 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
+                                       .stream                 = request.stream,
+                                       .output_tokens_explicit = request.output_tokens_explicit};
+     PreparedRequest prepared;
++    monitor_media_input(req_id, "openai_chat_completions", request.generation);
+     try {
+         const ninfer::GenerationObservationOptions observation{
+             .phase_timings   = true,
+diff --git a/src/serve/openai_responses_http.cpp b/src/serve/openai_responses_http.cpp
+index 0e84e8b0f2d77ccf34cd706374aa565e967a5f5d..8898318f1c2b40ca0ba8d785bc5fddf6aac60a3c 100644
+--- a/src/serve/openai_responses_http.cpp
++++ b/src/serve/openai_responses_http.cpp
+@@ -273,6 +273,7 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
+     };
+     GenerationService* const service = &lease.service();
+     PreparedRequest prepared;
++    monitor_media_input(req_id, "openai_responses", resolved.generation);
+     try {
+         prepared = service->prepare(
+             resolved.generation,
