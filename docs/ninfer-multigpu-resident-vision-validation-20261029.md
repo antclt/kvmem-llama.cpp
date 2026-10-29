@@ -31,10 +31,9 @@ binding, device placement and head-stage byte accounting.
   1024, reserve 512 and host budget 512 MiB. The actual resolved split is 32/32.
   Independent solid-red and solid-blue 64×64 PNG requests return `Red` and `Blue`.
   Both requests have zero prompt cache reuse and execute DFlash2 verification.
-- Device order is RTX 5060 Ti
-  `GPU-5847813c-9e6e-bb43-cc5e-621aac091b6c`, then RTX 5050 Laptop
-  `GPU-14f08a8c-8d62-4338-8ae4-c669889cdb29`. Both were idle before the run, and
-  `/props.execution.monitor_devices` confirms these UUIDs. Reported weight
+- Device order is RTX 5060 Ti, then RTX 5050 Laptop. Both were idle before the run;
+  their UUIDs are recorded in the local evidence and confirmed by
+  `/props.execution.monitor_devices`. Reported weight
   residency is 7.36 GiB and 5.42 GiB respectively.
 - The ordered patch applies to prepared tree
   `f485770ff15c81f1a82139bec85992d938d29382`, yielding
