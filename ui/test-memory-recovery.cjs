@@ -9,9 +9,11 @@ let browser,stderr='';child.stderr.on('data',x=>stderr+=x);
 async function until(fn){for(let i=0;i<100;i++){try{if(await fn())return;}catch{}await new Promise(r=>setTimeout(r,100));}throw Error(stderr||'timeout');}
 async function checkRanking(page){
  const failed=await (await fetch(base+'/api/launcher/status')).json();
- const persisted=(await (await fetch(base+'/api/launcher/info')).json()).draft;
+ const info=await (await fetch(base+'/api/launcher/info')).json(),persisted=info.draft;
  let status;
- const serveInfo=async route=>{const response=await route.fetch(),body=await response.json();body.status=status;await route.fulfill({response,json:body});};
+ // Ranking changes only the status fixture. Reusing its configuration snapshot
+ // avoids a live fetch surviving page reload or masking an assertion at teardown.
+ const serveInfo=route=>route.fulfill({json:{...info,status}});
  const serveStatus=route=>route.fulfill({json:status});
  await page.route('**/api/launcher/info',serveInfo);
  await page.route('**/api/launcher/status',serveStatus);
@@ -47,7 +49,7 @@ async function checkRanking(page){
      assert.equal(await page.locator('[data-memory-retry]').count(),test.budgets.filter(x=>x!==null).length,test.name);
    }
  }finally{
-   await page.unroute('**/api/launcher/info',serveInfo);await page.unroute('**/api/launcher/status',serveStatus);
+   await page.unrouteAll({behavior:'wait'});
  }
  assert.deepEqual(await (await fetch(base+'/api/launcher/status')).json(),failed,'Ranking must not change the failed instance or launch parameters');
  assert.deepEqual((await (await fetch(base+'/api/launcher/info')).json()).draft,persisted,'Ranking must not save new configuration');
