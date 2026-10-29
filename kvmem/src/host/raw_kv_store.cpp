@@ -735,6 +735,27 @@ void RawKvStore::snapshot_buffers(std::vector<SnapshotBuffer> & buffers) {
     }
 }
 
+std::unique_ptr<RawKvStore> RawKvStore::fork_mean_prefix(uint32_t token_pos) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    const auto count = (uint64_t(token_pos) + cfg_.block_tokens - 1) / cfg_.block_tokens;
+    if (count > blocks_.size()) throw std::logic_error("mean-K fork exceeds the retained prefix");
+    auto fork = std::make_unique<RawKvStore>(cfg_);
+    fork->blocks_.resize(static_cast<size_t>(count));
+    for (size_t b = 0; b < count; ++b) {
+        auto & dest = fork->blocks_[b].layers;
+        dest.resize(cfg_.n_layer);
+        for (size_t i = 0; i < dest.size(); ++i) {
+            const auto & source = blocks_[b].layers.at(i);
+            if (!source.k.empty() || !source.v.empty() || source.k_gpu || source.v_gpu)
+                throw std::logic_error("mean-K fork cannot discard raw KV payload");
+            dest[i].n_tokens = source.n_tokens;
+            dest[i].mean_tokens = source.mean_tokens;
+            dest[i].k_sum = source.k_sum;
+        }
+    }
+    return fork;
+}
+
 void RawKvStore::snapshot_write(SnapshotWriter & out) {
     std::lock_guard<std::mutex> lk(mu_);
     out.scalar(uint32_t(0x31564b52));

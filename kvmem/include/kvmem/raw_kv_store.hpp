@@ -97,6 +97,10 @@ public:
     // In-process tail checkpoint: per layer, valid count followed by the F32 sum.
     std::vector<float> mean_checkpoint(uint32_t token_pos) const;
     void restore_mean_checkpoint(uint32_t token_pos, const std::vector<float> & state);
+    // Copy the mean-K index, never raw/packed KV. Used by a native branch whose
+    // payload lives in its separately shared page archive. The caller restores
+    // the checkpoint's partial-tail sum after truncation.
+    std::unique_ptr<RawKvStore> fork_mean_prefix(uint32_t token_pos) const;
 
 private:
     struct LayerBlk {

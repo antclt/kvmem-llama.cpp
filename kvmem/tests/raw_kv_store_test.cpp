@@ -431,5 +431,20 @@ int main() {
             CHECK(std::filesystem::is_empty(root)); std::filesystem::remove(root);
         }
     }
+    {
+        kvmem::RawKvStoreConfig cfg; cfg.n_layer=1; cfg.n_embd_k=2; cfg.block_tokens=4;
+        kvmem::RawKvStore parent(cfg);
+        const float prefix[]={1,2,3,4};
+        parent.write_layer_mean_k(0,2,0,prefix);
+        const auto checkpoint=parent.mean_checkpoint(2);
+        const float suffix[]={5,6,7,8};
+        parent.write_layer_mean_k(2,2,0,suffix);
+        auto child=parent.fork_mean_prefix(2);
+        child->truncate_to(2); child->restore_mean_checkpoint(2,checkpoint);
+        const float edited[]={9,10,11,12};
+        child->write_layer_mean_k(2,2,0,edited);
+        float a[2],b[2]; parent.mean_k(0,0,a); child->mean_k(0,0,b);
+        CHECK(a[0]==4 && a[1]==5 && b[0]==6 && b[1]==7);
+    }
     return 0;
 }
