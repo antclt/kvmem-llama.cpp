@@ -270,7 +270,8 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     assert.doesNotMatch(await page.locator('[data-runtime-config]').textContent(),/提议 40|接受 25/);
     delete fixtureScenario.nativeRequestMetrics.mtp_drafts_offered;
     delete fixtureScenario.nativeRequestMetrics.mtp_drafts_accepted;
-    await page.waitForTimeout(1200);
+    await page.waitForFunction(() => /推测.*接受 25 \/ 提议 40/.test(
+      document.querySelector('[data-value="speculative-live"]').textContent));
     assert.match(await page.locator('[data-value="speculative-live"]').textContent(),/推测.*接受 25 \/ 提议 40/);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('kvmem-runtime-status',{detail:{state:'stopped'}})));
     assert.equal(await page.locator('[data-live-speed]').getAttribute('title'),'');
