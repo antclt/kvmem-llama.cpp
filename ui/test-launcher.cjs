@@ -74,6 +74,11 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
   if(info.gpus.length===2){
    const order=()=>page.locator('[data-param=Gpu]').evaluate(el=>Array.from(el.selectedOptions).map(o=>o.value));
    await page.getByRole('tab',{name:'硬件与加速'}).click();
+   const draftMode=page.locator('[data-param=SpeculativeMode]'),previousMode=await draftMode.inputValue();
+   assert.equal(await draftMode.locator('option[value=dflash2]').isDisabled(),false);
+   await draftMode.selectOption('dflash2');
+   assert.equal(await draftMode.evaluate(el=>el.validationMessage),'');
+   await draftMode.selectOption(previousMode);
    await page.locator('[data-param=StageLayers]').fill('40,24');
    await page.locator('[data-ordered-gpu]').nth(1).locator('[data-gpu-move="-1"]').click();
    assert.deepEqual(await order(),[info.gpus[1].uuid,info.gpus[0].uuid]);

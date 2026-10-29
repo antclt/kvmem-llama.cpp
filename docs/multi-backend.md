@@ -54,7 +54,7 @@ ninfer 源码的多卡采用上游 layer pipeline。`-Gpu 'GPU-a,GPU-b'` 保留 
   -MtpDrafts 3 -Budget 2048 -Reserve 512 -Prefill 512 -SinkTokens 64 -RecentTokens 64
 ```
 
-多卡范围与证据见 [多卡验收](ninfer-multigpu-validation-20261006.md)。这是源码能力，RC1 ZIP 不因此更新。多卡用于扩展容量，尚无本轮吞吐提升结论；`--cuda-memory-policy mixed/strict` 继续要求单卡，KVMem overlay Vision、DFlash、并行 prefill 和磁盘冷快照继续沿用当前限制。
+多卡范围与证据见 [多卡验收](ninfer-multigpu-validation-20261006.md)。当前源码也开放 NInfer DFlash2＋按层拆分：选择多张 GPU 和固定长度 DFlash2，或传 `-SpeculativeMode dflash2 -DraftTokens 5`；草稿和局部状态保留在第一张卡，其他卡回传目标层特征。Tensor parallel＋DFlash2 仍不开放。[双卡验证记录](dflash2-pipeline-validation-20261029.md)限定了实测范围。需要配套新 worker；已发布的 0.19-rc1 ZIP 仍保留单卡限制。多卡用于扩展容量，尚无本轮吞吐提升结论；`--cuda-memory-policy mixed/strict` 继续要求单卡，KVMem overlay Vision、原始 DFlash（非 DFlash2）、并行 prefill 和磁盘冷快照继续沿用当前限制。
 
 llama.cpp 示例：
 

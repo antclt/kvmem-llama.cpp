@@ -74,10 +74,10 @@ class WorkerArgsTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_launcher(self, shell, entry, extra, *, dry=True):
+    def run_launcher(self, shell, entry, extra, *, dry=True, gpu='GPU-test'):
         args = [shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                 str(ROOT / 'scripts/windows' / entry), '-Model', str(self.model),
-                '-Worker', sys.executable, '-Gpu', 'GPU-test']
+                '-Worker', sys.executable, '-Gpu', gpu]
         if entry == 'start-backend.ps1':
             args += ['-Backend', 'ninfer']
         elif entry == 'start-ninfer.ps1':
@@ -89,6 +89,17 @@ class WorkerArgsTests(unittest.TestCase):
     def plan(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout[result.stdout.index('{'):])
+
+    def test_dflash2_pipeline_reaches_child(self):
+        for shell in SHELLS:
+            result = self.plan(self.run_launcher(shell, 'start-backend.ps1',
+                ['-SpeculativeMode', 'dflash2', '-DraftTokens', '5', '-DraftPolicy', 'fixed'],
+                dry=False, gpu='GPU-first,GPU-second'))
+            self.assertEqual(result['gpu'], 'GPU-first,GPU-second')
+            argv = result['received']
+            self.assertEqual(argv[argv.index('--devices') + 1], '0,1')
+            self.assertEqual(argv[argv.index('--spec') + 1], 'dflash2')
+            self.assertEqual(argv[argv.index('--draft-tokens') + 1], '5')
 
     def test_file_invocation_collects_multiple_native_arguments(self):
         native = ['--default-reasoning-effort', 'medium', '--preserve-thinking']
