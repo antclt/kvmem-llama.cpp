@@ -47,6 +47,10 @@ prefill batching and early first-token publication remain deferred. See the
 checks, performance costs and remaining qualification; the records above remain
 historical evidence for their pinned revisions.
 
+The 2026-10-29 [resident Vision pipeline correction](ninfer-multigpu-resident-vision-validation-20261029.md)
+removes a duplicate Vision binding in automatic multi-GPU layer sizing and includes
+native accounting regressions and a real dual-GPU image request check.
+
 ## Checkout and preparation
 
 ```sh
