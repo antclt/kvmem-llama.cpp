@@ -1,0 +1,139 @@
+diff --git a/docs/serving.md b/docs/serving.md
+index bb4c5486..9a6f8a68 100644
+--- a/docs/serving.md
++++ b/docs/serving.md
+@@ -152,7 +152,10 @@ retried. An on-demand read failure returns an unavailable error for that image r
+ continues serving other requests. The artifact must remain available at its original entry path. This policy applies to the
+ Qwen3.5-family CPU tower; Gemma 4 retains its separate CPU implementation.
+ 
+-`/props.cpu_vision` reports residency, logical weight bytes, active encoder leases, load/unload
++`/props.cpu_vision` reads live Host-cache metadata independently of the Engine execution lock,
++so monitoring stays responsive during prefill and decode. `Engine::cpu_vision_status()` exposes
++the same observation without loading weights or querying CUDA. It reports residency, logical
++weight bytes, active encoder leases, load/unload
+ counts, the last load time and the idle timeout. `CPU_VISION loaded` / `unloaded` log records
+ identify actual transitions. Weight bytes exclude vector spare capacity and allocator overhead;
+ OS working set and private memory can differ from this logical count.
+diff --git a/include/ninfer/engine.h b/include/ninfer/engine.h
+index 541ab647..19843b50 100644
+--- a/include/ninfer/engine.h
++++ b/include/ninfer/engine.h
+@@ -188,6 +188,8 @@ public:
+     [[nodiscard]] LoadSummary load_summary() const;
+     [[nodiscard]] ModelMetadata model_metadata() const;
+     [[nodiscard]] MemorySummary memory_summary() const;
++    // Live CPU Vision cache metadata, independent of the execution lock. Empty when unsupported.
++    [[nodiscard]] std::optional<CpuVisionStatus> cpu_vision_status() const;
+     [[nodiscard]] RuntimeStats runtime_stats() const;
+     [[nodiscard]] MediaCacheSummary media_cache_summary() const;
+     [[nodiscard]] bool is_available() const;
+diff --git a/include/ninfer/observability/resources.h b/include/ninfer/observability/resources.h
+index ab7361ea..3a5af1f3 100644
+--- a/include/ninfer/observability/resources.h
++++ b/include/ninfer/observability/resources.h
+@@ -37,6 +37,17 @@ struct ArenaMemorySummary {
+     std::size_t peak_used_bytes = 0;
+ };
+ 
++// Independently synchronized Host weight residency. Reading this status never waits for an
++// Engine execution unit or enters CUDA; unavailable model families return no status.
++struct CpuVisionStatus {
++    bool loading = false;
++    std::size_t weight_bytes = 0;
++    std::size_t active_encoders = 0;
++    std::uint64_t load_count = 0, unload_count = 0;
++    double last_load_seconds = 0;
++    std::uint32_t idle_timeout_seconds = 0;
++};
++
+ // Vision workspace extents and separate weight residency. Workspace extents describe regions
+ // within workspace.capacity_bytes; CPU/overlay Host weights are separate allocations.
+ struct VisionWorkspaceMemorySummary {
+diff --git a/include/ninfer/types_fwd.h b/include/ninfer/types_fwd.h
+index 6e13d21a..8785a142 100644
+--- a/include/ninfer/types_fwd.h
++++ b/include/ninfer/types_fwd.h
+@@ -129,6 +129,7 @@ struct NgramArchiveStats;
+ // ninfer/observability/resources.h
+ struct MediaCacheSummary;
+ struct ArenaMemorySummary;
++struct CpuVisionStatus;
+ struct VisionWorkspaceMemorySummary;
+ struct DeviceMemorySummary;
+ struct KvmemMemorySummary;
+diff --git a/src/runtime/engine/engine.cpp b/src/runtime/engine/engine.cpp
+index c3362ba0..76237c0d 100644
+--- a/src/runtime/engine/engine.cpp
++++ b/src/runtime/engine/engine.cpp
+@@ -2,6 +2,7 @@
+ #include "text/structured_output.h"
+ 
+ #include "artifact/reader.h"
++#include "models/qwen3_5/load/vision_cpu_cache.h"
+ #include "core/device.h"
+ #include "core/gpu_clock_floor.h"
+ #include "core/nvtx.h"
+@@ -1167,6 +1168,21 @@ MediaCacheSummary Engine::media_cache_summary() const {
+     return impl_->frontend().media_cache_summary();
+ }
+ 
++std::optional<CpuVisionStatus> Engine::cpu_vision_status() const {
++    if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
++    // The model and cache owner are fixed for this Engine's lifetime. The serving registry
++    // lease keeps them alive; only CpuVisionCache's own metadata lock is needed here.
++    if (!impl_->active || !impl_->active->model->cpu_vision()) { return std::nullopt; }
++    const auto snapshot = impl_->active->model->cpu_vision()->summary();
++    return CpuVisionStatus{.loading = snapshot.loading,
++                           .weight_bytes = snapshot.bytes,
++                           .active_encoders = snapshot.users,
++                           .load_count = snapshot.loads,
++                           .unload_count = snapshot.unloads,
++                           .last_load_seconds = snapshot.last_load_seconds,
++                           .idle_timeout_seconds = impl_->options.cpu_vision_idle_seconds};
++}
++
+ RuntimeStats Engine::runtime_stats() const {
+     if (impl_ == nullptr) { throw std::logic_error("Engine is moved from"); }
+     RuntimeStats summary = std::visit(
+diff --git a/src/serve/generation_service.h b/src/serve/generation_service.h
+index f3a3880a..30ff7050 100644
+--- a/src/serve/generation_service.h
++++ b/src/serve/generation_service.h
+@@ -195,6 +195,10 @@ public:
+ 
+     [[nodiscard]] ninfer::MemorySummary memory_summary() const { return engine_->memory_summary(); }
+ 
++    [[nodiscard]] std::optional<ninfer::CpuVisionStatus> cpu_vision_status() const {
++        return engine_->cpu_vision_status();
++    }
++
+     [[nodiscard]] ninfer::RuntimeStats runtime_stats() const { return engine_->runtime_stats(); }
+ 
+     [[nodiscard]] bool is_available() const { return engine_->is_available(); }
+diff --git a/src/serve/http_server.cpp b/src/serve/http_server.cpp
+index 571c4e63..dc814d7b 100644
+--- a/src/serve/http_server.cpp
++++ b/src/serve/http_server.cpp
+@@ -1115,14 +1115,14 @@ void HttpServer::handle_props(const httplib::Request& req, httplib::Response& re
+         {"devices", execution.devices.empty() ? std::vector<int>{execution.device} : execution.devices},
+         {"stage_layers", execution.stage_layers}, {"monitor_devices", facts.monitor_devices}};
+     if (options.enable_vision && options.vision_residency == VisionResidency::Cpu) {
+-        const auto memory = service.memory_summary();
+-        if (memory.vision_workspace && memory.vision_workspace->cpu_weights_lazy) {
+-            const auto& vision = *memory.vision_workspace;
+-            props["cpu_vision"] = {{"resident", vision.cpu_weight_bytes != 0}, {"loading", vision.cpu_weights_loading},
+-                {"weight_bytes", vision.cpu_weight_bytes}, {"active_encoders", vision.cpu_weight_users},
+-                {"load_count", vision.cpu_weight_loads}, {"unload_count", vision.cpu_weight_unloads},
+-                {"last_load_seconds", vision.cpu_weight_last_load_seconds},
+-                {"idle_timeout_seconds", vision.cpu_weight_idle_seconds}};
++        // Full memory_summary() takes the Engine execution lock. This endpoint is polled
++        // during decode, so observe the independently synchronized Host cache instead.
++        if (const auto vision = service.cpu_vision_status()) {
++            props["cpu_vision"] = {{"resident", vision->weight_bytes != 0}, {"loading", vision->loading},
++                {"weight_bytes", vision->weight_bytes}, {"active_encoders", vision->active_encoders},
++                {"load_count", vision->load_count}, {"unload_count", vision->unload_count},
++                {"last_load_seconds", vision->last_load_seconds},
++                {"idle_timeout_seconds", vision->idle_timeout_seconds}};
+         }
+     }
+     props["kvmem"] = {{"enabled", options.kvmem.selected_tokens != 0},

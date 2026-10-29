@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "31eae2050c4d316207dde0a3762dc55ff05bab3d",
+    "patched_tree": "6b289039ca9f36702a2fc6d86cfca37576f77a22",
     "patches": [
       {
         "id": "kvmem",
@@ -220,6 +220,16 @@
         ],
         "after_tree": "31eae2050c4d316207dde0a3762dc55ff05bab3d",
         "source": "Bound KVMem automatic output by logical context and attainable RAM/SSD history; preserve explicit cap admission"
+      },
+      {
+        "id": "cpu-vision-props",
+        "path": "backends/patches/ninfer-cpu-vision-props.patch",
+        "sha256": "a50cf2a5b9d7b9deaf8448a4d7d8447145f64deda637b47d087df394e0031f21",
+        "requires": [
+          "output-budget"
+        ],
+        "after_tree": "6b289039ca9f36702a2fc6d86cfca37576f77a22",
+        "source": "Observe live CPU Vision cache metadata without acquiring the inference execution lock"
       }
     ]
   },

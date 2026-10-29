@@ -29,6 +29,11 @@ Qwen3.5/3.6/3.8 的 CPU 视觉权重在首次实际图片编码时加载。最�
 `/props.cpu_vision` 提供驻留字节数和加载/卸载次数。此策略针对 ninfer 的 Qwen CPU 视觉路径，
 需要本轮新编译的 worker；范围与测量见 [按需加载和回收验收](ninfer-cpu-vision-lifecycle-validation-20261020.md)。
 
+监控读取 CPU 视觉缓存自己的实时状态，不再等待 prefill/decode 的执行锁，也不会触发权重加载。
+可对已启动且空闲的 `--vision-cpu` worker 运行
+`python tests/ninfer_props_responsiveness.py --url http://127.0.0.1:18200`，检查流式文字生成期间
+`/props` 的响应延迟、字段和未加载状态；默认要求每次响应不超过 1 秒。已有安装包需更新 worker 才会生效。
+
 默认端口18200，context200k、budget36k、gen reserve及输出上限16k、思考预算8192、双INT8、自适应MTP上限4、ngram31、CPU视觉（图片上限1024 tokens），Host预算12GiB。脚本调用统一启动器，可编辑模型路径与预算，通过 `-Gpu` 选择设备。小预算CPU/resident视觉的实际1024-token图片及八路图文功能已通过，范围见 [视觉并发验收](vision-concurrency-validation-20261006.md)；正式版在 RTX 5060 Ti 16GB 上完成了该默认配方的加载和短 Responses 请求检查；该检查不代表所有模型或完整长上下文质量已验收。各历史记录保留其原有测试范围。
 
 解压包后，在 PowerShell 中运行：
