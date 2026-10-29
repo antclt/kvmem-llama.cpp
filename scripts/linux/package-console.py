@@ -34,7 +34,7 @@ def package(source, output, chat, wheel, expected):
         raise ValueError('Compatible built unified chat assets are required')
     files = ['START-HERE-CN.sh', 'START-HERE-EN.sh', 'scripts/linux/start-ui.sh',
              'scripts/local-console.py', 'scripts/launcher-cli.py', 'scripts/console_chat.py',
-             'scripts/console_hardware.py', 'scripts/model_health.py', 'scripts/requirements-console.txt',
+             'scripts/console_hardware.py', 'scripts/console_memory.py', 'scripts/model_health.py', 'scripts/requirements-console.txt',
              'scripts/launcher-capabilities.json', 'scripts/speculative-capabilities.json',
              'docs/linux-launcher.md']
     for folder in ('scripts/launcher', 'scripts/model_health_ninfer', 'ui/monitor'):

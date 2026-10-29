@@ -62,7 +62,7 @@
     "base_commit": "63428ac249da8a6c5d891b508d7e483d8c7def6c",
     "license_file": "backends/ninfer/LICENSE",
     "local_changes": "Ordered local patches over the pinned upstream; verify every patch and the complete prepared tree.",
-    "patched_tree": "a955693ea2bda1cd0232ada1d5f42f4b42b049a0",
+    "patched_tree": "890226a8986b446d1a722f254cbda3a9132f541e",
     "patches": [
       {
         "id": "kvmem",
@@ -230,6 +230,16 @@
         ],
         "after_tree": "a955693ea2bda1cd0232ada1d5f42f4b42b049a0",
         "source": "KVMem DFlash2 layer-pipeline admission, native capabilities and configuration regressions; pinned upstream feature transport and StateImage execution retained"
+      },
+      {
+        "id": "memory-planning",
+        "path": "backends/patches/ninfer-memory-planning.patch",
+        "sha256": "60a17d2c406333207103e34a4fa168b9e0cf3f98882b5bd716e3d1521df15322",
+        "requires": [
+          "dflash2-layer-pipeline"
+        ],
+        "after_tree": "890226a8986b446d1a722f254cbda3a9132f541e",
+        "source": "Native single-GPU memory recovery and proactive budget planning with fixed reserve/KV and page-aligned bounds"
       }
     ]
   },
