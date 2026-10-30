@@ -1,0 +1,57 @@
+diff --git a/src/poly/main.cpp b/src/poly/main.cpp
+index 73680311..e6ce8fd3 100644
+--- a/src/poly/main.cpp
++++ b/src/poly/main.cpp
+@@ -340,6 +340,11 @@ struct Session {
+ #ifdef STRATA_KVMEM
+     strata::poly::KvmemHistory managed_history;
+     strata::poly::KvmemSessions managed_sessions;
++    // the previous managed request: its bounded Query, the prompt length it covered and the session that ran it.
++    // A request with the same span whose prompt extends that one (the thinking-budget wrap) is the same turn:
++    // its KV and Query capture are still current, so it must not be read again.
++    int64_t prev_query_begin = -1, prev_query_end = -1, prev_query_tokens = 0;
++    kvmem::SessionIdentity prev_session{};
+ #endif
+     Sampler sampler;
+     std::mt19937_64 rng{std::random_device{}()};
+@@ -401,6 +406,7 @@ struct Session {
+         bool query_replayed = false;
+         bool full_prefix = false;
+         bool has_query = false;
++        bool follow_up = false;
+         int64_t reuse_anchor = 0;
+         int64_t history_bound = 0;
+         bool anchor_saved = false;
+@@ -426,6 +432,13 @@ struct Session {
+                 if(query_begin>image.at && query_begin<image.at+image.n)query_begin=image.at+image.n;
+             if(has_query && query_begin>=query_end)throw std::runtime_error("bounded Query has no text after its image group");
+             history_bound=has_query?query_begin:n;
++            follow_up = prev_query_tokens > 0 && has_query
++                && query_begin == prev_query_begin && query_end == prev_query_end
++                && int64_t(ids.size()) > prev_query_tokens
++                && engine.memory().stamp().valid && engine.memory().stamp().session == prev_session
++                && managed_history.size() >= size_t(prev_query_tokens)
++                && managed_history.observed_prefix(ids) >= size_t(prev_query_tokens);
++            if (follow_up) history_bound = n;   // choose() may then resume the whole live prefix
+             engine.memory().admit(uint64_t(n) + uint64_t(max_new));
+             if (!history_reuse) engine.reset();
+         }
+@@ -464,6 +477,18 @@ struct Session {
+             const int workspace=engine.memory_options().mtp?engine.max_window():0;
+             full_prefix=n+workspace<=engine.memory().capacity() && engine.memory().complete_prefix();
+             query_replayed=!has_query || full_prefix;
++            if (follow_up && r.resume > 0) {
++                // the same turn going on: the captured Query is current, so nothing is re-read for it
++                query_replayed = true;
++                std::fprintf(stderr,"KVMEM_QUERY follow_up=1 resume=%lld query_begin=%lld query_end=%lld\n",
++                    (long long)r.resume,(long long)query_begin,(long long)query_end);
++            }
++            if (has_query) {
++                prev_query_begin=query_begin; prev_query_end=query_end; prev_query_tokens=n;
++                prev_session=engine.memory().stamp().session;
++            } else {
++                prev_query_tokens=0;
++            }
+             if (!has_query) std::fprintf(stderr,"KVMEM_QUERY source=tool_or_continuation recall=0\n");
+             else if (full_prefix) std::fprintf(stderr,"KVMEM_QUERY source=resident recall=0 query_begin=%lld query_end=%lld\n",
+                 (long long)query_begin,(long long)query_end);
