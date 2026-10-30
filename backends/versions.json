@@ -306,127 +306,136 @@
   "polystrata": {
     "path": "backends/polystrata",
     "upstream": "https://github.com/VecSzn/PolyStrata.git",
-    "base_commit": "bfd8911efbb8c27214d5aabc511907c6149171e7",
+    "base_commit": "20d839dbbaf34f28413e84d6e99301725f4f624b",
     "license_file": "backends/polystrata/LICENSE",
     "local_changes": "Opt-in Windows/CUDA qwen35moe F16/Q8 KVMem; bounded Query/replay, PageSoftmax/graph scoring and resident-only Pressure; shared process RAM/SSD and retained histories; per-sequence single-GPU native batches; one to three embedded MTP drafts during solo execution; CPU/GPU vision; pinned upstream base; startup-fixed 32/64-token blocks (default 32); shutdown releases the frontend's shared log handles so Windows removes their temporary directory; ROCm/HIP builds compile the portable KVMem core and its query scorer through hip_compat; poly.5's Kolibri1 engine is linked into the KVMem regression test targets; an assistant-final image prompt keeps its (0,0) no-Query sentinel out of the image expansion; CUDA driver test links explicitly; HIP query scorer is shared by all KVMem consumers",
-    "patched_tree": "57a642c231acd590089bd0cf8ca4c1e6f25b34a9",
-    "source_tag": "v0.1.45-poly.5",
+    "patched_tree": "8289ecbc35231e9634874bd3d4b80dca62d8e92e",
+    "source_tag": "v0.1.45-poly.6",
     "patches": [
       {
         "id": "kvmem",
         "path": "backends/patches/polystrata-kvmem.patch",
-        "sha256": "d2b1f4801b5d972c8bf298fe079eecbef3bc08f79daab718633cfd250dd3ae71",
+        "sha256": "9996625fbbed51fa51182a4e9fe2e0c3814d9ec95d3a7fd18b58791808c34c2d",
         "requires": [],
-        "after_tree": "4b502212e936522f1cb6917fb34e8ea00df1b876"
+        "after_tree": "172050dcbb821560244901a86f37cee654d31a78"
       },
       {
         "id": "attention-feedback-performance",
         "path": "backends/patches/polystrata-attention-feedback-performance.patch",
-        "sha256": "82674ebaf7862d1e77008799afe2c1756c4ea0922a3eefa91d0c13c73f310f9c",
+        "sha256": "555d65c0a127a76d333249a47addd8dda5f6623a70e880646bb8b372c57f9f78",
         "requires": [
           "kvmem"
         ],
-        "after_tree": "fe6fbb1214c2760284e407ead3180691625ceb55"
+        "after_tree": "d0801a699e55782e10fe2d7b5601cefdcb5c91e2"
       },
       {
         "id": "elastic-workspace",
         "path": "backends/patches/polystrata-elastic-workspace.patch",
-        "sha256": "75617931e5eacd83dc2a73ba416427e1ac6f62f9c45a9002fc15c99041eda713",
+        "sha256": "49fd1e4ebf9fb835061d689536fd82b6de9308f52d4f26d161cdf460801bbf87",
         "requires": [
           "attention-feedback-performance"
         ],
-        "after_tree": "68d0a7fd8913ab68a2051761be019e85a060281a"
+        "after_tree": "742d11dbbb6aeab7cdf32d1d9ced14f6893cd17f"
       },
       {
         "id": "elastic-kv-reclaim",
         "path": "backends/patches/polystrata-elastic-kv-reclaim.patch",
-        "sha256": "5c92dfd0fff687cfa9b17cb68e7b749fa811cfa9029aaf4397b19f741150d69f",
+        "sha256": "4dacdf40a94f2c35c23956edfb6a86ae431655409c206174440ffc61ca559ad0",
         "requires": [
           "elastic-workspace"
         ],
-        "after_tree": "c572871ff7a927ae24e7e8fafa7f759ba0260a18"
+        "after_tree": "a457893043100c32c86370b6843e570328141489"
       },
       {
         "id": "elastic-headroom",
         "path": "backends/patches/polystrata-elastic-headroom.patch",
-        "sha256": "af77035551336dc16aeefb37f73ee0a15eec459fa6dac45001924cd654280cd8",
+        "sha256": "3497715db79036ecb1af1a0be3a3d9f972062fb47ecfd3ab402c92e6ab72d093",
         "requires": [
           "elastic-kv-reclaim"
         ],
-        "after_tree": "cb8bb6b6180af946861647b1c741fdfeb6f3e426"
+        "after_tree": "8ae4e92a511b7172e629ce64ddab88d2ea0b9a59"
       },
       {
         "id": "elastic-mtp",
         "path": "backends/patches/polystrata-elastic-mtp.patch",
-        "sha256": "638bb375b158288677a87ea77fc5dbab3ae1e03cc08dd17ba041c31b82f8c768",
+        "sha256": "e98e3730eec79a9ca35996120ff63607c276f4ca1feb8cdbd9df58a347759f02",
         "requires": [
           "elastic-headroom"
         ],
-        "after_tree": "fd6ff1c7c8c9f1f7052be8b86c2a795a9bfd54bc"
+        "after_tree": "2975889f3d5ce1ecaa8e367a2809ee6d41f3d63e"
       },
       {
         "id": "block-tokens",
         "path": "backends/patches/polystrata-block-tokens.patch",
-        "sha256": "e8abaa77c267682d340d29b3a1a2f9b59e5622f8f17e5b46cc9f1cb22c571f63",
+        "sha256": "ca54c760eba1d5ec4b120f0e08e4f95078913103e745d5ad97653674cd76b850",
         "requires": [
           "elastic-mtp"
         ],
-        "after_tree": "f20cef6c6da7fe77c5225c4cb836421a28f7bcde"
+        "after_tree": "36a0b4f8d5a4da46f8bf9bdff4442a581e1e00ca"
       },
       {
         "id": "hip-kvmem",
         "path": "backends/patches/polystrata-hip-kvmem.patch",
-        "sha256": "fecfb84bd63a6a6c5a9f7804b0320bb210a74f73ecf4b7ab781663e7b256c01b",
+        "sha256": "367ee4b32319bd4d684e017ff7b7d7722cbfbb55d8c4ae9acb7fce68760216dd",
         "requires": [
           "block-tokens"
         ],
-        "after_tree": "319f4881324105bb0712ed548f5574b1edcb76d6"
+        "after_tree": "db3403b0543766f59a0682018fb9ac37a12abe80"
       },
       {
         "id": "serve-log-close",
         "path": "backends/patches/polystrata-serve-log-close.patch",
-        "sha256": "ecc08fbe0c8c185c24f970f1c3bd833ed39d29f13ed396b50ec67556a3a9ca9d",
+        "sha256": "71539bb82dd9d8b7731987bb7a027bba978dff249fc52c05e43b02517c4d6d60",
         "requires": [
           "block-tokens"
         ],
-        "after_tree": "0b703ecc9e45d8356beeca1aae431399935baa00"
+        "after_tree": "e9b9d0df7d6b29979956824a06a82ae2bf4137ac"
       },
       {
         "id": "token-alignment",
         "path": "backends/patches/polystrata-token-alignment.patch",
-        "sha256": "54161d107290377dc50d8ff19bad816ab6622174107be88fb7b3a661bcd342c0",
+        "sha256": "e75babd85bd4d486f5a186346d9d8e56bea782b64c873a3b282f71fe0133a19a",
         "requires": [
           "serve-log-close"
         ],
-        "after_tree": "e912079f8bc213691be8daba119fc56d1a55d833",
+        "after_tree": "21a8568805279e4eee1b8243fce0c5dbb27a026a",
         "source": "Normalize startup token budgets before capacity checks; report effective values"
       },
       {
         "id": "kolibri-test-link",
         "path": "backends/patches/polystrata-kolibri-test-link.patch",
-        "sha256": "d76562d34d5c17459c2784ff9e57b4939f09b22bff0e0abdcc1bbaeafe620a74",
+        "sha256": "988b5def61e4d3982bb220daf5ce89bdecb7c17c896275584c58f8d16ccb5332",
         "requires": [
           "token-alignment"
         ],
-        "after_tree": "e656a0c80a62327627ea5eab50c0da151f7612c4"
+        "after_tree": "eb0e0b95064ed86bec236fb3354f4c56beb75871"
       },
       {
         "id": "kvmem-image-query-span",
         "path": "backends/patches/polystrata-kvmem-image-query-span.patch",
-        "sha256": "82f1ab310a4aa9bcf7149d5a2ab0ca22ac5445586ac76f7cb8d87d9ca7ed61f2",
+        "sha256": "0ff8ff9a57f6ace7ac67956d332926f0e8e5574d8f630cbcb2e3cd8a462f364d",
         "requires": [
           "kolibri-test-link"
         ],
-        "after_tree": "e2a8c1de21c0060b3dcfa71e59f5df6983123b64"
+        "after_tree": "4c92dce9ab9ce6db3a754320fb5fefe7a6339816"
       },
       {
         "id": "monitor-image-input",
         "path": "backends/patches/polystrata-monitor-image-input.patch",
-        "sha256": "302a7eb75c0e63f874528ff96dfd0ae5ee9e1c1c04c8eef989d6188692db6ec7",
+        "sha256": "80c081d8bd5847b9a8307dcae1f370bacf1d32819383bc07465b2b136ff199be",
         "requires": [
           "kvmem-image-query-span"
         ],
-        "after_tree": "57a642c231acd590089bd0cf8ca4c1e6f25b34a9"
+        "after_tree": "e5d1836b067c03b28d65dff113b8cce569192546"
+      },
+      {
+        "id": "kvmem-follow-up",
+        "path": "backends/patches/polystrata-kvmem-follow-up.patch",
+        "requires": [
+          "monitor-image-input"
+        ],
+        "sha256": "f9e8354af6bd3eba5606cfc3d3f565a45b31c615786bd48b1686df853fae34c9",
+        "after_tree": "8289ecbc35231e9634874bd3d4b80dca62d8e92e"
       }
     ]
   }

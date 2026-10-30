@@ -1,8 +1,8 @@
 diff --git a/src/poly/engine.cpp b/src/poly/engine.cpp
-index 22f88793..bdb62cca 100644
+index df417f82..83f0a213 100644
 --- a/src/poly/engine.cpp
 +++ b/src/poly/engine.cpp
-@@ -1963,6 +1963,9 @@ void Engine::follow(int written) {
+@@ -1981,6 +1981,9 @@ void Engine::follow(int written) {
  
  void Engine::load(const Options& o) {
      opt_ = o;
@@ -61,10 +61,10 @@ index f3d526cf..e1a4f12f 100644
  };
  
 diff --git a/src/poly/main.cpp b/src/poly/main.cpp
-index 735a1e86..a4920151 100644
+index 9bd0b50a..73680311 100644
 --- a/src/poly/main.cpp
 +++ b/src/poly/main.cpp
-@@ -1337,7 +1337,7 @@ void usage() {
+@@ -1339,7 +1339,7 @@ void usage() {
          "KVMem (opt-in, qwen35moe, single CUDA GPU, F16/Q8 KV, native batch 1..8):\n"
          "  --kvmem-budget B --kvmem-gen-reserve R --kvmem-host-mib H\n"
          "  --kvmem-sink-tokens N --kvmem-recent-tokens N (alignment to --kvmem-block-tokens)\n"

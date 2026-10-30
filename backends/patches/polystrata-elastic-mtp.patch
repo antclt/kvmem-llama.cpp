@@ -1,8 +1,8 @@
 diff --git a/docs/BACKENDS.md b/docs/BACKENDS.md
-index a49dfd8e..fd7946ba 100644
+index a7800b49..2a268d7b 100644
 --- a/docs/BACKENDS.md
 +++ b/docs/BACKENDS.md
-@@ -150,12 +150,24 @@ KV, recurrent state, persistent KVMem statistics and attention score scratch sta
+@@ -158,12 +158,24 @@ KV, recurrent state, persistent KVMem statistics and attention score scratch sta
  evaluation or pipelined prompt read, it reclaims expert pages and restores the full workspace before launching
  dependent kernels. Cache growth is limited to 64 MiB per 16 decode calls and retains the configured VRAM reserve.
  
@@ -29,10 +29,10 @@ index a49dfd8e..fd7946ba 100644
  across map cycles, full versus narrow workspace logits with fixed expert placement, partial-admission rollback,
  real cache growth/reclaim, Pressure and bounded Query/replay. These are functional tests, not recall-quality tests.
 diff --git a/src/poly/engine.cpp b/src/poly/engine.cpp
-index 0bed5f65..22f88793 100644
+index 74a258ee..df417f82 100644
 --- a/src/poly/engine.cpp
 +++ b/src/poly/engine.cpp
-@@ -2168,7 +2168,7 @@ void Engine::shared_scratch() {
+@@ -2197,7 +2197,7 @@ void Engine::shared_scratch() {
      const size_t ff = n * std::max({n_ff_, n_ff_shexp_, 2 * n_ff_exp_});
      // the draft block works in it too (draft_input()); read() keeps two calls' rows in it
      r_ = elastic_fbuf(std::max(streams(), draft_ ? 3 : 1) * (size_t) (read_rows_ > rows_ ? 2 : 1) * rows_ * n_embd_,
@@ -41,7 +41,7 @@ index 0bed5f65..22f88793 100644
      cur_ = elastic_fbuf(e, size_t(kStageRows) * n_embd_);
      xn_ = elastic_fbuf(e, size_t(kStageRows) * n_embd_);
      ao_ = elastic_fbuf(e, size_t(kStageRows) * n_embd_);
-@@ -2191,15 +2191,19 @@ void Engine::shared_scratch() {
+@@ -2220,15 +2220,19 @@ void Engine::shared_scratch() {
  
  // The sequence's state, the caches and every buffer, once the weights are known.
  void Engine::alloc() {
@@ -65,7 +65,7 @@ index 0bed5f65..22f88793 100644
      // --dump-layers prints one token's stages
      rows_ = opt_.dump ? 1 : std::min(opt_.prompt_batch, opt_.max_context);
      const size_t most = std::min<size_t>(kReadBytes / ((size_t) streams() * n_embd_ * sizeof(float)), opt_.max_context);
-@@ -3106,9 +3110,14 @@ void Engine::run(const int32_t* tokens, int n) {
+@@ -3190,9 +3194,14 @@ void Engine::run(const int32_t* tokens, int n) {
      if (n < 1 || n > rows_) throw std::logic_error("eval takes 1 to max_rows() tokens");
      if (pos_ + n > opt_.max_context)
          throw std::runtime_error("the context is full (" + std::to_string(opt_.max_context) + " tokens)");
@@ -82,7 +82,7 @@ index 0bed5f65..22f88793 100644
      if (std::getenv("STRATA_ELASTIC_TRACE") && n == 1 && pos_ % 128 == 0) elastic_report(elastic_enabled_ ? "sample" : "static");
  #ifdef STRATA_KVMEM
      if(memory_ && !memory_drafting_) memory_capture_call(pos_,n);
-@@ -4009,6 +4018,7 @@ void Engine::keep(int n) {
+@@ -4095,6 +4104,7 @@ void Engine::keep(int n) {
      if (memory_) {
          commit_memory_window(n);
          memory_window_ = false;
@@ -90,7 +90,7 @@ index 0bed5f65..22f88793 100644
      }
      } catch (...) {
          if (memory_) { memory_window_ = false; memory_->invalidate(); }
-@@ -4103,7 +4113,9 @@ int32_t Engine::draft(int32_t token, int i, float* prob) {
+@@ -4223,7 +4233,9 @@ int32_t Engine::draft(int32_t token, int i, float* prob) {
      }
      try {
  #endif

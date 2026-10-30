@@ -1,5 +1,5 @@
 diff --git a/serve/kvmem_monitor.py b/serve/kvmem_monitor.py
-index 0406723ca313f9ad5b7083691f3f7740c18694a2..792376bad0382483f8ea6c64381bc9dd7f2dfb8a 100644
+index 0406723c..792376ba 100644
 --- a/serve/kvmem_monitor.py
 +++ b/serve/kvmem_monitor.py
 @@ -4,6 +4,29 @@ import os
@@ -61,7 +61,7 @@ index 0406723ca313f9ad5b7083691f3f7740c18694a2..792376bad0382483f8ea6c64381bc9dd
      for row in reversed(history):
          started = row['time']
 diff --git a/serve/server.py b/serve/server.py
-index 66d728e73c62929213913c78777bc6b14cc903d8..564f99e27c3bfa388b550d0e5a30f4bb560d7cdd 100644
+index 2d88a475..d48b7d36 100644
 --- a/serve/server.py
 +++ b/serve/server.py
 @@ -4483,6 +4483,11 @@ class Service:
@@ -76,7 +76,7 @@ index 66d728e73c62929213913c78777bc6b14cc903d8..564f99e27c3bfa388b550d0e5a30f4bb
          """-> (ids, thinking, max_new). An unset or non-positive max_new (some clients send -1) means "unlimited":
          the rest of the context.  `force` (forced_call): without thinking the reply starts with it, so it ends the
          prompt; with thinking, Service.run writes it once the thinking is over."""
-@@ -4929,8 +4934,9 @@ class Service:
+@@ -4936,8 +4941,9 @@ class Service:
                                    generated=0, started=time.time(), first_token=None, tool=None, tail="",
                                    max_tokens=max_new, reasoning_recoveries=0, thinking_budget=budget)
                          if getattr(self, 'kvmem_monitor_gpu_uuid', None):

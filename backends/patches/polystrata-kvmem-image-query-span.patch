@@ -1,5 +1,5 @@
 diff --git a/serve/server.py b/serve/server.py
-index 241ac7c2..66d728e7 100644
+index 58635431..2d88a475 100644
 --- a/serve/server.py
 +++ b/serve/server.py
 @@ -4545,6 +4545,9 @@ class Service:

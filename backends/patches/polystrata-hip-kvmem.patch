@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3335fcbbb0a09f6ee1c4484193a1c09f294bd5be..aece86ea81ef00e228c7531b3a3710bf2e64cc3f 100644
+index 3335fcbb..aece86ea 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2116,15 +2116,32 @@ if(STRATA_NATIVE_EXPERTS AND (STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP) AND NOT S
