@@ -1,20 +1,41 @@
+diff --git a/src/poly/kvmem_history.hpp b/src/poly/kvmem_history.hpp
+index 920e1c2..d804cff 100644
+--- a/src/poly/kvmem_history.hpp
++++ b/src/poly/kvmem_history.hpp
+@@ -37,6 +37,15 @@ public:
+         while (common < std::min(ids.size(), tokens_.size()) && ids[common] == tokens_[common]) ++common;
+         return common;
+     }
++    // Only an append to the complete, still-live native prefix can bypass a
++    // repeated Query. A matching old prompt alone also admits edited answers,
++    // which can restore a checkpoint from before that Query was evaluated.
++    bool extends_live_prefix(const std::vector<int32_t>& ids, const kvmem::MemoryStamp& stamp,
++                             size_t completed_prompt) const {
++        return completed_prompt > 0 && tokens_.size() >= completed_prompt && ids.size() > tokens_.size()
++            && stamp.valid && stamp.session == session_ && stamp.frontier == tokens_.size()
++            && observed_prefix(ids) == tokens_.size();
++    }
+     void append(const int32_t* ids, size_t count) { tokens_.insert(tokens_.end(), ids, ids + count); }
+     void truncate(int64_t at) {
+         if (at < 0 || uint64_t(at) > tokens_.size()) throw std::logic_error("KVMem history truncation exceeds its prefix");
 diff --git a/src/poly/main.cpp b/src/poly/main.cpp
-index 73680311..e6ce8fd3 100644
+index 7368031..ef41357 100644
 --- a/src/poly/main.cpp
 +++ b/src/poly/main.cpp
-@@ -340,6 +340,11 @@ struct Session {
+@@ -340,6 +340,12 @@ struct Session {
  #ifdef STRATA_KVMEM
      strata::poly::KvmemHistory managed_history;
      strata::poly::KvmemSessions managed_sessions;
 +    // the previous managed request: its bounded Query, the prompt length it covered and the session that ran it.
-+    // A request with the same span whose prompt extends that one (the thinking-budget wrap) is the same turn:
-+    // its KV and Query capture are still current, so it must not be read again.
++    // The thinking-budget wrap can append to this turn's complete live prefix.
++    // Its accepted KV view remains usable with resident-only Pressure; a new
++    // request still clears Query capture and does not authorize cold recall.
 +    int64_t prev_query_begin = -1, prev_query_end = -1, prev_query_tokens = 0;
 +    kvmem::SessionIdentity prev_session{};
  #endif
      Sampler sampler;
      std::mt19937_64 rng{std::random_device{}()};
-@@ -401,6 +406,7 @@ struct Session {
+@@ -401,6 +407,7 @@ struct Session {
          bool query_replayed = false;
          bool full_prefix = false;
          bool has_query = false;
@@ -22,36 +43,108 @@ index 73680311..e6ce8fd3 100644
          int64_t reuse_anchor = 0;
          int64_t history_bound = 0;
          bool anchor_saved = false;
-@@ -426,6 +432,13 @@ struct Session {
+@@ -426,6 +433,13 @@ struct Session {
                  if(query_begin>image.at && query_begin<image.at+image.n)query_begin=image.at+image.n;
              if(has_query && query_begin>=query_end)throw std::runtime_error("bounded Query has no text after its image group");
              history_bound=has_query?query_begin:n;
-+            follow_up = prev_query_tokens > 0 && has_query
++            follow_up = history_reuse && prev_query_tokens > 0 && has_query
 +                && query_begin == prev_query_begin && query_end == prev_query_end
-+                && int64_t(ids.size()) > prev_query_tokens
 +                && engine.memory().stamp().valid && engine.memory().stamp().session == prev_session
-+                && managed_history.size() >= size_t(prev_query_tokens)
-+                && managed_history.observed_prefix(ids) >= size_t(prev_query_tokens);
-+            if (follow_up) history_bound = n;   // choose() may then resume the whole live prefix
++                && managed_history.extends_live_prefix(ids, engine.memory().stamp(), size_t(prev_query_tokens));
++            // Bound idle candidates at the live frontier too: the active exact
++            // prefix wins ties and cannot be replaced by a longer parked branch.
++            if (follow_up) history_bound = int64_t(managed_history.size());
              engine.memory().admit(uint64_t(n) + uint64_t(max_new));
              if (!history_reuse) engine.reset();
          }
-@@ -464,6 +477,18 @@ struct Session {
+@@ -464,6 +478,12 @@ struct Session {
              const int workspace=engine.memory_options().mtp?engine.max_window():0;
              full_prefix=n+workspace<=engine.memory().capacity() && engine.memory().complete_prefix();
              query_replayed=!has_query || full_prefix;
-+            if (follow_up && r.resume > 0) {
-+                // the same turn going on: the captured Query is current, so nothing is re-read for it
++            if (follow_up && r.resume == history_bound && engine.memory().stamp().session == prev_session) {
++                // Continue the accepted live view, without recapturing or recalling an old Query.
 +                query_replayed = true;
 +                std::fprintf(stderr,"KVMEM_QUERY follow_up=1 resume=%lld query_begin=%lld query_end=%lld\n",
 +                    (long long)r.resume,(long long)query_begin,(long long)query_end);
 +            }
-+            if (has_query) {
-+                prev_query_begin=query_begin; prev_query_end=query_end; prev_query_tokens=n;
-+                prev_session=engine.memory().stamp().session;
-+            } else {
-+                prev_query_tokens=0;
-+            }
              if (!has_query) std::fprintf(stderr,"KVMEM_QUERY source=tool_or_continuation recall=0\n");
              else if (full_prefix) std::fprintf(stderr,"KVMEM_QUERY source=resident recall=0 query_begin=%lld query_end=%lld\n",
                  (long long)query_begin,(long long)query_end);
+@@ -602,6 +622,11 @@ struct Session {
+ #ifdef STRATA_KVMEM
+         if (managed) {
+             engine.memory().finish_query();
++            // Publish continuation eligibility only after the prompt and Query
++            // completed successfully. Cancelled/failed prefixes are not a turn.
++            prev_query_tokens = has_query ? n : 0;
++            prev_query_begin = query_begin; prev_query_end = query_end;
++            prev_session = engine.memory().stamp().session;
+             // Retrieval/compaction is part of first-token latency too. Native
+             // mode keeps its original timer; do not hide this managed work in
+             // the gap between prompt and decode accounting.
+diff --git a/tools/poly_kvmem_history_test.cpp b/tools/poly_kvmem_history_test.cpp
+index e837c72..f7a85d7 100644
+--- a/tools/poly_kvmem_history_test.cpp
++++ b/tools/poly_kvmem_history_test.cpp
+@@ -28,6 +28,23 @@ int main() {
+         next.push_back(999);
+         auto live = history.choose(next, 512, stamp);
+         check(live.at == 512 && !live.checkpoint, "evaluated live prefix was not reused");
++        check(history.extends_live_prefix(next, stamp, 350), "thinking wrap lost the complete live prefix");
++        check(!history.extends_live_prefix(ids, stamp, 350), "identical prompt bypassed Query recapture");
++        auto edited_answer = next;
++        edited_answer[400] = 42;
++        // The old follow-up predicate matched the 350-token original prompt,
++        // then choose() restored frontier 256, before Query [300,350).
++        check(history.observed_prefix(edited_answer) >= 350 &&
++              history.choose(edited_answer, int64_t(edited_answer.size()), stamp).at == 256,
++              "edited-answer regression fixture no longer restores the pre-Query checkpoint");
++        check(!history.extends_live_prefix(edited_answer, stamp, 350),
++              "edited answer skipped Query after restoring a pre-Query checkpoint");
++        auto shortened = ids; shortened.resize(450);
++        check(!history.extends_live_prefix(shortened, stamp, 350), "shortened answer reused the live suffix");
++        check(!history.extends_live_prefix(next, stamp, 513), "incomplete prompt was eligible for continuation");
++        check(!history.extends_live_prefix(next, stamp, 0), "request without a completed Query was eligible");
++        auto stale_frontier = stamp; --stale_frontier.frontier;
++        check(!history.extends_live_prefix(next, stale_frontier, 350), "stale native frontier was reused");
+         check(history.choose(ids, 512, stamp).at == 511, "last token's logits must be recomputed");
+         check(history.choose(ids, 300, stamp).at == 256, "query capture was skipped by reuse");
+         check(history.choose(ids, 0, stamp).at == 0, "whole-input query must be recaptured");
+@@ -39,9 +56,11 @@ int main() {
+         check(history.choose(fork, 450, stamp).at == 256, "fork did not choose a safe earlier mark");
+         auto invalid = stamp;
+         invalid.valid = false;
++        check(!history.extends_live_prefix(next, invalid, 350), "invalid continuation state was reused");
+         check(history.choose(next, 512, invalid).at == 0, "invalid native state was reused");
+         invalid = stamp;
+         ++invalid.session.incarnation;
++        check(!history.extends_live_prefix(next, invalid, 350), "continuation crossed a session incarnation");
+         check(history.choose(next, 512, invalid).at == 0, "different incarnation was reused");
+         history.truncate(256);
+         check(history.marks() == 1, "fork retained a suffix checkpoint");
+diff --git a/tools/poly_kvmem_sessions_test.cpp b/tools/poly_kvmem_sessions_test.cpp
+index 4bfdc22..75aa083 100644
+--- a/tools/poly_kvmem_sessions_test.cpp
++++ b/tools/poly_kvmem_sessions_test.cpp
+@@ -47,6 +47,21 @@ int main() {
+         check(cache.parked() == 2 && cache.evictions() == 2, "retained slot limit was not enforced");
+         check(cache.choose(prompt(3000),128).resume.at == 0, "slot pressure did not evict the least recently used source");
+         check(cache.choose(prompt(1000),0).resume.at == 0, "query scope was bypassed by an idle hit");
++        // A same-turn append must not jump to a longer parked branch merely
++        // because it shares the live turn's tokens. The live frontier bounds
++        // every candidate, and resume() prefers the active owner on ties.
++        KvmemHistory active;
++        kvmem::MemoryStamp live_stamp{true,{77,1},1,1,64,1};
++        active.bind(live_stamp);
++        auto continued = prompt(4000);
++        active.append(continued.data(),64);
++        check(active.extends_live_prefix(continued, live_stamp, 32), "live continuation fixture is invalid");
++        check(cache.choose(continued, int64_t(continued.size())).resume.at == 128,
++              "parked-branch regression fixture lost its longer candidate");
++        const auto bounded_idle = cache.choose(continued, int64_t(active.size()));
++        const auto live = active.choose(continued, int64_t(active.size()), live_stamp);
++        check(live.at == 64 && !live.checkpoint && live.at >= bounded_idle.resume.at,
++              "a continuation changed owners to a longer parked branch");
+         auto invalid = entry(shared,5,5000);
+         ++invalid->memory.identity.stamp.session.incarnation;
+         cache.save(std::move(invalid));
