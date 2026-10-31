@@ -49,5 +49,11 @@ function New-KVMemProcessInfo([string]$Binary, [string[]]$Arguments) {
     $info.FileName = $Binary
     $info.UseShellExecute = $false
     $info.Arguments = (($Arguments | ForEach-Object { ConvertTo-KVMemArgument $_ }) -join ' ')
+    # Standalone launch scripts also use the unified package's shared CUDA DLLs.
+    # This affects only the child process; no machine/user PATH is changed.
+    $cudaRuntime = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../runtime/cuda'))
+    if (Test-Path -LiteralPath $cudaRuntime -PathType Container) {
+        $info.EnvironmentVariables['PATH'] = $cudaRuntime + ';' + $info.EnvironmentVariables['PATH']
+    }
     return $info
 }

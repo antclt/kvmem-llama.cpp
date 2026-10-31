@@ -44,6 +44,7 @@
     "所选请求统计": "Selected request metrics", "生成速度": "Decode speed",
     "实时速度": "Live speed", "本轮平均": "Request mean",
     "实时 · {0}s": "Live · {0}s",
+    "预填充中 · 累计平均 · {0}s": "Prefilling · Cumulative mean · {0}s",
     "引擎区间吞吐，包含同期所有请求；本轮平均仅统计所选请求。": "Engine throughput over the reporting interval, including concurrent requests; request mean covers only the selected request.",
     "平均生成 tok/s": "Mean decode tok/s",
     "平均速度不含预填充，包含思考 token": "Mean excludes prefill and includes reasoning tokens",

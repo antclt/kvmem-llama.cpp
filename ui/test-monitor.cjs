@@ -278,8 +278,53 @@ if (process.env.MONITOR_FIXTURE_ONLY) {
     fixtureScenario = {backend:'ninfer',logFailure:true};
     await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '—');
     assert.equal(await page.locator('[data-value="decode-mean"]').textContent(),'8.0');
+    // Prefill uses completed new work, excluding a large reused prefix. Its
+    // native clock updates per chunk; final timing replaces it at decode start.
+    const prefillRow={...record(),id:'prefill-progress',status:'reading',generated_tokens:0,
+      prompt_tokens:16384,cached_tokens:8192,prompt_processed_tokens:9216,
+      prefill_elapsed_ms:512,prefill_tps:null,prefill_ms:null,ttft_ms:null};
+    const expectPrefill = value => page.waitForFunction(value =>
+      document.querySelector('[data-value="prefill"]').textContent === value, value);
+    fixtureScenario={backend:'ninfer',active:[prefillRow]};
+    await expectPrefill('2,000');
+    assert.match(await page.locator('[data-value="prefill-tokens"]').textContent(),/新算 1,024 · 复用 8,192/);
+    assert.equal(await page.locator('[data-value="prefill-times"]').textContent(),'预填充中 · 累计平均 · 0.51s');
+    fixtureScenario.active=[{...prefillRow,prompt_processed_tokens:11264,prefill_elapsed_ms:2048}];
+    await expectPrefill('1,500');
+    await page.locator('[data-requests] button').first().click();
+    assert.match(await page.locator('[data-detail-body]').textContent(),/预填充 1,500.0 tok\/s/);
+    assert.match(await page.locator('[data-detail-body]').textContent(),/累计平均 · 2.05s/);
+    await page.locator('[data-close]').click();
+    await page.locator('[data-language-select]').selectOption('en');
+    assert.match(await page.locator('[data-value="prefill-times"]').textContent(),/Prefilling · Cumulative mean/);
+    await page.locator('[data-language-select]').selectOption('zh-CN');
+    for(const missing of [{prefill_elapsed_ms:0},{prefill_elapsed_ms:null},{cached_tokens:null},
+      {prompt_processed_tokens:8191},{prompt_processed_tokens:16385}]) {
+      fixtureScenario.active=[{...prefillRow,...missing,prefill_tps:9999}];
+      // A new request id also checks that no previous request's rate is reused.
+      fixtureScenario.active[0].id='invalid-'+JSON.stringify(missing);
+      await page.waitForFunction(id => document.querySelector('[data-value="request-scope"]').textContent.includes(id),fixtureScenario.active[0].id);
+      await expectPrefill('—');
+    }
+    fixtureScenario.active=[{...prefillRow,prompt_processed_tokens:8192}];
+    await expectPrefill('0');
+    fixtureScenario.active=[prefillRow,{...prefillRow,id:'other-prefill',prompt_processed_tokens:8704,prefill_elapsed_ms:1024}];
+    await page.locator('[data-request-select] option[value="other-prefill"]').waitFor({state:'attached'});
+    await page.selectOption('[data-request-select]','other-prefill');
+    await expectPrefill('500');
+    await page.selectOption('[data-request-select]','prefill-progress');
+    await expectPrefill('2,000');
+    const finalPrefill={...prefillRow,status:'generating',generated_tokens:1,prefill_tps:1234,prefill_ms:6638,ttft_ms:6638};
+    fixtureScenario.active=[finalPrefill];
+    await expectPrefill('1,234');
+    assert.equal(await page.locator('[data-value="prefill-times"]').textContent(),'预填充 6.64s · 首 token 6.64s');
+    recent=[{...finalPrefill,status:'completed'}];fixtureScenario.active=[];
+    await page.waitForFunction(() => document.querySelector('[data-value="request-scope"]').textContent.includes('历史请求'));
+    await expectPrefill('1,234');
+    await page.selectOption('[data-request-select]','');recent=[];
     fixtureScenario = {backend:'polystrata'};
     await page.waitForFunction(() => document.querySelector('[data-value="decode"]').textContent === '8.0');
+    await expectPrefill('50');
     assert.equal(await page.locator('[data-backend-metrics]').isVisible(),false);
     recent=[{...record(),id:'expert-history',status:'completed',expert_hit_rate:.75,drafts_offered:40,drafts_accepted:30,decode_ms:2500}];
     await page.waitForFunction(()=>document.querySelector('[data-requests]')?.textContent.includes('已完成'));

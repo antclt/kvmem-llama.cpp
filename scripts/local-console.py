@@ -1483,6 +1483,11 @@ def main():
     parser.add_argument('--language', choices=('zh-CN', 'en'), default='zh-CN',
                         help='startup message language; en also opens the UI in English')
     args = parser.parse_args()
+    # A unified Windows package stores byte-identical CUDA DLLs once. The
+    # console, capability probes and owned worker trees inherit this local path.
+    cuda_runtime = args.backend_root.resolve() / 'runtime/cuda'
+    if os.name == 'nt' and cuda_runtime.is_dir():
+        os.environ['PATH'] = str(cuda_runtime) + os.pathsep + os.environ.get('PATH', '')
     control = Controller(args.backend_root, args.state_dir, args.port, args.prefer_bundled_worker)
     if args.profiles_root:
         control.profiles_root = args.profiles_root.resolve()
