@@ -58,6 +58,26 @@
     return statuses[displayState(row)];
   }
   function meanSpeed(row) { return row?.decode_tps_mean ?? row?.decode_tps; }
+  function prefillMetrics(snapshot, row, active) {
+    const live = snapshot?.backend === 'ninfer' && active && row?.status === 'reading';
+    if (!live) return {live: false, rate: row?.prefill_tps, ms: row?.prefill_ms,
+      tokens: row?.prompt_new_tokens ?? (number(row?.prompt_tokens) && number(row?.cached_tokens)
+        ? Math.max(0, row.prompt_tokens - row.cached_tokens) : null)};
+    // NInfer's completed prompt frontier includes the reused prefix. Only newly
+    // computed tokens belong in the rate, using the same native progress clock.
+    const processed = row.prompt_processed_tokens, cached = row.cached_tokens;
+    const valid = number(processed) && number(cached) && cached >= 0 && processed >= cached &&
+      (!number(row.prompt_tokens) || processed <= row.prompt_tokens);
+    const tokens = valid ? processed - cached : null;
+    const ms = number(row.prefill_elapsed_ms) && row.prefill_elapsed_ms >= 0 ? row.prefill_elapsed_ms : null;
+    const rate = number(tokens) && ms > 0 ? tokens / ms * 1000 : null;
+    return {live: true, rate: number(rate) ? rate : null, ms, tokens};
+  }
+  function prefillTimes(metrics, row) {
+    return metrics.live ? t("预填充中 · 累计平均 · {0}s", fmt(number(metrics.ms) ? metrics.ms / 1000 : null, 2))
+      : t("预填充 {0}s · 首 token {1}s", fmt(number(metrics.ms) ? metrics.ms / 1000 : null, 2),
+        fmt(number(row?.ttft_ms) ? row.ttft_ms / 1000 : null, 2));
+  }
   // NInfer's operational log reports engine throughput for the preceding interval.
   // The request's decode_tps is cumulative and must remain the request mean.
   function parseNinferThroughput(log) {
@@ -281,9 +301,10 @@
     if (!row) return;
     $("[data-detail-title]").textContent =
       t("请求 #{0} · {1}", row.id, requestStatus(row));
+    const prefill = prefillMetrics(state, row, state.active.some((r) => r.id === row.id));
     $("[data-detail-body]").textContent =
-      t("入口：{0}\n输入 {1} tokens · 复用 {2} · 输出 {3}\n预填充 {4} tok/s · 输入复用率 {5}%\n输出上限 {6} · 耗时 {7} 秒", row.endpoint, fmt(row.prompt_tokens), fmt(row.cached_tokens), fmt(row.generated_tokens), fmt(row.prefill_tps, 1), fmt(ratio(row.cached_tokens, row.prompt_tokens), 1), fmt(row.limit), fmt(row.elapsed_ms / 1000, 2)) + "\n" +
-      t("预填充 {0}s · 首 token {1}s",fmt(number(row.prefill_ms)?row.prefill_ms/1000:null,2),fmt(number(row.ttft_ms)?row.ttft_ms/1000:null,2));
+      t("入口：{0}\n输入 {1} tokens · 复用 {2} · 输出 {3}\n预填充 {4} tok/s · 输入复用率 {5}%\n输出上限 {6} · 耗时 {7} 秒", row.endpoint, fmt(row.prompt_tokens), fmt(row.cached_tokens), fmt(row.generated_tokens), fmt(prefill.rate, 1), fmt(ratio(row.cached_tokens, row.prompt_tokens), 1), fmt(row.limit), fmt(row.elapsed_ms / 1000, 2)) + "\n" +
+      prefillTimes(prefill, row);
     const lines = [];
     if (number(row.decode_ms)) lines.push(t("解码耗时 {0}s", fmt(row.decode_ms / 1000, 2)));
     if (number(row.drafts_offered) && number(row.drafts_accepted))
@@ -849,10 +870,10 @@
       ? t("引擎区间吞吐，包含同期所有请求；本轮平均仅统计所选请求。") : "";
     $("[data-live-speed]").hidden = !liveRequest;
     text("decode-mean", fmt(meanSpeed(r), 1));
-    text("prefill", fmt(r?.prefill_tps, 0));
-    const fresh = r?.prompt_new_tokens ?? (number(r?.prompt_tokens)&&number(r?.cached_tokens)?Math.max(0,r.prompt_tokens-r.cached_tokens):null);
-    text("prefill-tokens", t("新算 {0} · 复用 {1} tokens", fmt(fresh), fmt(r?.cached_tokens)));
-    text("prefill-times", t("预填充 {0}s · 首 token {1}s", fmt(number(r?.prefill_ms)?r.prefill_ms/1000:null,2), fmt(number(r?.ttft_ms)?r.ttft_ms/1000:null,2)));
+    const prefill = prefillMetrics(state, r, liveRequest);
+    text("prefill", fmt(prefill.rate, 0));
+    text("prefill-tokens", t("新算 {0} · 复用 {1} tokens", fmt(prefill.tokens), fmt(r?.cached_tokens)));
+    text("prefill-times", prefillTimes(prefill, r));
     const queued = state.queued_count ?? (state.backend === "ninfer" ? stats?.queue?.depth
       : state.backend === "llamacpp" && !state.dropped_records ? state.active.filter(x => x.status === "queued").length : null);
     const pending=number(queued)?fmt(queued):"—";
