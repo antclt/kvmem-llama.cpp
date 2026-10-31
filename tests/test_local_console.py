@@ -759,6 +759,7 @@ class ConsoleTests(unittest.TestCase):
             self.assertFalse(console.matching_console(port, console.ROOT, Path(self.tmp.name) / 'other-state'))
             self.assertFalse(console.matching_console(port, Path(self.tmp.name) / 'other-install', self.tmp.name))
             self.assertFalse(console.matching_console(port, console.ROOT, self.tmp.name, True))
+            self.assertFalse(console.matching_console(port, console.ROOT, self.tmp.name, host='0.0.0.0'))
             self.assertFalse(console.matching_console(port, console.ROOT, self.tmp.name,
                                                      profiles_root=Path(self.tmp.name) / 'other-profiles'))
             with patch.object(console.sys, 'argv', ['local-console.py', '--port', str(port),
@@ -806,6 +807,95 @@ class ConsoleTests(unittest.TestCase):
         for error in (EOFError, KeyboardInterrupt):
             with self.subTest(error=error), patch('builtins.input', side_effect=error), patch('builtins.print'):
                 self.assertIsNone(console.choose_console_port(18199))
+
+    def test_address_prompt_defaults_validation_and_cancel(self):
+        for language in ('zh-CN', 'en'):
+            with self.subTest(language=language), patch('builtins.input', side_effect=['', '']), patch('builtins.print'):
+                self.assertEqual(console.choose_console_address('127.0.0.1', 18199, language), ('127.0.0.1', 18199))
+            with patch('builtins.input', side_effect=['http://bad', '::1', '999.1.1.1', '224.0.0.1', '0.0.0.0', 'no', '0', '65536', '18201']), patch('builtins.print'):
+                self.assertEqual(console.choose_console_address('127.0.0.1', 18199, language), ('0.0.0.0', 18201))
+        with patch('builtins.input', side_effect=['localhost', '18198']), patch('builtins.print'):
+            self.assertEqual(console.choose_console_address('127.0.0.1', 18199), ('127.0.0.1', 18198))
+        for values in (['q'], ['', 'q'], [EOFError()], ['', KeyboardInterrupt()]):
+            with self.subTest(values=repr(values)), patch('builtins.input', side_effect=values), patch('builtins.print'):
+                self.assertIsNone(console.choose_console_address('127.0.0.1', 18199))
+
+    def test_address_retry_changes_bind_and_browser_without_changing_inference_host(self):
+        for host in ('0.0.0.0', '192.0.2.7'):
+            server = MagicMock(server_port=18198)
+            server.serve_forever.side_effect = KeyboardInterrupt
+            with self.subTest(host=host), patch.object(console.sys, 'argv', ['local-console.py', '--state-dir', self.tmp.name,
+                              '--open-browser', '--prompt-address']), \
+                 patch.object(console, 'Server', side_effect=[OSError('address unavailable'), server]) as factory, \
+                 patch.object(console, 'matching_console', return_value=False), \
+                 patch.object(console, 'choose_console_address', side_effect=[('192.0.2.8', 18199), (host, 18198)]), \
+                 patch.object(console, 'gpu_inventory', return_value=[]), \
+                 patch.object(console.threading, 'Thread') as thread, patch('builtins.print'):
+                console.main()
+            self.assertEqual([call.args[0] for call in factory.call_args_list], [('192.0.2.8', 18199), (host, 18198)])
+            expected = '127.0.0.1' if host == '0.0.0.0' else host
+            thread.assert_called_once_with(target=console.open_console_browser,
+                                           args=(f'http://{expected}:18198/monitor/',), daemon=True)
+            self.assertEqual(server.control.draft()['parameters']['ListenHost'], '127.0.0.1')
+            self.assertEqual(server.control.port, 18198)
+
+    def test_address_prompt_cancel_does_not_create_controller(self):
+        with patch.object(console.sys, 'argv', ['local-console.py', '--prompt-address']), \
+             patch.object(console, 'choose_console_address', return_value=None), \
+             patch.object(console, 'Controller') as controller, patch.object(console, 'Server') as server:
+            console.main()
+        controller.assert_not_called()
+        server.assert_not_called()
+
+    def test_lan_host_with_default_http_port_and_cross_site_rejection(self):
+        handler = object.__new__(console.Handler)
+        handler.connection = MagicMock()
+        handler.connection.getsockname.return_value = ('192.0.2.7', 80)
+        handler.server = SimpleNamespace(server_port=80, control=self.controller)
+        handler.reply = MagicMock()
+        for host in ('192.0.2.7', '192.0.2.7:80'):
+            for origin in ('http://192.0.2.7', 'http://192.0.2.7:80'):
+                handler.headers = {'Host': host, 'Origin': origin, 'X-KVMem-Token': self.controller.token}
+                self.assertTrue(handler.trusted(mutate=True))
+        for host, origin in [('192.0.2.7:81', 'http://192.0.2.7:81'),
+                             ('attacker.invalid', 'http://attacker.invalid'),
+                             ('192.0.2.7', 'http://attacker.invalid'),
+                             ('localhost', 'http://localhost')]:
+            handler.headers = {'Host': host, 'Origin': origin}
+            self.assertFalse(handler.trusted())
+
+    def test_nondefault_address_accepts_destination_host_but_rejects_other_origins(self):
+        # A second loopback address exercises non-default binding without exposing
+        # a test controller to the physical network.
+        server = console.Server(('127.0.0.2', 0), console.Handler)
+        server.control, server.gpus = self.controller, []
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        origin = f'http://127.0.0.2:{server.server_port}'
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        def request(path, headers=None, data=None):
+            req = urllib.request.Request(origin + path, headers=headers or {},
+                data=json.dumps(data).encode() if data is not None else None)
+            try:
+                with opener.open(req, timeout=2) as response:
+                    return response.status, response.read()
+            except urllib.error.HTTPError as error:
+                with error:
+                    return error.code, error.read()
+        try:
+            code, body = request('/api/launcher/info')
+            self.assertEqual(code, 200)
+            info = json.loads(body)
+            self.assertEqual(info['listen_host'], '127.0.0.2')
+            self.assertEqual(request('/monitor/')[0], 200)
+            headers = {'Content-Type': 'application/json', 'Origin': origin, 'X-KVMem-Token': info['token']}
+            self.assertEqual(request('/api/launcher/save', headers, self.config)[0], 200)
+            for bad in (dict(headers, Origin='http://attacker.invalid'), dict(headers, Host='attacker.invalid'),
+                        dict(headers, Host=f'192.0.2.7:{server.server_port}'),
+                        dict(headers, **{'X-KVMem-Token': 'wrong'})):
+                self.assertEqual(request('/api/launcher/save', bad, self.config)[0], 403)
+            self.assertTrue(console.matching_console(server.server_port, console.ROOT, self.tmp.name, host='127.0.0.2'))
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
 
     def test_port_retry_uses_new_port_for_readiness_and_browser(self):
         server = MagicMock(server_port=18197)

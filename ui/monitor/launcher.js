@@ -284,7 +284,7 @@
       const trimmed=name.value.trim();if(mode!=='delete'&&!trimmed)throw Error(tr('请填写模板名称','Enter a template name'));
       if(mode!=='delete'&&list.some(x=>x.id!==item?.id&&x.name.toLocaleLowerCase()===trimmed.toLocaleLowerCase()))throw Error(tr('已有同名模板，请使用其他名称','A template with this name already exists'));
       if(mode==='delete')list.splice(index,1);
-      else{const entry={id:item?.id||crypto.randomUUID(),name:trimmed,description:description.value.trim(),draft:mode==='rename'?item.draft:snapshot};if(index<0)list.push(entry);else list[index]=entry;}
+      else{const entry={id:item?.id||(crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('')),name:trimmed,description:description.value.trim(),draft:mode==='rename'?item.draft:snapshot};if(index<0)list.push(entry);else list[index]=entry;}
       writeTemplates(list);templateTab='mine';el.close();refreshTemplates();message(mode==='delete'?tr('模板已删除。','Template deleted.'):tr('模板已保存到“我的模板”。','Saved to My templates.'));
     }catch(e){error.textContent=e.message;}};
   }

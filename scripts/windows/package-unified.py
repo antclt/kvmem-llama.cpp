@@ -16,6 +16,7 @@ CUDA_DLLS = ('cublas64_13.dll', 'cublasLt64_13.dll')
 METADATA = {'BUILD-INFO.json', 'console-build.json', 'SHA256SUMS',
             'README.md', 'RELEASE-NOTES.md', 'START-HERE.txt', 'VERSION'}
 OVERLAYS = ('scripts/local-console.py', 'scripts/windows/native-process.ps1',
+            'scripts/windows/start-ui.ps1', 'START-HERE-CN.bat', 'START-HERE-EN.bat',
             'scripts/launcher/config.py', 'ui/monitor/launcher.js',
             'ui/monitor/monitor.js', 'ui/monitor/i18n.js')
 
@@ -162,7 +163,7 @@ def prepare(args):
 同一个控制台选择 NInfer（稠密模型）或 PolyStrata（MoE 模型）。
 
 1. 将完整 ZIP 解压到新目录。安装兼容 CUDA 13.2 的 NVIDIA 驱动和 Microsoft Visual C++ x64 运行库。
-2. 双击 START-HERE-CN.bat，选择后端、本地模型和显卡，检查配置后启动。
+2. 双击 START-HERE-CN.bat，确认控制台 IP 和端口（回车保留默认；0.0.0.0 允许局域网访问），然后选择后端、本地模型和显卡，检查配置后启动。
 3. NInfer 使用转换后的 .ninfer 模型；PolyStrata 使用 qwen35moe GGUF 模型，首次启动在本机导出 tokenizer。
 4. 同一个控制台切换后端前，先停止当前模型服务，再选择另一后端并启动。
 
@@ -177,7 +178,8 @@ Python、聊天界面及 CUDA 运行库离线随包提供；不含模型，无�
 
 ## English
 
-Extract into a new directory and run START-HERE-EN.bat. Select NInfer for supported
+Extract into a new directory and run START-HERE-EN.bat. Confirm the console IP and
+port (Enter keeps defaults; 0.0.0.0 allows LAN access). Select NInfer for supported
 dense .ninfer models, or PolyStrata for qwen35moe GGUF models. Supply models separately.
 Stop the current model service before changing backend. One console manages one
 active backend at a time; switching unloads the model and its process-local KV cache.

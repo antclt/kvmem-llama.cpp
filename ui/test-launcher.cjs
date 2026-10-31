@@ -218,6 +218,8 @@ async function api(action,data){const response=await fetch(base+'/api/launcher/'
  await page.locator('.l-native > summary').click();await page.locator('[data-engine-arguments] > summary').click();await page.locator('[data-native]').fill('[]');
  await page.locator('[data-param=Context]').fill('8192');
  // Personal templates: full settings, apply/undo, rename, update and delete.
+ // Plain HTTP on a LAN IP has getRandomValues but no secure-context randomUUID.
+ await page.evaluate(()=>Object.defineProperty(crypto,'randomUUID',{configurable:true,value:undefined}));
  await page.locator('[data-action=template]').click();
  await page.locator('[data-template-name]').fill('日常 <测试>');
  await page.locator('[data-template-description]').fill('保持显卡顺序和参数');
