@@ -8,6 +8,7 @@ import copy
 import ctypes
 import getpass
 import hashlib
+import ipaddress
 from ctypes import wintypes
 import json
 import os
@@ -1263,9 +1264,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def trusted(self, mutate=False):
         host = self.headers.get('Host', '')
-        hosts = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'}
+        # A wildcard listener accepts this connection's actual destination IP,
+        # never an arbitrary Host supplied by the client (DNS rebinding).
+        address = self.connection.getsockname()[0]
+        hosts = {f'{address}:{self.server.server_port}'}
+        if ipaddress.ip_address(address).is_loopback:
+            hosts.add(f'localhost:{self.server.server_port}')
+        if self.server.server_port == 80:
+            hosts.update({value.removesuffix(':80') for value in hosts})
         origin = self.headers.get('Origin')
-        if host not in hosts or (origin is not None and origin != 'http://' + host):
+        origins = {'http://' + host}
+        if self.server.server_port == 80:
+            origins = {'http://' + host.removesuffix(':80'), 'http://' + host.removesuffix(':80') + ':80'}
+        if host not in hosts or (origin is not None and origin not in origins):
             self.reply(403, {'error': 'Untrusted host or origin'}); return False
         if self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin', 'none'):
             self.reply(403, {'error': 'Cross-site request rejected'}); return False
@@ -1287,6 +1298,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.chat_asset(path[len('/chat/view/'):])
             elif path == '/api/launcher/info':
                 self.reply(200, {'token': self.control.token, 'backends': self.control.backends,
+                                'listen_host': self.server.server_address[0],
                                 'console_protocol': 1, 'console_root': str(ROOT.resolve()),
                                 'prefer_bundled_worker': self.control.prefer_bundled_worker,
                                 'model_library_version': 1,
@@ -1415,11 +1427,60 @@ def open_console_browser(url):
     print(f'Open this address in your browser: {url}', flush=True)
 
 
-def matching_console(port, backend_root, state_dir, prefer_bundled_worker=False, profiles_root=None):
+def console_host(value):
+    if value == 'localhost':
+        return '127.0.0.1'
+    try:
+        address = ipaddress.IPv4Address(value)
+        if address.is_multicast or str(address) == '255.255.255.255':
+            raise ValueError()
+        return str(address)
+    except ValueError:
+        raise argparse.ArgumentTypeError('Use an IPv4 address, such as 127.0.0.1 or 0.0.0.0') from None
+
+
+def console_url(host, port, language='zh-CN'):
+    address = '127.0.0.1' if host == '0.0.0.0' else host
+    return f'http://{address}:{port}/monitor/' + ('?lang=en' if language == 'en' else '')
+
+
+def choose_console_address(host, port, language='zh-CN'):
+    english = language == 'en'
+    print('Console address: 127.0.0.1 = this computer; 0.0.0.0 = all interfaces (LAN access).'
+          if english else '控制台地址：127.0.0.1 仅本机；0.0.0.0 所有网卡（允许局域网访问）。', flush=True)
+    print('Press Enter to keep each default, or type q to cancel.'
+          if english else '直接回车保留默认值，输入 q 取消启动。', flush=True)
+    try:
+        while True:
+            value = input(f'Listen IP [{host}]: ' if english else f'监听 IP [{host}]：').strip()
+            if value.lower() in ('q', 'quit', 'exit'):
+                return None
+            try:
+                host = console_host(value or host)
+                break
+            except argparse.ArgumentTypeError:
+                print('Enter a valid IPv4 address.' if english else '请输入有效的 IPv4 地址。', flush=True)
+        while True:
+            value = input(f'Console port [{port}]: ' if english else f'控制台端口 [{port}]：').strip()
+            if value.lower() in ('q', 'quit', 'exit'):
+                return None
+            try:
+                selected = int(value or str(port))
+                if 1 <= selected <= 65535:
+                    return host, selected
+            except ValueError:
+                pass
+            print('Port must be an integer from 1 to 65535.' if english else '端口必须是 1 到 65535 之间的整数。', flush=True)
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def matching_console(port, backend_root, state_dir, prefer_bundled_worker=False, profiles_root=None, host='127.0.0.1'):
     """Only reuse a controller from this installation and the same state directory."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with opener.open(f'http://127.0.0.1:{port}/api/launcher/info', timeout=2) as response:
+        address = '127.0.0.1' if host == '0.0.0.0' else host
+        with opener.open(f'http://{address}:{port}/api/launcher/info', timeout=2) as response:
             body = response.read(262145)
             if len(body) > 262144:
                 return False
@@ -1427,6 +1488,7 @@ def matching_console(port, backend_root, state_dir, prefer_bundled_worker=False,
         if not isinstance(data, dict):
             return False
         return (data.get('console_protocol') == 1
+                and data.get('listen_host', '127.0.0.1') == host
                 and Path(data['console_root']).resolve() == ROOT.resolve()
                 and Path(data['backend_root']).resolve() == Path(backend_root).resolve()
                 and Path(data['state_dir']).resolve() == Path(state_dir).resolve()
@@ -1472,6 +1534,8 @@ def choose_console_port(current_port, language='zh-CN'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=18199)
+    parser.add_argument('--host', type=console_host, default='127.0.0.1', help='console listen IPv4 address; 0.0.0.0 allows LAN access')
+    parser.add_argument('--prompt-address', action='store_true', help='confirm console IP and port before starting')
     parser.add_argument('--backend-root', type=Path, default=ROOT)
     default_state = ROOT / 'build/local-console' if os.name == 'nt' else Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'kvmem/console'
     parser.add_argument('--state-dir', type=Path, default=default_state)
@@ -1483,6 +1547,11 @@ def main():
     parser.add_argument('--language', choices=('zh-CN', 'en'), default='zh-CN',
                         help='startup message language; en also opens the UI in English')
     args = parser.parse_args()
+    if args.prompt_address:
+        address = choose_console_address(args.host, args.port, args.language)
+        if address is None:
+            return
+        args.host, args.port = address
     # A unified Windows package stores byte-identical CUDA DLLs once. The
     # console, capability probes and owned worker trees inherit this local path.
     cuda_runtime = args.backend_root.resolve() / 'runtime/cuda'
@@ -1492,18 +1561,26 @@ def main():
     if args.profiles_root:
         control.profiles_root = args.profiles_root.resolve()
     while True:
-        url = f'http://127.0.0.1:{args.port}/monitor/' + ('?lang=en' if args.language == 'en' else '')
+        url = console_url(args.host, args.port, args.language)
         try:
-            server = Server(('127.0.0.1', args.port), Handler)
+            server = Server((args.host, args.port), Handler)
             break
         except OSError as error:
-            if ((args.open_browser or args.prompt_port)
+            if ((args.open_browser or args.prompt_port or args.prompt_address)
                     and matching_console(args.port, args.backend_root, args.state_dir,
-                                         args.prefer_bundled_worker, control.profiles_root)):
+                                         args.prefer_bundled_worker, control.profiles_root, host=args.host)):
                 print(f'KVMem console is already running: {url}', flush=True)
                 if args.open_browser:
                     open_console_browser(url)
                 return
+            if args.prompt_address:
+                print((f'Cannot listen on {args.host}:{args.port}: {error}. Choose another IP or port.' if args.language == 'en'
+                       else f'无法监听 {args.host}:{args.port}：{error}。请更换本机 IP 或端口。'), flush=True)
+                address = choose_console_address(args.host, args.port, args.language)
+                if address is None:
+                    return
+                args.host, args.port = address
+                continue
             if not args.prompt_port:
                 parser.exit(1, f'Cannot open console port {args.port}: {error}. '
                             'Close the other application or choose --port with a free port.\n')
@@ -1514,8 +1591,13 @@ def main():
     control.port = server.server_port
     server.control, server.gpus = control, gpu_inventory()
     server.hardware = SystemDiskSampler().start()
-    url = f'http://127.0.0.1:{server.server_port}/monitor/' + ('?lang=en' if args.language == 'en' else '')
+    url = console_url(args.host, server.server_port, args.language)
     print(f'KVMem console: {url}', flush=True)
+    if args.host != '127.0.0.1':
+        print(f'Listening: {args.host}:{server.server_port}', flush=True)
+        if args.host == '0.0.0.0':
+            print((f'LAN: use this computer\'s LAN IP and port {server.server_port} in your browser.' if args.language == 'en'
+                   else f'局域网访问：请在浏览器中使用本机的局域网 IP 和端口 {server.server_port}。'), flush=True)
     if args.language == 'en':
         print('\nHow to stop:\n'
               '  Keep this window open while using the console.\n'

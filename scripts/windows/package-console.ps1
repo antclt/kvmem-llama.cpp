@@ -110,7 +110,9 @@ KVMem - start here
 
 Double-click START-HERE-EN.bat for English startup instructions and an English UI.
 START-HERE-CN.bat keeps the original Chinese startup instructions.
-Both entries open the same local console and reuse its running services.
+Both entries ask for the console IP and port; press Enter to keep the defaults.
+Use 127.0.0.1 for this computer, or 0.0.0.0 for LAN access through this computer's IP.
+Matching address/port and installation reuse the existing console and its services.
 Python is bundled; no Python, pip, Node.js or build-tool installation is needed.
 Keep the console window open. Closing it stops services started by this console.
 The window prints shutdown instructions in the selected startup language.

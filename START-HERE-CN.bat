@@ -1,7 +1,7 @@
 @echo off
 setlocal
 title KVMem (Chinese)
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\start-ui.ps1" -Language zh-CN %*
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\start-ui.ps1" -Language zh-CN -PromptAddress %*
 set "kvmem_exit=%errorlevel%"
 if not "%kvmem_exit%"=="0" (
     echo.

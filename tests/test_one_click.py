@@ -53,6 +53,19 @@ class OneClickTests(unittest.TestCase):
         self.assertNotEqual(old.returncode, 0)
         self.assertIn('does not match', old.stdout)
 
+    def test_batch_entries_prompt_for_ip_and_port_and_allow_cancel(self):
+        cmd = Path(os.environ['SystemRoot']) / 'System32/cmd.exe'
+        for entry, ip_label, port_label in (('START-HERE-CN.bat', '监听 IP', '控制台端口'),
+                                           ('START-HERE-EN.bat', 'Listen IP', 'Console port')):
+            with self.subTest(entry=entry):
+                result = subprocess.run([str(cmd), '/d', '/c', str(self.source / entry),
+                    '-ListenHost', '0.0.0.0', '-Port', '18198', '-NoBrowser'],
+                    input='\nq\n', capture_output=True, text=True, encoding='utf-8', timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(ip_label + ' [0.0.0.0]', result.stdout)
+                self.assertIn(port_label + ' [18198]', result.stdout)
+                self.assertNotIn('KVMem console:', result.stdout)
+
     @unittest.skipUnless(os.environ.get('KVMEM_TEST_PYTHON_ARCHIVE') and os.environ.get('KVMEM_TEST_PSUTIL_WHEEL'), 'set KVMEM_TEST_PYTHON_ARCHIVE for portable integration')
     def test_offline_package_without_system_python(self):
         archive = Path(os.environ['KVMEM_TEST_PYTHON_ARCHIVE'])
@@ -137,7 +150,7 @@ class OneClickTests(unittest.TestCase):
                     # The English batch entry reopens the same Chinese-started controller.
                     result = subprocess.run([str(cmd), '/d', '/c', str(package / 'START-HERE-EN.bat'),
                                              '-Port', str(port), '-NoBrowser'],
-                                            cwd=folder, env=env, capture_output=True, text=True, timeout=10)
+                                            input='\n\n', cwd=folder, env=env, capture_output=True, text=True, timeout=10)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn(f'already running: {origin}/monitor/?lang=en', result.stdout)
                     with opener.open(origin + '/api/launcher/info', timeout=2) as response:

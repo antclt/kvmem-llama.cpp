@@ -2,6 +2,8 @@
 [CmdletBinding()]
 param(
     [ValidateRange(1, 65535)][int]$Port = 18199,
+    [string]$ListenHost = '127.0.0.1',
+    [switch]$PromptAddress,
     [ValidateSet('zh-CN', 'en')][string]$Language = 'zh-CN',
     [string]$StateDir,
     [switch]$NoBrowser,
@@ -71,7 +73,8 @@ try {
         exit 0
     }
     if (!$StateDir) { $StateDir = Join-Path $root 'build/local-console' }
-    $arguments = @('-X', 'utf8', '-I', (Join-Path $root 'scripts/local-console.py'), '--port', "$Port", '--state-dir', $StateDir, '--prompt-port', '--language', $Language)
+    $arguments = @('-X', 'utf8', '-I', (Join-Path $root 'scripts/local-console.py'), '--host', $ListenHost, '--port', "$Port", '--state-dir', $StateDir, '--prompt-port', '--language', $Language)
+    if ($PromptAddress) { $arguments += '--prompt-address' }
     $bundledWorkers = @(
         'ninfer-kvmem-server.exe', 'ninfer-serve.exe', 'llama-kvmem-server.exe',
         'bin/ninfer-kvmem-server.exe', 'bin/ninfer-serve.exe', 'bin/llama-kvmem-server.exe',
